@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: grub2 and menus</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>grub2 and menus</h1>
+
+            <p>В предыдущий раз я немного спалился конфигом <strong>bootchartd</strong> для <strong>grub2</strong>.
+Теперь <strong>grub2</strong> загружает большинство моих систем. В этот раз похвастаюсь
+несколькими своими хаками :]</p>
+<!--more-->
+<p>Перейти на <strong>grub2</strong> раньше мне мешало несколько вещей:</p>
+<ul>
+<li><strong>grub1</strong> просто работал - незачем менять</li>
+<li><strong>grub2</strong> поглюкивал в <strong>rescue mode</strong> и часто безвозвратно портил меню при редактировании</li>
+<li><strong>grub2</strong> гораздо сложнее <strong>grub1</strong>,а значит и больше шансов вляпаться в новую ошибку</li>
+</ul>
+<p>Но <strong>grub1</strong> - мёртвый проект: обновлений к нему нет, а проблем
+вылазит всё больше с новыми версиями <strong>gcc</strong>.</p>
+<p><a href="https://bugs.gentoo.org/360513">Здесь в единственном баге</a> собралась приличная их пачка:</p>
+<ul>
+<li>не грузится с 1TB+ смещения</li>
+<li>не работает после сборки <strong>gcc</strong>, который вставляет <strong>SSE2</strong> оптимизации:
+загрузчик сам не инициализирует блок <strong>SSE2</strong>, но компилятор уже вставляет инструкции <strong>SSE2</strong>.
+Это долгое время мешало размаскировать <strong>gcc-4.6</strong> в <strong>gentoo</strong>.</li>
+<li>портит память стека на некоторых кривых <strong>BIOS</strong> и не грузится</li>
+</ul>
+<p>и другие :]</p>
+<p>В <strong>grub2</strong> этих проблем нет. Ошибки исправляются быстро и фич для обычных пользователй навалом:</p>
+<ul>
+<li>загрузка с <strong>ext4</strong>, <strong>btrfs</strong>, <strong>reiserfs</strong>. Для <strong>grub1</strong> это всё только в сторонних патчах.</li>
+<li>поддержка загрузки со всяких <strong>RAID</strong>, <strong>GPT</strong>, через <strong>UEFI</strong> и прочих извратов</li>
+<li>пррержка приличного разрешения для прикольных картинок :]</li>
+<li>поддержка русских букв в меню</li>
+<li>автогенерация рабочего конфига <strong>grub.cfg</strong> (в том числе для загрузки <strong>windows</strong>)</li>
+</ul>
+<p>При установке <strong>grub2</strong> выдается классная ссылка на <a href="http://wiki.gentoo.org/wiki/GRUB2_Quick_Start">HOWTO</a>.
+В моём случае всё было просто:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">grub2-install</span> /dev/sda</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">grub2-mkconfig</span> <span class="at">-o</span> /boot/grub2/grub.cfg</span></code></pre></div>
+<p>Единственная мелочь, которая мне не понравилась - это ядро по умолчанию. Я хотел,
+чтобы грузился <strong>/boot/vmlinux</strong> (он у меня показывает на последнее установленние ядро).</p>
+<p><strong>grub2-mkconfig</strong> - довольно смешной скрипт. Интересно знать, как он генерит <strong>grub.cfg</strong>:</p>
+<ol type="1">
+<li>Детектит тип файловых систем для <strong>/</strong> и <strong>/boot/</strong>,</li>
+<li>запускает скрипты из <strong>/etc/grub.d/</strong>,</li>
+<li>которые генерят <strong>grub.cfg</strong>,</li>
+<li>который является <strong>shell</strong>-подобным скриптовым языком для <strong>grub2</strong></li>
+</ol>
+<p>такая вот вложенность :]</p>
+<p>Мне сюда просто нужно было вклинить первую строку меню:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span> /etc/grub.d/01_my_live </span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co">#! /bin/sh</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-e</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span> /boot/grub2/grub.cfg.mine</span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span> /boot/grub2/grub.cfg.mine</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">menuentry</span> <span class="st">'Gentoo current'</span> {</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="ex">load_video</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="ex">insmod</span> gzio</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="ex">insmod</span> part_msdos</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="ex">insmod</span> ext2</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">set</span> root=<span class="st">'hd0,msdos1'</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="ex">linux</span> /boot/vmlinuz root=/dev/sda2 ro video=SVIDEO-1:d i915.i915_enable_rc6=1 init=/sbin/bootchartd</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="er">}</span></span></code></pre></div>
+<p>Часть этого меню взята из оригинального автогенеренного <strong>grub.cfg</strong>.</p>
+<p>Теперь <strong>grub2-mkconfig</strong> генерит мне меню с моим любимым ядром по умолчанию :]</p>
+
+<div class="info">
+    Posted on July 28, 2012 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

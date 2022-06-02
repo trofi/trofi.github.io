@@ -1,0 +1,925 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: gcc profiler internals</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc profiler internals</h1>
+
+            <p>I occasionally encounter profiler bugs in gcc. Two related examples I
+remember are <a href="https://gcc.gnu.org/PR96394">tauthon (python-2 fork)</a> and
+<a href="https://gcc.gnu.org/PR105282">python</a> ICEs in <strong>PGO</strong> build mode. <strong>PGO</strong>
+profile-guided optimisation.</p>
+<p>I keep forgetting <strong>gcc</strong>’s internals aroung profiling handling and keep
+re-tracing the same steps every time it comes up. I decided to write a
+few words on it. I’ll cover a few generic details first and then we’ll
+explore today’s <a href="https://gcc.gnu.org/PR105282">python</a> bug.</p>
+<h1 id="using-gcc-profiler--fprofile-generate--fprofile-use">using gcc profiler: -fprofile-generate / -fprofile-use</h1>
+<p>Let’s start from a trivial example. To build our program we run <strong>gcc</strong>
+on it:</p>
+<pre><code>$ gcc $CFLAGS prog.c -o prog</code></pre>
+<p>To build an optimised program using profile feedback we need to perform
+3 steps:</p>
+<pre><code>$ gcc $CFLAGS -fprofile-generate prog.c -o prog
+$ ./prog some-training-input-data
+$ gcc $CFLAGS -fprofile-use      prog.c -o prog</code></pre>
+<p>These are:</p>
+<ol type="1">
+<li>build instrumented program</li>
+<li>run it to get a profile</li>
+<li>build optimized program:</li>
+</ol>
+<p><strong>PGO</strong> build mode is not the only use of profile instrumentation.
+<strong>GCC</strong> allows gathering runtime execution stats using different types
+and formats (<a href="https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html">instrumentation options</a>).</p>
+<p>A few frequent uses are:</p>
+<ul>
+<li>call graph style profiling (<strong>-pg</strong> option): used to explore call
+graph in <strong>gprof</strong> format.</li>
+<li>execution statictics coverage (<strong>-ftest-coverage</strong> option): used to
+extract close to line-by-line execution coverage in <strong>gcno</strong> format.</li>
+<li>execution statistics profiles (<strong>-fprofile-generate</strong>): used to guide
+optimization in future compilation (<strong>PGO</strong>) in <strong>gcda</strong> format.</li>
+</ul>
+<p>All these modes are not fundamentally different. They share
+implementation and in-memory/on-disk format. I’ll look at a <strong>gcda</strong>
+form. We’ll use the following sample code as our running example:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">/* Keep the functions around to have real indirect calls. */</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define DECL_F(fn) static void fn(void) __attribute__((noipa))</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define  DEF_F(fn) static void fn(void) {}</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f0<span class="op">);</span> DEF_F<span class="op">(</span>f0<span class="op">);</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f1<span class="op">);</span> DEF_F<span class="op">(</span>f1<span class="op">);</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f2<span class="op">);</span> DEF_F<span class="op">(</span>f2<span class="op">);</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span>argv<span class="op">[])</span> <span class="op">{</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>argc <span class="op">&lt;</span> <span class="dv">2</span><span class="op">)</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">static</span> <span class="dt">const</span> <span class="dt">void</span><span class="op">(*</span>ft<span class="op">[])(</span><span class="dt">void</span><span class="op">)</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>f0<span class="op">,</span> <span class="op">&amp;</span>f1<span class="op">,</span> <span class="op">&amp;</span>f2<span class="op">,</span> <span class="op">};</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">size_t</span> sz <span class="op">=</span> <span class="kw">sizeof</span> <span class="op">(</span>ft<span class="op">)</span> <span class="op">/</span> <span class="kw">sizeof</span> <span class="op">(</span>ft<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> p <span class="op">=</span> argv<span class="op">[</span><span class="dv">1</span><span class="op">];</span> <span class="op">*</span>p<span class="op">;</span> p<span class="op">++)</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        ft<span class="op">[*</span>p <span class="op">%</span> sz<span class="op">]();</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This program accepts one string argument (<strong>argv[1]</strong>) and calls
+function <strong>f0()</strong>, <strong>f1()</strong>, or <strong>f2()</strong> somewhat randomly (based on
+char modulo) against each byte of input string. The idea is that
+it’s not immediately obvious which of the functions is called most
+frequently.</p>
+<p>This program has a few conditional branches and indirect calls. Let’s
+profile it and see what stats we can collect. Building:</p>
+<pre><code>$ gcc a.c -o a -fprofile-generate -fprofile-arcs -ftest-coverage -O2</code></pre>
+<p>Running our program 5 times:</p>
+<pre><code>$ ./a
+$ ./a 123456789
+$ ./a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+$ ./a aa
+$ ./a aaaa
+$ ls
+a  a.c  a.gcda  a.gcno</code></pre>
+<p>Note that each <strong>./a</strong> run creates or updates <strong>a.gcda</strong> and <strong>a.gcno</strong>.
+We can dump profiling statistics with <strong>gcov</strong>:</p>
+<pre><code>$ gcov -a -b -c -f a
+$ cat a.c.gcov
+        -:    0:Source:a.c
+        -:    0:Graph:a.gcno
+        -:    0:Data:a.gcda
+        -:    0:Runs:5
+        -:    1:#include &lt;stddef.h&gt;
+        -:    2:
+        -:    3:/* Keep the functions around to have real indirect calls. */
+        -:    4:#define DECL_F(fn) static void fn(void) __attribute__((noipa))
+        -:    5:#define  DEF_F(fn) static void fn(void) {}
+        -:    6:
+function f0 called 3 returned 100% blocks executed 100%
+        3:    7:DECL_F(f0); DEF_F(f0);
+function f1 called 53 returned 100% blocks executed 100%
+       53:    8:DECL_F(f1); DEF_F(f1);
+function f2 called 3 returned 100% blocks executed 100%
+        3:    9:DECL_F(f2); DEF_F(f2);
+        -:   10:
+function main called 5 returned 100% blocks executed 100%
+        5:   11:int main (int argc, char *argv[]) {
+        5:   12:    if (argc &lt; 2) return 0;
+        5:   12-block  0
+branch  0 taken 4 (fallthrough)
+branch  1 taken 1
+        -:   13:
+        -:   14:    static const void(*ft[])(void) = { &amp;f0, &amp;f1, &amp;f2, };
+        -:   15:    size_t sz = sizeof (ft) / sizeof (ft[0]);
+        -:   16:
+       63:   17:    for (const char * p = argv[1]; *p; p++)
+        4:   17-block  0
+       63:   17-block  1
+branch  0 taken 59
+branch  1 taken 4 (fallthrough)
+       59:   18:        ft[*p % sz]();
+       59:   18-block  0
+call    0 returned 59
+        -:   19:
+        -:   20:    return 0;
+        -:   21:}</code></pre>
+<p>Here we see that:</p>
+<ul>
+<li><strong>ft[*p % sz]()</strong> gets called 59 times: 3 (<strong>f0</strong>) + 53 (<strong>f1</strong>) + 3 (<strong>f2</strong>)</li>
+<li>function <strong>main()</strong> gets called 5 times; a full length of all the inputs we passed to <strong>./a</strong> program</li>
+</ul>
+<p>We also see frequency of <strong>if (argc &lt; 2) return 0;</strong> branches:</p>
+<ul>
+<li>was taken once (<strong>./a</strong> case, no arguments)</li>
+<li>was not taken 4 times (all the other <strong>./a …</strong> calls)</li>
+</ul>
+<p>After profile collection we can build new binary using <strong>.gcda</strong> files
+by changing <strong>-fprofile-generate</strong> to <strong>-fprofile-use</strong> in our <strong>gcc</strong>
+calls:</p>
+<pre><code>$ gcc a.c -o a -fprofile-use -O2</code></pre>
+<p>Let’s compare the result against unprofiled build:</p>
+<pre><code>$ gcc a.c -o a-unprof -O2</code></pre>
+<p>I’ll skip disassembly as instructions do not change materially (the
+program is too simple). The code order is slightly different in the two
+binaries. Let’s have a look:</p>
+<pre><code>$ nm -n a-unprof
+...
+0000000000400390 r __abi_tag
+0000000000401000 T _init
+0000000000401020 T main
+0000000000401090 T _start
+00000000004010c0 T _dl_relocate_static_pie
+00000000004010d0 t deregister_tm_clones
+0000000000401100 t register_tm_clones
+0000000000401140 t __do_global_dtors_aux
+0000000000401170 t frame_dummy
+0000000000401180 t f0
+0000000000401190 t f1
+00000000004011a0 t f2
+...</code></pre>
+<pre><code>$ nm -n a
+...
+0000000000400390 r __abi_tag
+0000000000401000 T _init
+0000000000401020 T main
+0000000000401080 t f1
+0000000000401090 T _start
+...</code></pre>
+<p><strong>nm -n</strong> orders symbols in their in-memory order so we could
+get the idea what goes where.</p>
+<p>One can spot that in unprofiled build <strong>main()</strong> is quite far away from most
+frequently called <strong>f1()</strong> function. While in profiled build
+<strong>f1()</strong> immediately follows <strong>main()</strong>.</p>
+<p>In more practical scenarios the effects are more pronounced:</p>
+<ul>
+<li>likely to execute code is laid out in a way that does not require branching</li>
+<li>inlining can rely on execution statistics instead of function size heuristics</li>
+<li><strong>-flto</strong> could perform global program code reordering to speedup binary loading from disk</li>
+<li>and many other effects</li>
+</ul>
+<p>The main takeaway here is that <strong>PGO</strong> requires two full builds
+(<strong>-fprofile-generate</strong> and <strong>-fprofile-use</strong>) and a program training
+run.</p>
+<p>In our example training data is biased towards inputs with <strong>‘a’</strong>
+symbols and thus our program is probably slightly more efficient at
+handling those.</p>
+<p>In <strong>PGO</strong> builds the trick is to find suitable input training data.
+Typical rookie mistake is to use <strong>./prog –help</strong> as a training run.
+Do not do that: you will get program optimised for printing help text.
+The rest will perform worse than typical unprofiled build.</p>
+<h1 id="internals-gcov-dump-tool">internals: gcov-dump tool</h1>
+<p>What exactly do these <strong>.gcda</strong> files contain? Let’s have a peek with
+<strong>gcov-dump</strong> tool shipped with <strong>gcc</strong>:</p>
+<pre><code>$ gcov-dump a.gcda
+
+a.gcda:data:magic `gcda':version `B12*'
+a.gcda:stamp 1137774494
+a.gcda:  a1000000:   2:OBJECT_SUMMARY runs=5, sum_max=60
+a.gcda:  01000000:   3:FUNCTION ident=108032747, lineno_checksum=0x0a7a17ea, cfg_checksum=0xc835c602
+a.gcda:    01a10000:   8:COUNTERS arcs 4 counts
+a.gcda:    01a90000:  16:COUNTERS indirect_call 8 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:  01000000:   3:FUNCTION ident=1567133468, lineno_checksum=0xdadb6f0d, cfg_checksum=0xa43083b8
+a.gcda:    01a10000:   2:COUNTERS arcs 1 counts
+a.gcda:    01a90000:   0:COUNTERS indirect_call 0 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:  01000000:   3:FUNCTION ident=1025457522, lineno_checksum=0x745daa69, cfg_checksum=0xa43083b8
+a.gcda:    01a10000:   2:COUNTERS arcs 1 counts
+a.gcda:    01a90000:   0:COUNTERS indirect_call 0 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:  01000000:   3:FUNCTION ident=1634904005, lineno_checksum=0x432c0dd4, cfg_checksum=0xa43083b8
+a.gcda:    01a10000:   2:COUNTERS arcs 1 counts
+a.gcda:    01a90000:   0:COUNTERS indirect_call 0 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts</code></pre>
+<p>Here we something about <strong>a.gcda</strong> contents. It has something about:</p>
+<ul>
+<li><p>5 program runs (<strong>OBJECT_SUMMARY runs=5</strong>)</p></li>
+<li><p>4 FUNCTIONs, each contains information about:</p>
+<ul>
+<li><strong>arcs</strong>: conditional or unconditional branches</li>
+<li><strong>indirect_call</strong> indirect branch targets</li>
+<li><strong>time_profiler</strong>: count of times basic block was executed</li>
+</ul></li>
+</ul>
+<p>Note that functions are identified not by name, but by a triple:</p>
+<ul>
+<li><strong>ident</strong>: name hash, calculated with <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/coverage.cc;h=8ece5db680e614f8225d9e8407dd89bd27020b4d;hb=95874f95095f401405d3386e2e6695351b3f97b5#l548">coverage_compute_profile_id()</a></li>
+<li><strong>lineno_checksum</strong>: source file name and line number hash, calculated with <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/coverage.cc;h=8ece5db680e614f8225d9e8407dd89bd27020b4d;hb=95874f95095f401405d3386e2e6695351b3f97b5#l531">coverage_compute_lineno_checksum()</a></li>
+<li><strong>cfg_checksum</strong>: control flow graph hash, calculated with <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/coverage.cc;h=8ece5db680e614f8225d9e8407dd89bd27020b4d;hb=95874f95095f401405d3386e2e6695351b3f97b5#l588">coverage_compute_cfg_checksum()</a>
+identifier stability can survive minor source code changes.</li>
+</ul>
+<p>You need a <strong>.gcno</strong> file to resolve these obscure identifiers back
+to source line numbers.</p>
+<p>Let’s look into individual counters of <strong>.gcda</strong> files. We can extract
+then with <strong>-l</strong> option:</p>
+<pre><code>$ gcov-dump -l a.gcda
+
+a.gcda:data:magic `gcda':version `B12*'
+a.gcda:stamp 1137774494
+a.gcda:  a1000000:   2:OBJECT_SUMMARY runs=5, sum_max=60
+a.gcda:  01000000:   3:FUNCTION ident=108032747, lineno_checksum=0x0a7a17ea, cfg_checksum=0xc835c602
+a.gcda:    01a10000:   8:COUNTERS arcs 4 counts
+a.gcda:                   0: 1 4 59 4
+a.gcda:    01a90000:  16:COUNTERS indirect_call 8 counts
+a.gcda:                   0: 59 3 1025457522 53 1567133468 3 1634904005 3
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:                   0: 1
+a.gcda:  01000000:   3:FUNCTION ident=1567133468, lineno_checksum=0xdadb6f0d, cfg_checksum=0xa43083b8
+a.gcda:    01a10000:   2:COUNTERS arcs 1 counts
+a.gcda:                   0: 3
+a.gcda:    01a90000:   0:COUNTERS indirect_call 0 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:                   0: 3
+a.gcda:  01000000:   3:FUNCTION ident=1025457522, lineno_checksum=0x745daa69, cfg_checksum=0xa43083b8
+a.gcda:    01a10000:   2:COUNTERS arcs 1 counts
+a.gcda:                   0: 53
+a.gcda:    01a90000:   0:COUNTERS indirect_call 0 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:                   0: 2
+a.gcda:  01000000:   3:FUNCTION ident=1634904005, lineno_checksum=0x432c0dd4, cfg_checksum=0xa43083b8
+a.gcda:    01a10000:   2:COUNTERS arcs 1 counts
+a.gcda:                   0: 3
+a.gcda:    01a90000:   0:COUNTERS indirect_call 0 counts
+a.gcda:    01af0000:   2:COUNTERS time_profiler 1 counts
+a.gcda:                   0: 4</code></pre>
+<p>Counters are harder to interpret without the context.</p>
+<p>For example <strong>arcs</strong>
+just list count of each branch taken known to the current function.
+The string “FUNCTION ident=108032747: arcs 4 counts: 1 4 59 4” means that first
+arc was taken once, third was taken 59 times.</p>
+<p>Looking at the above <strong>a.c.gcov</strong> I
+would guess <strong>FUNCTION ident=108032747</strong> is our <strong>main()</strong> function,
+first counter is our <strong>if (argc &lt; 2) return 0;</strong> branch and the rest
+are indirect call arcs to <strong>f1()</strong>, <strong>f2()</strong>, <strong>f3()</strong>.</p>
+<p><strong>indirect_call</strong> is more complicated: the string “indirect_call 8 counts: 59 3 1025457522 53 1567133468 3 1634904005 3”
+means that there were 59 indirect calls, top 3 are listed, first
+indirection had 53 calls (with <strong>ident=1025457522</strong> as a target, probably <strong>f1()</strong>),
+second and third are taken 3 times (probably <strong>f0()</strong> and <strong>f2()</strong> are the targets).</p>
+<p><strong>time_profiler</strong> is the simplest one: it says how many times the
+function itself was called.</p>
+<p>Quiz question: why does <strong>ident=108032747</strong> (<strong>main()</strong> function) has
+only one <strong>time_profile</strong> call and not 5?</p>
+<h1 id="internals-libgcov">internals: libgcov</h1>
+<p><strong>.gcda</strong> files are read at program startup and written at program
+shutdown. Multiple program runs have an effect of merged profile statictics
+from each run.</p>
+<p>Some staticstics like <strong>runs</strong> are easy to merge:
+just sum values together. But some like <strong>arcs</strong> are trickier:
+how do we handle indirect calls with an unbound target fanout?
+Should we store all of them? Or set a static or dynamic limit?</p>
+<p>All these cases are handled by <strong>-lgcov</strong> library linked into
+instrumented binaries. It’s API resides in
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov.h;h=487bd1464cd8e6f9ae4dc1ca25a68b0c8d836a74;hb=95874f95095f401405d3386e2e6695351b3f97b5#l282">libgcc/libgcov.h</a>
+and has a few things to note:</p>
+<ul>
+<li>entry and exit points: <strong>__gcov_init()</strong> / <strong>__gcov_exit()</strong>.</li>
+<li>profiler conters: <strong>__gcov_interval_profiler()</strong> / <strong>__gcov_time_profiler()</strong> / <strong>__gcov_indirect_call_profiler_v4()</strong></li>
+<li>profile mergers: <strong>__gcov_merge_add()</strong> / <strong>__gcov_merge_time_profile()</strong> / <strong>__gcov_merge_topn()</strong></li>
+<li>counter readers: <strong>gcov_get_counter()</strong> / <strong>gcov_get_counter_ignore_scaling()</strong> / <strong>gcov_get_counter_target()</strong></li>
+<li>hooks to catch program re-execution: <strong>__gcov_fork()</strong> / <strong>__gcov_execl()</strong></li>
+</ul>
+<p>Let’s look at indirect call profiler details as an exampe. The other
+metric types follow the same pattern.</p>
+<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov-profiler.c;h=57617857a93197fcbf99c682df11c66b9fb2b589;hb=95874f95095f401405d3386e2e6695351b3f97b5#l169">__gcov_indirect_call_profiler_v4()</a>
+implements an increment (in-memory) for <strong>indirect_call</strong>:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>__gcov_indirect_call_profiler_v4 <span class="op">(</span>gcov_type value<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>cur_func<span class="op">)</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  __gcov_indirect_call_profiler_body <span class="op">(</span>value<span class="op">,</span> cur_func<span class="op">,</span> <span class="dv">0</span><span class="op">);</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="co">/* By default, the C++ compiler will use function addresses in the</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co">   vtable entries.  Setting TARGET_VTABLE_USES_DESCRIPTORS to nonzero</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="co">   tells the compiler to use function descriptors instead.  The value</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="co">   of this macro says how many words wide the descriptor is (normally 2).</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">   It is assumed that the address of a function descriptor may be treated</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="co">   as a pointer to a function.  */</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="co">/* Tries to determine the most common value among its inputs. */</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">void</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>__gcov_indirect_call_profiler_body <span class="op">(</span>gcov_type value<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>cur_func<span class="op">,</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>                                    <span class="dt">int</span> use_atomic<span class="op">)</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* If the C++ virtual tables contain function descriptors then one</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="co">     function may have multiple descriptors and we need to dereference</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a><span class="co">     the descriptors to see if they point to the same function.  */</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>cur_func <span class="op">==</span> __gcov_indirect_call<span class="op">.</span>callee</span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>      <span class="op">||</span> <span class="op">(</span>__LIBGCC_VTABLE_USES_DESCRIPTORS__</span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>          <span class="op">&amp;&amp;</span> <span class="op">*(</span><span class="dt">void</span> <span class="op">**)</span> cur_func <span class="op">==</span> <span class="op">*(</span><span class="dt">void</span> <span class="op">**)</span> __gcov_indirect_call<span class="op">.</span>callee<span class="op">))</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>    __gcov_topn_values_profiler_body <span class="op">(</span>__gcov_indirect_call<span class="op">.</span>counters<span class="op">,</span> value<span class="op">,</span></span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a>                                      use_atomic<span class="op">);</span></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>  __gcov_indirect_call<span class="op">.</span>callee <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-31"><a href="#cb13-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-32"><a href="#cb13-32" aria-hidden="true" tabindex="-1"></a><span class="co">/* Tries to determine N most commons value among its inputs.  */</span></span>
+<span id="cb13-33"><a href="#cb13-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-34"><a href="#cb13-34" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">void</span></span>
+<span id="cb13-35"><a href="#cb13-35" aria-hidden="true" tabindex="-1"></a>__gcov_topn_values_profiler_body <span class="op">(</span>gcov_type <span class="op">*</span>counters<span class="op">,</span> gcov_type value<span class="op">,</span></span>
+<span id="cb13-36"><a href="#cb13-36" aria-hidden="true" tabindex="-1"></a>                                  <span class="dt">int</span> use_atomic<span class="op">)</span></span>
+<span id="cb13-37"><a href="#cb13-37" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-38"><a href="#cb13-38" aria-hidden="true" tabindex="-1"></a>  gcov_topn_add_value <span class="op">(</span>counters<span class="op">,</span> value<span class="op">,</span> <span class="dv">1</span><span class="op">,</span> use_atomic<span class="op">,</span> <span class="dv">1</span><span class="op">);</span></span>
+<span id="cb13-39"><a href="#cb13-39" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-40"><a href="#cb13-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-41"><a href="#cb13-41" aria-hidden="true" tabindex="-1"></a><span class="co">/* Add key value pair VALUE:COUNT to a top N COUNTERS.  When INCREMENT_TOTAL</span></span>
+<span id="cb13-42"><a href="#cb13-42" aria-hidden="true" tabindex="-1"></a><span class="co">   is true, add COUNT to total of the TOP counter.  If USE_ATOMIC is true,</span></span>
+<span id="cb13-43"><a href="#cb13-43" aria-hidden="true" tabindex="-1"></a><span class="co">   do it in atomic way.  Return true when the counter is full, otherwise</span></span>
+<span id="cb13-44"><a href="#cb13-44" aria-hidden="true" tabindex="-1"></a><span class="co">   return false.  */</span></span>
+<span id="cb13-45"><a href="#cb13-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-46"><a href="#cb13-46" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">unsigned</span></span>
+<span id="cb13-47"><a href="#cb13-47" aria-hidden="true" tabindex="-1"></a>gcov_topn_add_value <span class="op">(</span>gcov_type <span class="op">*</span>counters<span class="op">,</span> gcov_type value<span class="op">,</span> gcov_type count<span class="op">,</span></span>
+<span id="cb13-48"><a href="#cb13-48" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">int</span> use_atomic<span class="op">,</span> <span class="dt">int</span> increment_total<span class="op">)</span></span>
+<span id="cb13-49"><a href="#cb13-49" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-50"><a href="#cb13-50" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span></code></pre></div>
+<p>Here we see that <strong>indirect_call</strong> is a <strong>topn</strong> style counter as it’s handled by
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov.h;h=487bd1464cd8e6f9ae4dc1ca25a68b0c8d836a74;hb=95874f95095f401405d3386e2e6695351b3f97b5#l487">gcov_topn_add_value()</a>.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">unsigned</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>gcov_topn_add_value <span class="op">(</span>gcov_type <span class="op">*</span>counters<span class="op">,</span> gcov_type value<span class="op">,</span> gcov_type count<span class="op">,</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">int</span> use_atomic<span class="op">,</span> <span class="dt">int</span> increment_total<span class="op">)</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>increment_total<span class="op">)</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>      <span class="co">/* In the multi-threaded mode, we can have an already merged profile</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="co">         with a negative total value.  In that case, we should bail out.  */</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(</span>counters<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>      gcov_counter_add <span class="op">(&amp;</span>counters<span class="op">[</span><span class="dv">0</span><span class="op">],</span> <span class="dv">1</span><span class="op">,</span> use_atomic<span class="op">);</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> gcov_kvp <span class="op">*</span>prev_node <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> gcov_kvp <span class="op">*</span>minimal_node <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> gcov_kvp <span class="op">*</span>current_node  <span class="op">=</span> <span class="op">(</span><span class="kw">struct</span> gcov_kvp <span class="op">*)(</span><span class="dt">intptr_t</span><span class="op">)</span>counters<span class="op">[</span><span class="dv">2</span><span class="op">];</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> <span class="op">(</span>current_node<span class="op">)</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(</span>current_node<span class="op">-&gt;</span>value <span class="op">==</span> value<span class="op">)</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>          gcov_counter_add <span class="op">(&amp;</span>current_node<span class="op">-&gt;</span>count<span class="op">,</span> count<span class="op">,</span> use_atomic<span class="op">);</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>          <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>A few things to note here:</p>
+<ul>
+<li><strong>gcov_topn_add_value()</strong> increments <strong>counters[ix]</strong> where <strong>ix</strong> matches <strong>value</strong> being counted.</li>
+<li><strong>gcov_topn_add_value()</strong> increments <strong>counters[0]</strong> as it treats it as “total”</li>
+<li>negative “total” values are special and are related to merged values (how?)</li>
+</ul>
+<p>Let’s look at the merge function for <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov-merge.c;h=89741f637e1efae86d193762b668015c36243098;hb=95874f95095f401405d3386e2e6695351b3f97b5#l89">__gcov_merge_topn()</a>:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* The profile merging function for choosing the most common value.</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="co">   It is given an array COUNTERS of N_COUNTERS old counters and it</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="co">   reads the same number of counters from the gcov file.  The counters</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">   are split into pairs where the members of the tuple have</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="co">   meanings:</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">   -- the stored candidate on the most common value of the measured entity</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="co">   -- counter</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="co">   We use -TOTAL for situation when merging dropped some values.</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="co">   The information is used for -fprofile-reproducible flag.</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="co">   */</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>__gcov_merge_topn <span class="op">(</span>gcov_type <span class="op">*</span>counters<span class="op">,</span> <span class="dt">unsigned</span> n_counters<span class="op">)</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>  gcc_assert <span class="op">(!(</span>n_counters <span class="op">%</span> GCOV_TOPN_MEM_COUNTERS<span class="op">));</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="op">(</span>n_counters <span class="op">/</span> GCOV_TOPN_MEM_COUNTERS<span class="op">);</span> i<span class="op">++)</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>      <span class="co">/* First value is number of total executions of the profiler.  */</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>      gcov_type all <span class="op">=</span> gcov_get_counter_ignore_scaling <span class="op">(-</span><span class="dv">1</span><span class="op">);</span></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>      gcov_type n <span class="op">=</span> gcov_get_counter_ignore_scaling <span class="op">(-</span><span class="dv">1</span><span class="op">);</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a>      <span class="dt">unsigned</span> full <span class="op">=</span> all <span class="op">&lt;</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>      gcov_type <span class="op">*</span>total <span class="op">=</span> <span class="op">&amp;</span>counters<span class="op">[</span>GCOV_TOPN_MEM_COUNTERS <span class="op">*</span> i<span class="op">];</span></span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a>      <span class="op">*</span>total <span class="op">+=</span> full <span class="op">?</span> <span class="op">-</span>all <span class="op">:</span> all<span class="op">;</span></span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> j <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> j <span class="op">&lt;</span> n<span class="op">;</span> j<span class="op">++)</span></span>
+<span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
+<span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>          gcov_type value <span class="op">=</span> gcov_get_counter_target <span class="op">();</span></span>
+<span id="cb15-32"><a href="#cb15-32" aria-hidden="true" tabindex="-1"></a>          gcov_type count <span class="op">=</span> gcov_get_counter_ignore_scaling <span class="op">(-</span><span class="dv">1</span><span class="op">);</span></span>
+<span id="cb15-33"><a href="#cb15-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-34"><a href="#cb15-34" aria-hidden="true" tabindex="-1"></a>          <span class="co">// </span><span class="al">TODO</span><span class="co">: we should use atomic here</span></span>
+<span id="cb15-35"><a href="#cb15-35" aria-hidden="true" tabindex="-1"></a>          full <span class="op">|=</span> gcov_topn_add_value <span class="op">(</span>counters <span class="op">+</span> GCOV_TOPN_MEM_COUNTERS <span class="op">*</span> i<span class="op">,</span></span>
+<span id="cb15-36"><a href="#cb15-36" aria-hidden="true" tabindex="-1"></a>                                       value<span class="op">,</span> count<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">);</span></span>
+<span id="cb15-37"><a href="#cb15-37" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb15-38"><a href="#cb15-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-39"><a href="#cb15-39" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(</span>full<span class="op">)</span></span>
+<span id="cb15-40"><a href="#cb15-40" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>total <span class="op">=</span> <span class="op">-(*</span>total<span class="op">);</span></span>
+<span id="cb15-41"><a href="#cb15-41" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-42"><a href="#cb15-42" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Once again we see that first pair of key/value is treated as “total” count
+of calls. Merger is the place where overflow of <strong>gcov_topn_add_value()</strong>
+is detected and “total” is stored as a negative value to show this fact.</p>
+<p>All the counter types are written on disk with
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov-driver.c;h=d4517d269eb32ca84ee1dfa069bda4e872a1ac98;hb=95874f95095f401405d3386e2e6695351b3f97b5#l502">write_once_data()</a>.
+From there we see that
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov-driver.c;h=d4517d269eb32ca84ee1dfa069bda4e872a1ac98;hb=95874f95095f401405d3386e2e6695351b3f97b5#l432">write_topn_counters()</a>
+dumps them as:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Store all TOP N counters where each has a dynamic length.  */</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>write_topn_counters <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> gcov_ctr_info <span class="op">*</span>ci_ptr<span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">unsigned</span> t_ix<span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>                     gcov_unsigned_t n_counts<span class="op">,</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">void</span> <span class="op">(*</span>dump_fn<span class="op">)</span> <span class="op">(</span><span class="dt">const</span> <span class="dt">void</span> <span class="op">*,</span> <span class="dt">unsigned</span><span class="op">,</span> <span class="dt">void</span> <span class="op">*),</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">void</span> <span class="op">*(*</span>allocate_fn<span class="op">)(</span><span class="dt">unsigned</span><span class="op">,</span> <span class="dt">void</span> <span class="op">*),</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">void</span> <span class="op">*</span>arg<span class="op">)</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> disk_size <span class="op">=</span> GCOV_TOPN_DISK_COUNTERS <span class="op">*</span> counters <span class="op">+</span> <span class="dv">2</span> <span class="op">*</span> pair_total<span class="op">;</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>  dump_unsigned <span class="op">(</span>GCOV_TAG_FOR_COUNTER <span class="op">(</span>t_ix<span class="op">),</span> dump_fn<span class="op">,</span> arg<span class="op">),</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>  dump_unsigned <span class="op">(</span>GCOV_TAG_COUNTER_LENGTH <span class="op">(</span>disk_size<span class="op">),</span> dump_fn<span class="op">,</span> arg<span class="op">);</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> counters<span class="op">;</span> i<span class="op">++)</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>      dump_counter <span class="op">(</span>ci_ptr<span class="op">-&gt;</span>values<span class="op">[</span>GCOV_TOPN_MEM_COUNTERS <span class="op">*</span> i<span class="op">],</span> dump_fn<span class="op">,</span> arg<span class="op">);</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>      dump_counter <span class="op">(</span>list_sizes<span class="op">[</span>i<span class="op">],</span> dump_fn<span class="op">,</span> arg<span class="op">);</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>      gcov_type start <span class="op">=</span> ci_ptr<span class="op">-&gt;</span>values<span class="op">[</span>GCOV_TOPN_MEM_COUNTERS <span class="op">*</span> i <span class="op">+</span> <span class="dv">2</span><span class="op">];</span></span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-22"><a href="#cb16-22" aria-hidden="true" tabindex="-1"></a>      <span class="dt">unsigned</span> j <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb16-23"><a href="#cb16-23" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> <span class="op">(</span><span class="kw">struct</span> gcov_kvp <span class="op">*</span>node <span class="op">=</span> <span class="op">(</span><span class="kw">struct</span> gcov_kvp <span class="op">*)(</span>__INTPTR_TYPE__<span class="op">)</span>start<span class="op">;</span></span>
+<span id="cb16-24"><a href="#cb16-24" aria-hidden="true" tabindex="-1"></a>           j <span class="op">&lt;</span> list_sizes<span class="op">[</span>i<span class="op">];</span> node <span class="op">=</span> node<span class="op">-&gt;</span>next<span class="op">,</span> j<span class="op">++)</span></span>
+<span id="cb16-25"><a href="#cb16-25" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
+<span id="cb16-26"><a href="#cb16-26" aria-hidden="true" tabindex="-1"></a>          dump_counter <span class="op">(</span>node<span class="op">-&gt;</span>value<span class="op">,</span> dump_fn<span class="op">,</span> arg<span class="op">);</span></span>
+<span id="cb16-27"><a href="#cb16-27" aria-hidden="true" tabindex="-1"></a>          dump_counter <span class="op">(</span>node<span class="op">-&gt;</span>count<span class="op">,</span> dump_fn<span class="op">,</span> arg<span class="op">);</span></span>
+<span id="cb16-28"><a href="#cb16-28" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb16-29"><a href="#cb16-29" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-30"><a href="#cb16-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This just writes key/value pairs on disk. Nothing fancy. No special handling
+of negative values. This makes on-disk format rougly match in-memory format.</p>
+<p>Now we can alswer our quiz question on why <strong>time_profiler</strong> still has a
+value of <strong>1</strong> for <strong>main()</strong> even after 5 program runs.
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/libgcov-merge.c;h=89741f637e1efae86d193762b668015c36243098;hb=95874f95095f401405d3386e2e6695351b3f97b5#l68">__gcov_merge_time_profile()</a>
+tells us:</p>
+<pre><code>/* Time profiles are merged so that minimum from all valid (greater than zero)
+   is stored. There could be a fork that creates new counters. To have
+   the profile stable, we chosen to pick the smallest function visit time.  */
+void
+__gcov_merge_time_profile (gcov_type *counters, unsigned n_counters)
+{
+  unsigned int i;
+  gcov_type value;
+
+  for (i = 0; i &lt; n_counters; i++)
+    {
+      value = gcov_get_counter_target ();
+
+      if (value &amp;&amp; (!counters[i] || value &lt; counters[i]))
+        counters[i] = value;
+    }
+}</code></pre>
+<p>The counter stores fastest execution for the function. Not a sum of
+execution times (as I thought initially).</p>
+<p>The takeaways here are:</p>
+<ul>
+<li><strong>gcc</strong> implements a few types of counters: histogram-style <strong>TOPN</strong> counters,
+simpler numeric counters and a few others.</li>
+<li>merge policies for counters are dependent on their exact meaning; they are not cimplicated but have a few
+gotchas like negative values.</li>
+<li><strong>libgcov</strong> provides runtime for both program being profiled and <strong>gcov</strong> standalone tool</li>
+</ul>
+<h1 id="internals-gcc-emitted-code">internals: gcc-emitted code</h1>
+<p>Let’s check how counters are embedded into our program. I suggest looking at the
+optimised <strong>GIMPLE</strong> tree. Here is our original program:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="co">/* Keep the functions around to have real indirect calls. */</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define DECL_F(fn) static void fn(void) __attribute__((noipa))</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define  DEF_F(fn) static void fn(void) {}</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f0<span class="op">);</span> DEF_F<span class="op">(</span>f0<span class="op">);</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f1<span class="op">);</span> DEF_F<span class="op">(</span>f1<span class="op">);</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f2<span class="op">);</span> DEF_F<span class="op">(</span>f2<span class="op">);</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span>argv<span class="op">[])</span> <span class="op">{</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>argc <span class="op">&lt;</span> <span class="dv">2</span><span class="op">)</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">static</span> <span class="dt">const</span> <span class="dt">void</span><span class="op">(*</span>ft<span class="op">[])(</span><span class="dt">void</span><span class="op">)</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>f0<span class="op">,</span> <span class="op">&amp;</span>f1<span class="op">,</span> <span class="op">&amp;</span>f2<span class="op">,</span> <span class="op">};</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">size_t</span> sz <span class="op">=</span> <span class="kw">sizeof</span> <span class="op">(</span>ft<span class="op">)</span> <span class="op">/</span> <span class="kw">sizeof</span> <span class="op">(</span>ft<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> p <span class="op">=</span> argv<span class="op">[</span><span class="dv">1</span><span class="op">];</span> <span class="op">*</span>p<span class="op">;</span> p<span class="op">++)</span></span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>        ft<span class="op">[*</span>p <span class="op">%</span> sz<span class="op">]();</span></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>We will dump final <strong>GIMPLE</strong> with <strong>-fdump-tree-optimized</strong> flag.
+I’ll paste the output in 3 pieces (as the output is quite big):</p>
+<ul>
+<li><strong>main()</strong> function</li>
+<li><strong>f0()</strong> function</li>
+<li>constructor/destructor</li>
+</ul>
+<p>Let’s dump <strong>GIMPLE</strong> first:</p>
+<pre><code>$ gcc -c a.c -fprofile-generate -fprofile-arcs -ftest-coverage -O2 -fdump-tree-optimized
+$ cat a.c.244t.optimized</code></pre>
+<p>Her is our <strong>main()</strong>:</p>
+<pre><code>;; Function main (main, funcdef_no=3, decl_uid=1966, cgraph_uid=4, symbol_order=3) (executed once)
+
+__attribute__((access (&quot;^1[ ]&quot;, )))
+int main (int argc, char * * argv)
+{
+  const char * p;
+  static void (*&lt;T34b&gt;) (void) ft[3] = {f0, f1, f2};
+  long unsigned int _1;
+  long unsigned int _2;
+  void (*&lt;T34b&gt;) (void) _3;
+  char _4;
+  long int PROF_edge_counter_14;
+  long int PROF_edge_counter_15;
+  long int PROF_edge_counter_16;
+  long int PROF_edge_counter_17;
+  long int PROF_edge_counter_18;
+  long int PROF_edge_counter_19;
+  long int PROF_edge_counter_20;
+  long int PROF_edge_counter_21;
+  long int _23;
+  long int time_profile_24;
+  long int time_profile_25;
+  void * _26;
+  char _39;
+  char _40;
+
+  &lt;bb 2&gt; [local count: 160390549]:
+  _26 = __gcov_indirect_call.D.1993;
+  if (_26 != 0B)
+    goto &lt;bb 3&gt;; [20.00%]
+  else
+    goto &lt;bb 4&gt;; [80.00%]
+
+  &lt;bb 3&gt; [local count: 160390549]:
+  __gcov_indirect_call_profiler_v4 (108032747, main);
+
+  &lt;bb 4&gt; [local count: 160390549]:
+  _23 = __gcov7.main[0];
+  if (_23 == 0)
+    goto &lt;bb 5&gt;; [20.00%]
+  else
+    goto &lt;bb 6&gt;; [80.00%]
+
+  &lt;bb 5&gt; [local count: 160390549]:
+  time_profile_24 = __gcov_time_profiler_counter;
+  time_profile_25 = time_profile_24 + 1;
+  __gcov7.main[0] = time_profile_25;
+  __gcov_time_profiler_counter = time_profile_25;
+
+  &lt;bb 6&gt; [local count: 160390549]:
+  if (argc_8(D) &lt;= 1)
+    goto &lt;bb 7&gt;; [26.36%]
+  else
+    goto &lt;bb 8&gt;; [73.64%]
+
+  &lt;bb 7&gt; [local count: 42278949]:
+  PROF_edge_counter_14 = __gcov0.main[0];
+  PROF_edge_counter_15 = PROF_edge_counter_14 + 1;
+  __gcov0.main[0] = PROF_edge_counter_15;
+  goto &lt;bb 11&gt;; [100.00%]
+
+  &lt;bb 8&gt; [local count: 118111600]:
+  PROF_edge_counter_16 = __gcov0.main[1];
+  PROF_edge_counter_17 = PROF_edge_counter_16 + 1;
+  __gcov0.main[1] = PROF_edge_counter_17;
+  p_11 = MEM[(char * *)argv_10(D) + 8B];
+  _39 = *p_11;
+  if (_39 != 0)
+    goto &lt;bb 9&gt;; [89.00%]
+  else
+    goto &lt;bb 10&gt;; [11.00%]
+
+  &lt;bb 9&gt; [local count: 955630226]:
+  # _40 = PHI &lt;_4(9), _39(8)&gt;
+  # p_41 = PHI &lt;p_13(9), p_11(8)&gt;
+  _1 = (long unsigned int) _40;
+  _2 = _1 % 3;
+  _3 = ft[_2];
+  __gcov_indirect_call.D.1994 = &amp;__gcov4.main[0];
+  __gcov_indirect_call.D.1993 = _3;
+  _3 ();
+  PROF_edge_counter_18 = __gcov0.main[2];
+  PROF_edge_counter_19 = PROF_edge_counter_18 + 1;
+  __gcov0.main[2] = PROF_edge_counter_19;
+  p_13 = p_41 + 1;
+  _4 = MEM[(const char *)p_13];
+  if (_4 != 0)
+    goto &lt;bb 9&gt;; [89.00%]
+  else
+    goto &lt;bb 10&gt;; [11.00%]
+
+  &lt;bb 10&gt; [local count: 118111600]:
+  PROF_edge_counter_20 = __gcov0.main[3];
+  PROF_edge_counter_21 = PROF_edge_counter_20 + 1;
+  __gcov0.main[3] = PROF_edge_counter_21;
+
+  &lt;bb 11&gt; [local count: 160390549]:
+  return 0;
+
+}</code></pre>
+<p>While it’s a lot of code each counter handling is straightforward:</p>
+<ul>
+<li>read the counter out</li>
+<li>update the counter</li>
+<li>write it back</li>
+</ul>
+<p>Here we already see a few glbal variables being updated:</p>
+<ul>
+<li><strong>__gcov_time_profiler_counter</strong>: global timer counter gets incremented once.</li>
+<li><strong>__gcov7.main[0]</strong>: <strong>main</strong> timer counter gets incremented once.</li>
+<li><strong>__gcov0.main[0,1,2,3]</strong>: <strong>main</strong> arc counters (to <strong>f0()</strong>, <strong>f1()</strong>, <strong>f2()</strong>)</li>
+</ul>
+<p>Note that <strong>main()</strong> does build explicitl arcs to
+<strong>f0()</strong>/<strong>f1()f2()</strong> but it does not know where indirections leads
+it to. Thus <strong>gcc</strong> stores indirection to <strong>__gcov_indirect_call.D.1993</strong>
+global.</p>
+<p>TO maintain the indirect counters <strong>gcc</strong> relies on target to increment it:</p>
+<pre><code>;; Function f2 (f2, funcdef_no=2, decl_uid=1960, cgraph_uid=3, symbol_order=2)
+
+__attribute__((noipa, noinline, noclone, no_icf))
+void f2 ()
+{
+  long int PROF_edge_counter_2;
+  long int PROF_edge_counter_3;
+  long int _4;
+  long int time_profile_5;
+  long int time_profile_6;
+  void * _7;
+
+  &lt;bb 2&gt; [local count: 1073741824]:
+  _7 = __gcov_indirect_call.D.1993;
+  if (_7 != 0B)
+    goto &lt;bb 3&gt;; [20.00%]
+  else
+    goto &lt;bb 4&gt;; [80.00%]
+
+  &lt;bb 3&gt; [local count: 1073741824]:
+  __gcov_indirect_call_profiler_v4 (1567133468, f2);
+
+  &lt;bb 4&gt; [local count: 1073741824]:
+  PROF_edge_counter_2 = __gcov0.f2[0];
+  PROF_edge_counter_3 = PROF_edge_counter_2 + 1;
+  __gcov0.f2[0] = PROF_edge_counter_3;
+  _4 = __gcov7.f2[0];
+  if (_4 == 0)
+    goto &lt;bb 5&gt;; [20.00%]
+  else
+    goto &lt;bb 6&gt;; [80.00%]
+
+  &lt;bb 5&gt; [local count: 1073741824]:
+  time_profile_5 = __gcov_time_profiler_counter;
+  time_profile_6 = time_profile_5 + 1;
+  __gcov7.f2[0] = time_profile_6;
+  __gcov_time_profiler_counter = time_profile_6;
+
+  &lt;bb 6&gt; [local count: 1073741824]:
+  return;
+
+}
+
+;; Function f1 (f1, funcdef_no=1, decl_uid=1955, cgraph_uid=2, symbol_order=1)
+... same as f0
+;; Function f2 (f0, funcdef_no=0, decl_uid=1950, cgraph_uid=1, symbol_order=0)
+... same as f2</code></pre>
+<p>Here the same <strong>__gcov_indirect_call.D.1993</strong> is being used to increment the counter
+in case <strong>f2()</strong> is indirection target. If <strong>f2()</strong> is called directly then this
+global would not be populated.</p>
+<pre><code>;; Function _sub_I_00100_0 (_sub_I_00100_0, funcdef_no=4, decl_uid=2028, cgraph_uid=6, symbol_order=17) (executed once)
+
+void _sub_I_00100_0 ()
+{
+  &lt;bb 2&gt; [local count: 1073741824]:
+  __gcov_init (&amp;*.LPBX0); [tail call]
+  return;
+
+}
+
+;; Function _sub_D_00100_1 (_sub_D_00100_1, funcdef_no=5, decl_uid=2031, cgraph_uid=7, symbol_order=18) (executed once)
+
+void _sub_D_00100_1 ()
+{
+  &lt;bb 2&gt; [local count: 1073741824]:
+  __gcov_exit (); [tail call]
+  return;
+}</code></pre>
+<p>And here we see <strong>-lgcov</strong> startup and shutdown code in constructor and
+destructor. Simple!</p>
+<h1 id="the-actual-bug">the actual bug</h1>
+<p>Now if all the above has some sense to you then <a href="https://gcc.gnu.org/PR105282" class="uri">https://gcc.gnu.org/PR105282</a>
+should look less mysterious. There <strong>python</strong> managed to ICE <strong>gcc</strong> when
+program was optimised with training data available.</p>
+<p>Let’s look at the minimised example:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">void</span> <span class="op">(*</span>cb_t<span class="op">)(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define F(__fn) static void __fn(void) {}</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f00<span class="op">);</span>F<span class="op">(</span>f01<span class="op">);</span>F<span class="op">(</span>f02<span class="op">);</span>F<span class="op">(</span>f03<span class="op">);</span>F<span class="op">(</span>f04<span class="op">);</span>F<span class="op">(</span>f05<span class="op">);</span>F<span class="op">(</span>f06<span class="op">);</span>F<span class="op">(</span>f07<span class="op">);</span>F<span class="op">(</span>f08<span class="op">);</span>F<span class="op">(</span>f09<span class="op">);</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f10<span class="op">);</span>F<span class="op">(</span>f11<span class="op">);</span>F<span class="op">(</span>f12<span class="op">);</span>F<span class="op">(</span>f13<span class="op">);</span>F<span class="op">(</span>f14<span class="op">);</span>F<span class="op">(</span>f15<span class="op">);</span>F<span class="op">(</span>f16<span class="op">);</span>F<span class="op">(</span>f17<span class="op">);</span>F<span class="op">(</span>f18<span class="op">);</span>F<span class="op">(</span>f19<span class="op">);</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f20<span class="op">);</span>F<span class="op">(</span>f21<span class="op">);</span>F<span class="op">(</span>f22<span class="op">);</span>F<span class="op">(</span>f23<span class="op">);</span>F<span class="op">(</span>f24<span class="op">);</span>F<span class="op">(</span>f25<span class="op">);</span>F<span class="op">(</span>f26<span class="op">);</span>F<span class="op">(</span>f27<span class="op">);</span>F<span class="op">(</span>f28<span class="op">);</span>F<span class="op">(</span>f29<span class="op">);</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f30<span class="op">);</span>F<span class="op">(</span>f31<span class="op">);</span>F<span class="op">(</span>f32<span class="op">);</span>F<span class="op">(</span>f33<span class="op">);</span>F<span class="op">(</span>f34<span class="op">);</span>F<span class="op">(</span>f35<span class="op">);</span>F<span class="op">(</span>f36<span class="op">);</span>F<span class="op">(</span>f37<span class="op">);</span>F<span class="op">(</span>f38<span class="op">);</span>F<span class="op">(</span>f39<span class="op">);</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f40<span class="op">);</span>F<span class="op">(</span>f41<span class="op">);</span>F<span class="op">(</span>f42<span class="op">);</span>F<span class="op">(</span>f43<span class="op">);</span>F<span class="op">(</span>f44<span class="op">);</span>F<span class="op">(</span>f45<span class="op">);</span>F<span class="op">(</span>f46<span class="op">);</span>F<span class="op">(</span>f47<span class="op">);</span>F<span class="op">(</span>f48<span class="op">);</span>F<span class="op">(</span>f49<span class="op">);</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> f<span class="op">(</span><span class="dt">int</span> i<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Needs to be bigger than gcc's GCOV_TOPN_MAXIMUM_TRACKED_VALUES == 32</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a><span class="co">     * to overflow GCOV_COUNTER_V_INDIR couter type.</span></span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a><span class="co">     */</span></span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">static</span> <span class="dt">const</span> cb_t fs<span class="op">[]</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>f00<span class="op">,&amp;</span>f01<span class="op">,&amp;</span>f02<span class="op">,&amp;</span>f03<span class="op">,&amp;</span>f04<span class="op">,&amp;</span>f05<span class="op">,&amp;</span>f06<span class="op">,&amp;</span>f07<span class="op">,&amp;</span>f08<span class="op">,&amp;</span>f09<span class="op">,</span></span>
+<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>f10<span class="op">,&amp;</span>f11<span class="op">,&amp;</span>f12<span class="op">,&amp;</span>f13<span class="op">,&amp;</span>f14<span class="op">,&amp;</span>f15<span class="op">,&amp;</span>f16<span class="op">,&amp;</span>f17<span class="op">,&amp;</span>f18<span class="op">,&amp;</span>f19<span class="op">,</span></span>
+<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>f20<span class="op">,&amp;</span>f21<span class="op">,&amp;</span>f22<span class="op">,&amp;</span>f23<span class="op">,&amp;</span>f24<span class="op">,&amp;</span>f25<span class="op">,&amp;</span>f26<span class="op">,&amp;</span>f27<span class="op">,&amp;</span>f28<span class="op">,&amp;</span>f29<span class="op">,</span></span>
+<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>f30<span class="op">,&amp;</span>f31<span class="op">,&amp;</span>f32<span class="op">,&amp;</span>f33<span class="op">,&amp;</span>f34<span class="op">,&amp;</span>f35<span class="op">,&amp;</span>f36<span class="op">,&amp;</span>f37<span class="op">,&amp;</span>f38<span class="op">,&amp;</span>f39<span class="op">,</span></span>
+<span id="cb23-21"><a href="#cb23-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>f40<span class="op">,&amp;</span>f41<span class="op">,&amp;</span>f42<span class="op">,&amp;</span>f43<span class="op">,&amp;</span>f44<span class="op">,&amp;</span>f45<span class="op">,&amp;</span>f46<span class="op">,&amp;</span>f47<span class="op">,&amp;</span>f48<span class="op">,&amp;</span>f49<span class="op">,</span></span>
+<span id="cb23-22"><a href="#cb23-22" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">size_t</span> sz <span class="op">=</span> <span class="kw">sizeof</span> <span class="op">(</span>fs<span class="op">)</span> <span class="op">/</span> <span class="kw">sizeof</span> <span class="op">(</span>fs<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
+<span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>    fs<span class="op">[</span>i <span class="op">%</span> sz<span class="op">]();</span></span>
+<span id="cb23-25"><a href="#cb23-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb23-26"><a href="#cb23-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-27"><a href="#cb23-27" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> l<span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span> argv<span class="op">[]);</span></span>
+<span id="cb23-28"><a href="#cb23-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-29"><a href="#cb23-29" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span>argv<span class="op">[])</span> <span class="op">{</span></span>
+<span id="cb23-30"><a href="#cb23-30" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>argc <span class="op">==</span> <span class="dv">1</span><span class="op">)</span></span>
+<span id="cb23-31"><a href="#cb23-31" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">int</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">25</span><span class="op">;</span> i<span class="op">++)</span></span>
+<span id="cb23-32"><a href="#cb23-32" aria-hidden="true" tabindex="-1"></a>        f<span class="op">(</span>i<span class="op">);</span></span>
+<span id="cb23-33"><a href="#cb23-33" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>argc <span class="op">==</span> <span class="dv">2</span><span class="op">)</span></span>
+<span id="cb23-34"><a href="#cb23-34" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">int</span> i <span class="op">=</span> <span class="dv">25</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">50</span><span class="op">;</span> i<span class="op">++)</span></span>
+<span id="cb23-35"><a href="#cb23-35" aria-hidden="true" tabindex="-1"></a>        f<span class="op">(</span>i<span class="op">);</span></span>
+<span id="cb23-36"><a href="#cb23-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>ICE on <strong>gcc-12</strong> or <strong>gcc-11</strong>:</p>
+<pre><code>$ gcc -flto -O0 a.c -fprofile-generate -o a
+$ ./a # populate first 25 buckets
+$ ./a 1 # populate 25 more buckets, cause overflow
+$ gcc -flto -O0 a.c -fprofile-use -o a
+
+during IPA pass: modref
+a.c:36:1: internal compiler error: in stream_out_histogram_value, at value-prof.cc:340
+   36 | }
+      | ^
+0x8351fb stream_out_histogram_value(output_block*, histogram_value_t*)
+        ../../gcc-12-20220410/gcc/value-prof.cc:340
+0x1c848c0 output_gimple_stmt
+        ../../gcc-12-20220410/gcc/gimple-streamer-out.cc:192
+0x1c848c0 output_bb(output_block*, basic_block_def*, function*)
+        ../../gcc-12-20220410/gcc/gimple-streamer-out.cc:227
+0xdc91ad output_function
+        ../../gcc-12-20220410/gcc/lto-streamer-out.cc:2453
+0xdc91ad lto_output()
+        ../../gcc-12-20220410/gcc/lto-streamer-out.cc:2796
+0xe57b11 write_lto
+        ../../gcc-12-20220410/gcc/passes.cc:2762
+0xe57b11 ipa_write_summaries_1
+        ../../gcc-12-20220410/gcc/passes.cc:2826
+0xe57b11 ipa_write_summaries()
+        ../../gcc-12-20220410/gcc/passes.cc:2882
+0xaac060 ipa_passes
+        ../../gcc-12-20220410/gcc/cgraphunit.cc:2209
+0xaac060 symbol_table::compile()
+        ../../gcc-12-20220410/gcc/cgraphunit.cc:2282
+0xaaea77 symbol_table::compile()
+        ../../gcc-12-20220410/gcc/cgraphunit.cc:2262
+0xaaea77 symbol_table::finalize_compilation_unit()
+        ../../gcc-12-20220410/gcc/cgraphunit.cc:2530</code></pre>
+<p>Here the bug is in <strong>stream_out_histogram_value()</strong> function which
+tried to stream out on disk perfectly valid profile details around
+<strong>main()</strong>:</p>
+<pre><code>$ gcov-dump -l a.gcda
+...
+a.gcda:    01a90000: 528:COUNTERS indirect_call 66 counts
+a.gcda:                   0: -50 32 1456173180 1 1792104613 1 918340114 1
+a.gcda:                   8: 1406444659 1 263798468 1 1664310260 1 1063174467 1
+a.gcda:                  16: 1596551981 1 54847898 1 533075953 1 1135316294 1
+a.gcda:                  24: 601636648 1 2142348703 1 450479102 1 1186224457 1
+a.gcda:                  32: 416313568 1 1153296983 1 617240633 1 2024260238 1
+a.gcda:                  40: 1680162021 1 944285266 1 1480528956 1 72519307 1
+a.gcda:                  48: 1631250666 1 1029141085 1 941945699 1 1682532820 1
+a.gcda:                  56: 71228346 1 1481851149 1 1154596710 1 414983633 1
+a.gcda:                  64: 2026608575 1</code></pre>
+<p>The <strong>-50</strong> is our “total” count of indirections. It’s negative because
+<strong>25</strong> calls from first run were merged with <strong>25</strong> calls from second call.
+Histograms have a limit of <strong>32</strong> unique values. The other 18 were discarded.
+Negative count signals this fact.</p>
+<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/value-prof.c;h=42748771192f8302cfe637d23d589848d9b8fcb7;hb=1eee4e08a64f6e931b0c5dd1bb854a2b7ad3d58f#l311">gcc/value-prof.cc:stream_out_histogram_value()</a>
+was too strict on it’s assumption around counter types:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode cc"><code class="sourceCode cpp"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>stream_out_histogram_value <span class="op">(</span><span class="kw">struct</span> output_block <span class="op">*</span>ob<span class="op">,</span> histogram_value hist<span class="op">)</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// ...</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> hist<span class="op">-&gt;</span>n_counters<span class="op">;</span> i<span class="op">++)</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>      <span class="co">/* When user uses an unsigned type with a big value, constant converted</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="co">         to gcov_type (a signed type) can be negative.  */</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>      <span class="dt">gcov_type</span> value <span class="op">=</span> hist<span class="op">-&gt;</span>hvalue<span class="op">.</span>counters<span class="op">[</span>i<span class="op">];</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(</span>hist<span class="op">-&gt;</span>type <span class="op">==</span> HIST_TYPE_TOPN_VALUES</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>          <span class="op">||</span> hist<span class="op">-&gt;</span>type <span class="op">==</span> HIST_TYPE_IOR<span class="op">)</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>        <span class="co">/* Note that the IOR counter tracks pointer values and these can have</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a><span class="co">           sign bit set.  */</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">;</span></span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>      <span class="cf">else</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>        gcc_assert <span class="op">(</span>value <span class="op">&gt;=</span> <span class="dv">0</span><span class="op">);</span></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>      streamer_write_gcov_count <span class="op">(</span>ob<span class="op">,</span> value<span class="op">);</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>hist<span class="op">-&gt;</span>hvalue<span class="op">.</span>next<span class="op">)</span></span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>    stream_out_histogram_value <span class="op">(</span>ob<span class="op">,</span> hist<span class="op">-&gt;</span>hvalue<span class="op">.</span>next<span class="op">);</span></span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <strong>gcc</strong> asserts that every value in <strong>TOPN</strong> couters has to be non-negative.
+Was trivial <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=7b879564ec2bda6b5441fbaf231d70ec6359db01">to fix</a>
+by skipping first “total” counter that could be negative on overflows like above:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/value-prof.c</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/value-prof.c</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -336,6 +336,10 @@ stream_out_histogram_value (struct output_block *ob, histogram_value hist)</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>        /* Note that the IOR counter tracks pointer values and these can have</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>           sign bit set.  */</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>        ;</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a><span class="va">+      else if (hist-&gt;type == HIST_TYPE_INDIR_CALL &amp;&amp; i == 0)</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a><span class="va">+       /* 'all' counter overflow is stored as a negative value. Individual</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a><span class="va">+          counters and values are expected to be non-negative.  */</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a><span class="va">+       ;</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>       else</span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>        gcc_assert (value &gt;= 0);</span></code></pre></div>
+<p>So much behind this three-liner.</p>
+<h1 id="final-words">final words</h1>
+<p>Profiler bugs are frequently hard. Mechanical reduction on real program
+is usually very fragile: most material code changes change both generated
+instrumented code and break the program on training run. It’s “infeasible”
+to incrementally reduce both program and input data for large projects
+like <strong>firefox</strong> or <strong>python</strong>.</p>
+<p>I say “infeasible” as I successully reduced
+<strong>tauthon</strong> once in <a href="https://gcc.gnu.org/PR96394" class="uri">https://gcc.gnu.org/PR96394</a>. It took me almost 2 months
+to extract small reproducer manually. I don’t think I’ll do it ever again :)</p>
+<p>First time it was fun: I found a lot more than I imagined about <strong>python</strong>
+implementation: how it embeds it’s own bytecode into executable, how bootstrap
+python loads the rest of python modules using this bootstrap code.</p>
+<p>When faced with another prof failure in <strong>python</strong> in <a href="https://gcc.gnu.org/PR105282" class="uri">https://gcc.gnu.org/PR105282</a>
+I initially thought it would be impossible for me to do it again from
+scratch. On top of that it added <strong>-flto</strong> to make things even less
+manageable. But I was lucky to reproduce the crash and derive the
+reproducer out of <strong>gdb</strong> backtrace.</p>
+<p><strong>PGO</strong>-style builds have another unusual property: they are very dependent
+on input training data and on any internal non-determinism your program
+has. For example, if your program uses random-seeded hash tables you
+will get slightly different profile outputs from run to run.</p>
+<p>Slightly different profile outputs lead to slightly different
+optimization decision during compilation. Different decisions lead to
+different output binaries. Without special effort you will probably get
+unique binary every time you build a real world project with <strong>PGO</strong>
+support.</p>
+<p>It might not be a big deal with regards to performance of final binary.
+But it might be quite a headache if one of such rare states causes
+compiler to generate invalid result. It might be very hard to reproduce
+(and fix).</p>
+<p>But if you have to deal with <strong>PGO</strong> bugs then try to look straight into
+what <strong>gcc</strong> is doing.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on May  1, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

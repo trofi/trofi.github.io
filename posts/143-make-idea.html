@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: make idea</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>make idea</h1>
+
+            <p>Я периодически нарываюсь на проблемы параллельной сборки всяких проектов
+средствами <strong>make</strong>. Из недавних: <a href="https://bugs.gentoo.org/show_bug.cgi?id=326347">баг #326347</a>,
+<a href="https://bugs.gentoo.org/show_bug.cgi?id=373947">баг #373947</a>. Эти баги особенны тем, что
+они проявляются только на 8-головых (и выше) машинах. На моём корытце они не очень хотят проявляться.</p>
+<p>Концептуально, <strong>Makefile</strong> - файл со списком целей и правил, по которым строятся промежуточные цели,
+чтобы достигнуть конечной.</p>
+<pre><code>A -(r1)-&gt; B  \
+C -(r2)-&gt; D (r4)-&gt; G
+E -(r3)-&gt; F  /</code></pre>
+<ul>
+<li><strong>A</strong>, <strong>B</strong>, <strong>C</strong> - начальные цели</li>
+<li><strong>D</strong>, <strong>E</strong>, <strong>F</strong> - промежуточные цели</li>
+<li><strong>G</strong> - конечная цель</li>
+<li><strong>rN</strong> - правила построения целей.</li>
+</ul>
+<p>Обычно апстрим проекта тестирует сборку через команду <strong>make</strong> без всяких <strong>-jN</strong> параметров,
+а <strong>GNU make</strong> всегда выполняет правила для (хоть и независимых) целей в одном и том же порядке.</p>
+<p>В итоге получаем порядок исполнения правил:</p>
+<ol type="1">
+<li><strong>r1</strong></li>
+<li><strong>r2</strong></li>
+<li><strong>r3</strong></li>
+<li><strong>r4</strong></li>
+</ol>
+<p>Но что, если <strong>r2</strong> всё-таки требует результата <strong>r1</strong> и <strong>Makefile</strong> - неправильный?
+Как бы извратиться и найти эту ошибку автоматически?</p>
+<p>И вот что я надумал:</p>
+<p><strong>Простое решение.</strong>
+Произвольно переставлять порядок исполнения независимых целей при каждом запуске <strong>make</strong>
+в самом <strong>make</strong>. Так бы от запуска к запуску тестировались разные порядки сборки и возможные
+ошибки (правда, не все) выплывали чаще даже без использвания <strong>make -jN</strong>. Чтобы воспроизвести
+тот же порядок при ошибке make мог бы выводить на экран или в файл то, что заставило бы <strong>make</strong>
+пытаться собрать цели в том же порядке. К примеру, <strong>Makefile.faulty</strong> с явно заданной последовательностью
+правил.</p>
+<p><strong>Сложное решение.</strong>
+Встроить в <strong>make</strong> поддержку отслеживания всех порождаемых процессов (например, через <strong>ptrace</strong> или <strong>LD_PRELOAD</strong>)
+и записывать в какие цели они лезут на чтение/запись. После завершения сборки проверять: соответствует
+ли граф зависимотей целей тем целям, которые открывались дочерними программами. В теории, такой вариант
+(в отличии от предыдущего) способен находить сразу все недостаточные завосимости в <strong>Makefile</strong>.</p>
+<p><strong>ptrace</strong> используется <a href="http://git.exherbo.org/?p=sydbox.git;a=summary">sydbox</a> из <strong>exherbo</strong>,
+<strong>LD_PRELOAD</strong> используется (надо проверить) <a href="http://git.overlays.gentoo.org/gitweb/?p=proj/sandbox.git;a=summary">sandbox</a> из gentoo.
+На свете есть еще <a href="http://lwn.net/Articles/311350/">fsnotify</a>.</p>
+<h1 id="кто-реализует-раньше-чем-я-тот---молодец">Кто реализует раньше, чем я, тот - молодец! :]</h1>
+
+<div class="info">
+    Posted on July 10, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

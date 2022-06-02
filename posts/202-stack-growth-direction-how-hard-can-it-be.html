@@ -1,0 +1,578 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: stack growth direction: how hard can it be?</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>stack growth direction: how hard can it be?</h1>
+
+            <p>This is another horror story with lots of technical details
+on how <strong>glibc</strong> was unhappy (again!) on <strong>ia64</strong>.</p>
+<p>A week ago I’ve decided to give <strong>ia64</strong> more love in gentoo
+by cleaning up backlog of bugs related to ia64 team: <a href="https://bugs.gentoo.org/buglist.cgi?email2=ia64%40gentoo.org&amp;emailassigned_to2=1&amp;emailcc2=1&amp;emailtype2=substring&amp;list_id=3571042&amp;order=opendate%2Cbug_id&amp;query_format=advanced&amp;resolution=---">hotlist</a>
+The backlog was not too large: about 150 bugs.</p>
+<h1 id="ruby-garbage-collection-bug">ruby garbage collection bug</h1>
+<p>Many bugs were blocked on <a href="https://bugs.gentoo.org/show_bug.cgi?id=561780">SIGSEGVing ruby</a>.</p>
+<p>The curious fact is that <strong>ruby-2.1.9</strong> used to work on <strong>ia64</strong>
+and broke at some point. These kinds of bugs (as opposed to bring
+software support for the first time) are usually easy to fix.
+Something got slightly off and exposed a SIGSEGV. We need to find
+that something and tweak it a tiny bit.</p>
+<p>Let’s look at the <strong>SIGSEGV</strong> (it happens as you compile <strong>ruby</strong> on <strong>ia64</strong>):</p>
+<pre class><code>Program received signal SIGSEGV, Segmentation fault.
+mark_locations_array (objspace=0x6000000000045db0, x=0x0, n=864692227966763116) at gc.c:3297
+3297            v = *x;
+(gdb) bt
+#0  mark_locations_array (objspace=0x6000000000045db0, x=0x0, n=864692227966763116) at gc.c:3297
+#1  0x400000000014a040 in gc_mark_locations (objspace=0x6000000000045db0, start=0x0, end=0x6000080000000368) at gc.c:3310
+#2  0x400000000014b3a0 in mark_current_machine_context (objspace=0x6000000000045db0, th=0x60000000000455b0) at gc.c:3500
+#3  0x400000000014dfe0 in gc_mark_roots (objspace=0x6000000000045db0, full_mark=0, categoryp=0x0) at gc.c:4105
+#4  0x400000000014e6b0 in gc_marks_body (objspace=0x6000000000045db0, full_mark=0) at gc.c:4164
+#5  0x400000000014f260 in gc_marks (objspace=0x6000000000045db0, full_mark=0) at gc.c:4526
+#6  0x40000000001525c0 in garbage_collect_body (objspace=0x6000000000045db0, full_mark=0, immediate_sweep=0, reason=256) at gc.c:5024
+#7  0x400000000013c010 in heap_prepare_freepage (objspace=0x6000000000045db0, heap=0x6000000000045dc0) at gc.c:1219
+#8  0x400000000013c140 in heap_get_freeobj_from_next_freepage (objspace=0x6000000000045db0, heap=0x6000000000045dc0) at gc.c:1237
+#9  0x400000000013c360 in heap_get_freeobj (objspace=0x6000000000045db0, heap=0x6000000000045dc0) at gc.c:1259
+#10 0x400000000013c950 in newobj_of (klass=0, flags=40, v1=0, v2=0, v3=0) at gc.c:1303
+#11 0x400000000013ccc0 in rb_newobj_of (klass=0, flags=40) at gc.c:1356
+#12 0x4000000000163740 in hash_alloc (klass=0) at hash.c:289
+#13 0x4000000000163860 in rb_hash_new () at hash.c:309
+#14 0x400000000050e420 in Init_BareVM () at vm.c:2822
+#15 0x40000000000f6b60 in ruby_setup () at eval.c:54
+#16 0x40000000000f6f50 in ruby_init () at eval.c:75
+#17 0x400000000001b010 in main (argc=9, argv=0x60000fffffffb1d8) at main.c:35</code></pre>
+<p>I’ve added a bunch of <strong>printf</strong> calls into <strong>ruby</strong> runtime to figure out
+where NULL pointer dereference comes from. It became immediately obvious:
+one of <strong>ia64</strong>-specific pointers was not initialized and kept default <strong>NULL</strong>.</p>
+<p>While I was adding <strong>printf</strong> calls I’ve noticed a lot of <strong>#ifdef __ia64</strong>
+in every place that deals with threads: thread creation, thread switch,
+garbage colection. I had almost no idea what code is supposed to do but
+very basic understanding of how garbage collection works suggested
+variable <strong>native_main_thread.register_stack_start</strong> should never
+be <strong>NULL</strong> on <strong>ia64</strong>.</p>
+<p>Cooking up the fix was trivial (proposed <a href="https://github.com/ruby/ruby/pull/1625">pull request upstream</a>):</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/thread_pthread.c b/thread_pthread.c</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/thread_pthread.c</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/thread_pthread.c</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -740,100 +740,100 @@ ruby_init_stack(volatile VALUE *addr</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a> void</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a> ruby_init_stack(volatile VALUE *addr</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a> #ifdef __ia64</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>     , void *bsp</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>     )</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a> {</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>     native_main_thread.id = pthread_self();</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="va">+#ifdef __ia64</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="va">+    if (!native_main_thread.register_stack_start ||</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="va">+        (VALUE*)bsp &lt; native_main_thread.register_stack_start) {</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="va">+        native_main_thread.register_stack_start = (VALUE*)bsp;</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="va">+    }</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="va">+#endif</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a> #if MAINSTACKADDR_AVAILABLE</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>     if (native_main_thread.stack_maxsize) return;</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>     {</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>        void* stackaddr;</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>        size_t size;</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>        if (get_main_stack(&amp;stackaddr, &amp;size) == 0) {</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>            native_main_thread.stack_maxsize = size;</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>            native_main_thread.stack_start = stackaddr;</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>            reserve_stack(stackaddr, size);</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>            goto bound_check;</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>     }</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a> #ifdef STACK_END_ADDRESS</span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>     native_main_thread.stack_start = STACK_END_ADDRESS;</span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a> #else</span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>     if (!native_main_thread.stack_start ||</span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>         STACK_UPPER((VALUE *)(void *)&amp;addr,</span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>                     native_main_thread.stack_start &gt; addr,</span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a>                     native_main_thread.stack_start &lt; addr)) {</span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a>         native_main_thread.stack_start = (VALUE *)addr;</span>
+<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a>     }</span>
+<span id="cb2-41"><a href="#cb2-41" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb2-42"><a href="#cb2-42" aria-hidden="true" tabindex="-1"></a><span class="st">-#ifdef __ia64</span></span>
+<span id="cb2-43"><a href="#cb2-43" aria-hidden="true" tabindex="-1"></a><span class="st">-    if (!native_main_thread.register_stack_start ||</span></span>
+<span id="cb2-44"><a href="#cb2-44" aria-hidden="true" tabindex="-1"></a><span class="st">-        (VALUE*)bsp &lt; native_main_thread.register_stack_start) {</span></span>
+<span id="cb2-45"><a href="#cb2-45" aria-hidden="true" tabindex="-1"></a><span class="st">-        native_main_thread.register_stack_start = (VALUE*)bsp;</span></span>
+<span id="cb2-46"><a href="#cb2-46" aria-hidden="true" tabindex="-1"></a><span class="st">-    }</span></span>
+<span id="cb2-47"><a href="#cb2-47" aria-hidden="true" tabindex="-1"></a><span class="st">-#endif</span></span>
+<span id="cb2-48"><a href="#cb2-48" aria-hidden="true" tabindex="-1"></a>     {</span>
+<span id="cb2-49"><a href="#cb2-49" aria-hidden="true" tabindex="-1"></a> #if defined(HAVE_GETRLIMIT)</span>
+<span id="cb2-50"><a href="#cb2-50" aria-hidden="true" tabindex="-1"></a> #if defined(PTHREAD_STACK_DEFAULT)</span>
+<span id="cb2-51"><a href="#cb2-51" aria-hidden="true" tabindex="-1"></a> # if PTHREAD_STACK_DEFAULT &lt; RUBY_STACK_SPACE*5</span>
+<span id="cb2-52"><a href="#cb2-52" aria-hidden="true" tabindex="-1"></a> #  error &quot;PTHREAD_STACK_DEFAULT is too small&quot;</span>
+<span id="cb2-53"><a href="#cb2-53" aria-hidden="true" tabindex="-1"></a> # endif</span>
+<span id="cb2-54"><a href="#cb2-54" aria-hidden="true" tabindex="-1"></a>        size_t size = PTHREAD_STACK_DEFAULT;</span>
+<span id="cb2-55"><a href="#cb2-55" aria-hidden="true" tabindex="-1"></a> #else</span>
+<span id="cb2-56"><a href="#cb2-56" aria-hidden="true" tabindex="-1"></a>        size_t size = RUBY_VM_THREAD_VM_STACK_SIZE;</span>
+<span id="cb2-57"><a href="#cb2-57" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb2-58"><a href="#cb2-58" aria-hidden="true" tabindex="-1"></a>        size_t space;</span>
+<span id="cb2-59"><a href="#cb2-59" aria-hidden="true" tabindex="-1"></a>        int pagesize = getpagesize();</span>
+<span id="cb2-60"><a href="#cb2-60" aria-hidden="true" tabindex="-1"></a>        struct rlimit rlim;</span>
+<span id="cb2-61"><a href="#cb2-61" aria-hidden="true" tabindex="-1"></a>         STACK_GROW_DIR_DETECTION;</span>
+<span id="cb2-62"><a href="#cb2-62" aria-hidden="true" tabindex="-1"></a>        if (getrlimit(RLIMIT_STACK, &amp;rlim) == 0) {</span>
+<span id="cb2-63"><a href="#cb2-63" aria-hidden="true" tabindex="-1"></a>            size = (size_t)rlim.rlim_cur;</span>
+<span id="cb2-64"><a href="#cb2-64" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-65"><a href="#cb2-65" aria-hidden="true" tabindex="-1"></a>        addr = native_main_thread.stack_start;</span>
+<span id="cb2-66"><a href="#cb2-66" aria-hidden="true" tabindex="-1"></a>        if (IS_STACK_DIR_UPPER()) {</span>
+<span id="cb2-67"><a href="#cb2-67" aria-hidden="true" tabindex="-1"></a>            space = ((size_t)((char *)addr + size) / pagesize) * pagesize - (size_t)addr;</span>
+<span id="cb2-68"><a href="#cb2-68" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-69"><a href="#cb2-69" aria-hidden="true" tabindex="-1"></a>        else {</span>
+<span id="cb2-70"><a href="#cb2-70" aria-hidden="true" tabindex="-1"></a>            space = (size_t)addr - ((size_t)((char *)addr - size) / pagesize + 1) * pagesize;</span>
+<span id="cb2-71"><a href="#cb2-71" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-72"><a href="#cb2-72" aria-hidden="true" tabindex="-1"></a>        native_main_thread.stack_maxsize = space;</span>
+<span id="cb2-73"><a href="#cb2-73" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb2-74"><a href="#cb2-74" aria-hidden="true" tabindex="-1"></a>     }</span>
+<span id="cb2-75"><a href="#cb2-75" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-76"><a href="#cb2-76" aria-hidden="true" tabindex="-1"></a> #if MAINSTACKADDR_AVAILABLE</span>
+<span id="cb2-77"><a href="#cb2-77" aria-hidden="true" tabindex="-1"></a>   bound_check:</span>
+<span id="cb2-78"><a href="#cb2-78" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb2-79"><a href="#cb2-79" aria-hidden="true" tabindex="-1"></a>     /* If addr is out of range of main-thread stack range estimation,  */</span>
+<span id="cb2-80"><a href="#cb2-80" aria-hidden="true" tabindex="-1"></a>     /* it should be on co-routine (alternative stack). [Feature #2294] */</span>
+<span id="cb2-81"><a href="#cb2-81" aria-hidden="true" tabindex="-1"></a>     {</span>
+<span id="cb2-82"><a href="#cb2-82" aria-hidden="true" tabindex="-1"></a>        void *start, *end;</span>
+<span id="cb2-83"><a href="#cb2-83" aria-hidden="true" tabindex="-1"></a>        STACK_GROW_DIR_DETECTION;</span>
+<span id="cb2-84"><a href="#cb2-84" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-85"><a href="#cb2-85" aria-hidden="true" tabindex="-1"></a>        if (IS_STACK_DIR_UPPER()) {</span>
+<span id="cb2-86"><a href="#cb2-86" aria-hidden="true" tabindex="-1"></a>            start = native_main_thread.stack_start;</span>
+<span id="cb2-87"><a href="#cb2-87" aria-hidden="true" tabindex="-1"></a>            end = (char *)native_main_thread.stack_start + native_main_thread.stack_maxsize;</span>
+<span id="cb2-88"><a href="#cb2-88" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-89"><a href="#cb2-89" aria-hidden="true" tabindex="-1"></a>        else {</span>
+<span id="cb2-90"><a href="#cb2-90" aria-hidden="true" tabindex="-1"></a>            start = (char *)native_main_thread.stack_start - native_main_thread.stack_maxsize;</span>
+<span id="cb2-91"><a href="#cb2-91" aria-hidden="true" tabindex="-1"></a>            end = native_main_thread.stack_start;</span>
+<span id="cb2-92"><a href="#cb2-92" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-93"><a href="#cb2-93" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-94"><a href="#cb2-94" aria-hidden="true" tabindex="-1"></a>        if ((void *)addr &lt; start || (void *)addr &gt; end) {</span>
+<span id="cb2-95"><a href="#cb2-95" aria-hidden="true" tabindex="-1"></a>            /* out of range */</span>
+<span id="cb2-96"><a href="#cb2-96" aria-hidden="true" tabindex="-1"></a>            native_main_thread.stack_start = (VALUE *)addr;</span>
+<span id="cb2-97"><a href="#cb2-97" aria-hidden="true" tabindex="-1"></a>            native_main_thread.stack_maxsize = 0; /* unknown */</span>
+<span id="cb2-98"><a href="#cb2-98" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb2-99"><a href="#cb2-99" aria-hidden="true" tabindex="-1"></a>     }</span>
+<span id="cb2-100"><a href="#cb2-100" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>The fix is to move initializaton code before exit from function happens.</p>
+<p>I think <strong>ruby_init_stack</strong> used to work because <strong>MAINSTACKADDR_AVAILABLE</strong>
+was not defined in older <strong>glibc</strong>. Perhaps due to missing <strong>HAVE_PTHREAD_GETATTR_NP</strong>
+support or something similar. See how compilate detection of <strong>STACKADDR_AVAILABLE</strong>
+is:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined HAVE_PTHREAD_GETATTR_NP || defined HAVE_PTHREAD_ATTR_GET_NP</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define STACKADDR_AVAILABLE 1</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined HAVE_PTHREAD_GET_STACKADDR_NP &amp;&amp; defined HAVE_PTHREAD_GET_STACKSIZE_NP</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define STACKADDR_AVAILABLE 1</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#    undef MAINSTACKADDR_AVAILABLE</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define MAINSTACKADDR_AVAILABLE 1</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span>pthread_get_stackaddr_np<span class="op">(</span>pthread_t<span class="op">);</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> pthread_get_stacksize_np<span class="op">(</span>pthread_t<span class="op">);</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined HAVE_THR_STKSEGMENT || defined HAVE_PTHREAD_STACKSEG_NP</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define STACKADDR_AVAILABLE 1</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined HAVE_PTHREAD_GETTHRDS_NP</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define STACKADDR_AVAILABLE 1</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined __HAIKU__</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define STACKADDR_AVAILABLE 1</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined __ia64 &amp;&amp; defined _HPUX_SOURCE</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="pp">#    include </span><span class="im">&lt;sys/dyntune.h&gt;</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span></code></pre></div>
+<p>But now <strong>STACKADDR_AVAILABLE</strong> is defined and <strong>goto bound_check</strong> skips
+<strong>native_main_thread.register_stack_start</strong> initialization completely.</p>
+<p>My patch worked and I was happy. But still it was slightly confusing to see
+all that <strong>ia64</strong>-specific code for stack handling. What is so special about
+it’s stack?</p>
+<p>Let’s look at a code example in <strong>cont.c</strong> file that scans stack for heap pointers:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>cont_mark<span class="op">(</span><span class="dt">void</span> <span class="op">*</span>ptr<span class="op">)</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    rb_context_t <span class="op">*</span>cont <span class="op">=</span> ptr<span class="op">;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    RUBY_MARK_ENTER<span class="op">(</span><span class="st">&quot;cont&quot;</span><span class="op">);</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    rb_gc_mark<span class="op">(</span>cont<span class="op">-&gt;</span>value<span class="op">);</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    rb_thread_mark<span class="op">(&amp;</span>cont<span class="op">-&gt;</span>saved_thread<span class="op">);</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    rb_gc_mark<span class="op">(</span>cont<span class="op">-&gt;</span>saved_thread<span class="op">.</span>self<span class="op">);</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>cont<span class="op">-&gt;</span>vm_stack<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef CAPTURE_JUST_VALID_VM_STACK</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>        rb_gc_mark_locations<span class="op">(</span>cont<span class="op">-&gt;</span>vm_stack<span class="op">,</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>                             cont<span class="op">-&gt;</span>vm_stack <span class="op">+</span> cont<span class="op">-&gt;</span>vm_stack_slen <span class="op">+</span> cont<span class="op">-&gt;</span>vm_stack_clen<span class="op">);</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>        rb_gc_mark_locations<span class="op">(</span>cont<span class="op">-&gt;</span>vm_stack<span class="op">,</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>                             cont<span class="op">-&gt;</span>vm_stack<span class="op">,</span> cont<span class="op">-&gt;</span>saved_thread<span class="op">.</span>stack_size<span class="op">);</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>cont<span class="op">-&gt;</span>type <span class="op">==</span> CONTINUATION_CONTEXT<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>            <span class="co">/* cont */</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>            rb_gc_mark_locations<span class="op">(</span>cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack<span class="op">,</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>                                 cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack <span class="op">+</span> cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack_size<span class="op">);</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>            <span class="co">/* fiber */</span></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>            rb_thread_t <span class="op">*</span>th<span class="op">;</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>            rb_fiber_t <span class="op">*</span>fib <span class="op">=</span> <span class="op">(</span>rb_fiber_t<span class="op">*)</span>cont<span class="op">;</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>            GetThreadPtr<span class="op">(</span>cont<span class="op">-&gt;</span>saved_thread<span class="op">.</span>self<span class="op">,</span> th<span class="op">);</span></span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">((</span>th<span class="op">-&gt;</span>fiber <span class="op">!=</span> fib<span class="op">)</span> <span class="op">&amp;&amp;</span> fib<span class="op">-&gt;</span>status <span class="op">==</span> RUNNING<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>                rb_gc_mark_locations<span class="op">(</span>cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack<span class="op">,</span></span>
+<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>                                     cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack <span class="op">+</span> cont<span class="op">-&gt;</span>machine<span class="op">.</span>stack_size<span class="op">);</span></span>
+<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb4-37"><a href="#cb4-37" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-38"><a href="#cb4-38" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef __ia64</span></span>
+<span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>cont<span class="op">-&gt;</span>machine<span class="op">.</span>register_stack<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a>        rb_gc_mark_locations<span class="op">(</span>cont<span class="op">-&gt;</span>machine<span class="op">.</span>register_stack<span class="op">,</span></span>
+<span id="cb4-41"><a href="#cb4-41" aria-hidden="true" tabindex="-1"></a>                             cont<span class="op">-&gt;</span>machine<span class="op">.</span>register_stack <span class="op">+</span> cont<span class="op">-&gt;</span>machine<span class="op">.</span>register_stack_size<span class="op">);</span></span>
+<span id="cb4-42"><a href="#cb4-42" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-43"><a href="#cb4-43" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb4-44"><a href="#cb4-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-45"><a href="#cb4-45" aria-hidden="true" tabindex="-1"></a>    RUBY_MARK_LEAVE<span class="op">(</span><span class="st">&quot;cont&quot;</span><span class="op">);</span></span>
+<span id="cb4-46"><a href="#cb4-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Additional code under <strong>#ifdef __ia64</strong> looked unusual but it didn’t seem to
+harm any <strong>ruby</strong> tests and I moved on.</p>
+<h1 id="binutils-out-of-bounds-bug">binutils out-of-bounds bug</h1>
+<p>Next bug was lurking in <strong>binutils-2.28</strong> package which occasionally <a href="https://sourceware.org/bugzilla/show_bug.cgi?id=21669">crashed strip program</a>.
+In my case crash was happening only when I was building <strong>gcc</strong>. <strong>gcc</strong>’s build system
+happens to call <strong>strip</strong> binary when compares <strong>stage2</strong> and <strong>stage3</strong> as one of stages
+was built with debugging sections (using <strong>-gtoggle</strong> switch).</p>
+<p>The <strong>strip</strong> <strong>SIGSEGV</strong> fix was also surprisingly trivial and not directly related to stack (or even <strong>ia64</strong>) specifics
+(<a href="https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;a=commitdiff;h=5cc4ca837deac7dc962d8a3741aa120c50ab41da">upstream commit</a>):</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/bfd/elf.c b/bfd/elf.c</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>index 5f37e7f79c..76c6a5c6a7 100644</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/bfd/elf.c</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/bfd/elf.c</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1283,7 +1283,8 @@ section_match (const Elf_Internal_Shdr * a,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a> static unsigned int</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a> find_link (const bfd * obfd, const Elf_Internal_Shdr * iheader, const unsigned int hint)</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a> {</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>   Elf_Internal_Shdr ** oheaders = elf_elfsections (obfd);</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>   unsigned int i;</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>   BFD_ASSERT (iheader != NULL);</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>   /* See PR 20922 for a reproducer of the NULL test.  */</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="st">-  if (oheaders[hint] != NULL</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="va">+  if (hint &lt; elf_numsections (obfd)</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="va">+      &amp;&amp; oheaders[hint] != NULL</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>       &amp;&amp; section_match (oheaders[hint], iheader))</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>     return hint;</span></code></pre></div>
+<p>Here a mysterious <strong>hint</strong> was used to refer to out-of-bounds area and that caused <strong>SIGSEGV</strong>s.
+My guess why it triggered mostly on <strong>ia64</strong> is because <strong>ia64</strong> has many more <strong>ELF</strong>-sections
+than other architectures (<strong>160</strong> versus <strong>32</strong>).</p>
+<h1 id="glibc-pthread_create-bug">glibc pthread_create bug</h1>
+<p>The next failure happened for <strong>glibc-2.24</strong> package (<strong>glibc-2.23</strong> worked fine).
+It looked like every threaded program crashed around
+program shutdown (<a href="https://sourceware.org/PR21672">upstream bug</a>).</p>
+<p>That small reproducer was enough to make program crash:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// how to crash: gcc -O0 -ggdb3 -o r bug.c -pthread &amp;&amp; ./r</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;pthread.h&gt;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> <span class="op">*</span> f <span class="op">(</span><span class="dt">void</span> <span class="op">*</span> p<span class="op">)</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">**</span> argv<span class="op">)</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>    pthread_t t<span class="op">;</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    pthread_create <span class="op">(&amp;</span>t<span class="op">,</span> NULL<span class="op">,</span> <span class="op">&amp;</span>f<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>    pthread_join <span class="op">(</span>t<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here we create a no-op thread and wait for it’s shutdown.
+The <strong>SIGSEGV</strong> happened at address <strong>0x8</strong> (another <strong>NULL</strong>-pointer dereference).</p>
+<p>Backtrace was not very informative:</p>
+<pre class><code>$ gcc -O0 -ggdb3 -o r bug.c -pthread &amp;&amp; ./r
+Segmentation fault (core dumped)
+
+$  gdb r core
+...
+Program terminated with signal SIGSEGV, Segmentation fault.
+#0  0x2000000000077da0 in start_thread (arg=0x0) at pthread_create.c:432
+432         __madvise (pd-&gt;stackblock, freesize - PTHREAD_STACK_MIN, MADV_DONTNEED);
+[Current thread is 1 (Thread 0x2000000000b6b1f0 (LWP 20912))]
+
+(gdb) list
+427     #ifdef _STACK_GROWS_DOWN
+428       char *sp = CURRENT_STACK_FRAME;
+429       size_t freesize = (sp - (char *) pd-&gt;stackblock) &amp; ~pagesize_m1;
+430       assert (freesize &lt; pd-&gt;stackblock_size);
+431       if (freesize &gt; PTHREAD_STACK_MIN)
+432         __madvise (pd-&gt;stackblock, freesize - PTHREAD_STACK_MIN, MADV_DONTNEED);
+433     #else
+434       /* Page aligned start of memory to free (higher than or equal
+435          to current sp plus the minimum stack size).  */
+436       void *freeblock = (void*)((size_t)(CURRENT_STACK_FRAME
+
+#0  0x2000000000077da0 in start_thread (arg=0x0) at pthread_create.c:432
+        pd = 0x0
+        now = &lt;optimized out&gt;
+        unwind_buf = &lt;error reading variable unwind_buf (Cannot access memory at address 0xfffffffffffffd90)&gt;
+        not_first_call = &lt;optimized out&gt;
+        pagesize_m1 = &lt;optimized out&gt;
+        sp = 0x2000000000b6a870 &quot;&quot;
+        freesize = &lt;optimized out&gt;
+        __PRETTY_FUNCTION__ = &quot;start_thread&quot;
+#1  0x0000000000000000 in ?? ()</code></pre>
+<p>This crash did not make much sense. At first I thought it was caused by <strong>pd-&gt;stackblock</strong>
+code where <strong>pd</strong> was somehow turned into <strong>NULL</strong>. But if we look a few lines above (<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=nptl/pthread_create.c;h=7a970ffc5bc6123bbad7d2e38e974ffd2bf859f9;hb=3f823e87ccbf3723eb4eeb63b0619f1a0ceb174e#l561">source link</a>)
+<strong>pd</strong> is used in that function all over the places. <strong>strace</strong> run also suggested that crash
+happened after <strong>madvise</strong> syscall returned successfully (<strong>pd-&gt;stackblock</strong> has a sane value).</p>
+<p>The whole <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=nptl/pthread_create.c;h=7a970ffc5bc6123bbad7d2e38e974ffd2bf859f9;hb=3f823e87ccbf3723eb4eeb63b0619f1a0ceb174e#l378">start_thread function</a>
+is quite large but very straightforward. It does tree main things:</p>
+<ol type="1">
+<li>setup environment for current thread: locale data, futex robust_lists (efficient mutex runtime support), signal masks</li>
+<li>run user’s code with this one line: <strong>THREAD_SETMEM (pd, result, pd-&gt;start_routine (pd-&gt;arg));</strong></li>
+<li>teardown environment: call thread-local destructors, call futex robust_lists and free thread’s stack</li>
+</ol>
+<p>Our crash happens in <strong>3. teardown environment</strong> phase right at the place of thread’s stack teardown.</p>
+<p>glibc’s stack teardown is interesting: it does not free all the stack because code responsible
+for stack cleanup uses that very same stack. Let’s look at the code in detail:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*   Mark the memory of the stack as usable to the kernel.  We free</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="co">     everything except for the space used for the TCB itself.  */</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">size_t</span> pagesize_m1 <span class="op">=</span> __getpagesize <span class="op">()</span> <span class="op">-</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef _STACK_GROWS_DOWN</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> <span class="op">*</span>sp <span class="op">=</span> CURRENT_STACK_FRAME<span class="op">;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">size_t</span> freesize <span class="op">=</span> <span class="op">(</span>sp <span class="op">-</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span> pd<span class="op">-&gt;</span>stackblock<span class="op">)</span> <span class="op">&amp;</span> <span class="op">~</span>pagesize_m1<span class="op">;</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  assert <span class="op">(</span>freesize <span class="op">&lt;</span> pd<span class="op">-&gt;</span>stackblock_size<span class="op">);</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>freesize <span class="op">&gt;</span> PTHREAD_STACK_MIN<span class="op">)</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    __madvise <span class="op">(</span>pd<span class="op">-&gt;</span>stackblock<span class="op">,</span> freesize <span class="op">-</span> PTHREAD_STACK_MIN<span class="op">,</span> MADV_DONTNEED<span class="op">);</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* Page aligned start of memory to free (higher than or equal</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="co">     to current sp plus the minimum stack size).  */</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">*</span>freeblock <span class="op">=</span> <span class="op">(</span><span class="dt">void</span><span class="op">*)((</span><span class="dt">size_t</span><span class="op">)(</span>CURRENT_STACK_FRAME</span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>                                     <span class="op">+</span> PTHREAD_STACK_MIN</span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>                                     <span class="op">+</span> pagesize_m1<span class="op">)</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>                                    <span class="op">&amp;</span> <span class="op">~</span>pagesize_m1<span class="op">);</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> <span class="op">*</span>free_end <span class="op">=</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span> <span class="op">(((</span><span class="dt">uintptr_t</span><span class="op">)</span> pd <span class="op">-</span> pd<span class="op">-&gt;</span>guardsize<span class="op">)</span> <span class="op">&amp;</span> <span class="op">~</span>pagesize_m1<span class="op">);</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* Is there any space to free?  */</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>free_end <span class="op">&gt;</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span>freeblock<span class="op">)</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>      <span class="dt">size_t</span> freesize <span class="op">=</span> <span class="op">(</span><span class="dt">size_t</span><span class="op">)(</span>free_end <span class="op">-</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span>freeblock<span class="op">);</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>      assert <span class="op">(</span>freesize <span class="op">&lt;</span> pd<span class="op">-&gt;</span>stackblock_size<span class="op">);</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>      __madvise <span class="op">(</span>freeblock<span class="op">,</span> freesize<span class="op">,</span> MADV_DONTNEED<span class="op">);</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
+<p>Here we see two major branches: <strong>_STACK_GROWS_DOWN</strong> and the <strong>#else</strong> one (not used on <strong>ia64</strong>).
+<strong>pd</strong> knows precisely where thread’s stack resides: it’s in <strong>[pd-&gt;stackblock, pd-&gt;stackblock + pd-&gt;stackblock_size)</strong> range.
+<strong>_STACK_GROWS_DOWN</strong> means that stack starts at address around <strong>pd-&gt;stackblock + pd-&gt;stackblock_size</strong>
+and grows in backward direction (to clarify: stack pointer decreases when value is pushed to stack).</p>
+<p>So far so good, no magic here. <strong>x86_64</strong> does the same.</p>
+<h1 id="first-clue">First clue</h1>
+<p>But why <strong>madvise()</strong> affects anyting? Isn’t it just a hint to kernel’s memory that can’t go wrong
+even if you messed up the arguments?</p>
+<p>Does page deallocation happen at all? It’s just a <strong>madvise</strong> after all. From <strong>man 2 madvise</strong>:</p>
+<pre class><code>Conventional advice values
+
+    The  advice  values  listed below allow an application to tell the kernel how it expects to use
+    some mapped or shared memory areas, so that the kernel can choose  appropriate  read-ahead  and
+    caching  techniques.   These  advice  values  do not influence the semantics of the application
+    (except in the case of MADV_DONTNEED), but may influence its performance.  All  of  the  advice
+    values  listed here have analogs in the POSIX-specified posix_madvise(3) function, and the val‐
+    ues have the same meanings, with the exception of MADV_DONTNEED.
+
+    MADV_DONTNEED
+           Do  not  expect access in the near future.  (For the time being, the application is fin‐
+           ished with the given range, so the kernel can free resources associated with it.)
+
+           After a successful MADV_DONTNEED operation, the semantics of memory access in the speci‐
+           fied  region  are  changed:  subsequent accesses of pages in the range will succeed, but
+           will result in either repopulating the memory contents from the up-to-date  contents  of
+           the  underlying  mapped  file  (for shared file mappings, shared anonymous mappings, and
+           shmem-based techniques such as System V shared memory segments)  or  zero-fill-on-demand
+           pages for anonymous private mappings.
+
+           Note  that,  when  applied to shared mappings, MADV_DONTNEED might not lead to immediate
+           freeing of the pages in the range.  The kernel is free to delay freeing the pages  until
+           an appropriate moment.  The resident set size (RSS) of the calling process will be imme‐
+           diately reduced however.
+
+           MADV_DONTNEED cannot be applied to locked pages, Huge TLB  pages,  or  VM_PFNMAP  pages.
+           (Pages  marked with the kernel-internal VM_PFNMAP flag are special memory areas that are
+           not managed by the virtual memory subsystem.  Such pages are typically created by device
+           drivers that map the pages into user space.)</code></pre>
+<p>Tl;DR variant: <strong>madvise(p, size, MADV_DONTNEED)</strong> works as <strong>memset(p, 0, size)</strong>. And it’s the only <strong>advice</strong> value that changes program semantics.</p>
+<p>That was the first clue: perhaps we are zeroing out some crucial data structure?
+I’ve commented out <strong>__madvise</strong> call and <strong>SIGSEGV</strong> disappeared. Gah!</p>
+<p>I’ve decided to check if <strong>ia64</strong> is an indeed a <strong>_STACK_GROWS_DOWN</strong> platform:</p>
+<pre class><code>#include &lt;pthread.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+
+static void g(int a, int b, int c, int d, int e, int f)
+{
+    int v;
+    printf (&quot;sp   = %p\n&quot;, &amp;v);
+}
+
+static void * f (void * p)
+{
+    int v;
+    printf (&quot;sp   = %p\n&quot;, &amp;v);
+    g(1,2,3,4,5,6);
+
+    return NULL;
+}
+
+int main (int argc, const char ** argv)
+{
+    printf (&quot;page = %u\n&quot;, getpagesize());
+
+    pthread_t t;
+    pthread_create (&amp;t, NULL, &amp;f, NULL);
+
+    pthread_join (t, NULL);
+    return 0;
+}</code></pre>
+<pre class><code>$ ia64-unknown-linux-gnu-gcc -O0 -ggdb3 -o stack stack.c -pthread &amp;&amp; ./stack
+page = 65536
+sp   = 0x2000000000b7e860
+sp   = 0x2000000000b7e830
+...
+madvise(start=0x20000000003b0000, len=0x790000, flags=0x4)</code></pre>
+<p>We see a few facts here:</p>
+<ul>
+<li>stack indeed grows by decreasing <strong>sp</strong> (aka <strong>_STACK_GROWS_DOWN</strong>)</li>
+<li><strong>ia64</strong> pages are 64K</li>
+<li>madvise does not touch <strong>sp</strong> itself and stops at 3 pages away (<strong>PTHREAD_STACK_MIN</strong> value): <strong>0x20000000003b0000 + 0x790000 = 0x2000000000B40000</strong></li>
+</ul>
+<p>So why do things fail? I’ve tried to add more debug statements into kernel’s <strong>sys_madvise</strong> implementation
+and ran it under <a href="http://trofi.github.io/posts/199-ia64-machine-emulation.html">ski emulator</a>.
+<strong>SIGSEGV</strong> was still reproducible.</p>
+<p>Then I’ve recalled strange <strong>bsp</strong> business and additional stack area
+tracked by ruby’s garbage collector. I wondered wher that additional
+memory region resides:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;pthread.h&gt;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;unistd.h&gt;</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> g<span class="op">(</span><span class="dt">int</span> a<span class="op">,</span> <span class="dt">int</span> b<span class="op">,</span> <span class="dt">int</span> c<span class="op">,</span> <span class="dt">int</span> d<span class="op">,</span> <span class="dt">int</span> e<span class="op">,</span> <span class="dt">int</span> f<span class="op">)</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> v<span class="op">;</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;sp   = %p</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">&amp;</span>v<span class="op">);</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;bsp  = %p</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> __builtin_ia64_bsp<span class="op">());</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> <span class="op">*</span> f <span class="op">(</span><span class="dt">void</span> <span class="op">*</span> p<span class="op">)</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> v<span class="op">;</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;sp   = %p</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">&amp;</span>v<span class="op">);</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;bsp  = %p</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> __builtin_ia64_bsp<span class="op">());</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>    g<span class="op">(</span><span class="dv">1</span><span class="op">,</span><span class="dv">2</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span><span class="dv">4</span><span class="op">,</span><span class="dv">5</span><span class="op">,</span><span class="dv">6</span><span class="op">);</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">**</span> argv<span class="op">)</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>    pthread_t t<span class="op">;</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>    pthread_create <span class="op">(&amp;</span>t<span class="op">,</span> NULL<span class="op">,</span> <span class="op">&amp;</span>f<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a>    pthread_join <span class="op">(</span>t<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre class><code>$ ia64-unknown-linux-gnu-gcc -O0 -ggdb3 -o stack2 stack2.c -pthread &amp;&amp; ./stack2
+$ ./stack2
+sp   = 0x2000000000b7e860
+bsp  = 0x2000000000380090
+sp   = 0x2000000000b7e830
+bsp  = 0x20000000003800b8
+madvise(start=0x20000000003b0000, len=0x790000, flags=0x4)</code></pre>
+<p>See what happens here? <strong>sp</strong> and <strong>bsp</strong> grow from opposite directions of stack block
+towards one another both staring the same stack area:</p>
+<pre class><code>+--------------------------+
+| bsp_start:  0x2...3b0000 |
+| ...                      |
+| bsp:        0x2...3800b8 |
++--------------------------+
+| ....                     |
+| guard page: 0x2...770000 |
+| ....                     |
++--------------------------+
+| sp:         0x2...b7e830 |
+| ...                      |
+| sp_start:   0x2...b80000 |
++--------------------------+</code></pre>
+<p><strong>BSP</strong> means Backing Store Pointer. That memory area is used by CPU to backup
+and restore CPU register values (but not other local variables) for each procedure
+call/return for caller-save registers. Usually C programs dont need to care
+about <strong>bsp</strong> value or area contents.</p>
+<p>It means that we should try hard not to lose <strong>bsp</strong> area when we are tearing down
+the stack because register spilling/loading hapens at unusual times: CPU can
+defer or avoid spilling/reloading registers to speed up performance.</p>
+<p>Thus the fix could look like that (<a href="https://sourceware.org/ml/libc-alpha/2017-06/msg01265.html">proposed upstream</a>):</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/nptl/pthread_create.c b/nptl/pthread_create.c</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>index 7a970ffc5b..6e3f6db5b1 100644</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/nptl/pthread_create.c</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/nptl/pthread_create.c</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -555,10 +555,24 @@ START_THREAD_DEFN</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>   size_t pagesize_m1 = __getpagesize () - 1;</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a> #ifdef _STACK_GROWS_DOWN</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>   char *sp = CURRENT_STACK_FRAME;</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="st">-  size_t freesize = (sp - (char *) pd-&gt;stackblock) &amp; ~pagesize_m1;</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="va">+  char *freeblock = (char *) pd-&gt;stackblock;</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="va">+  size_t freesize = (sp - freeblock) &amp; ~pagesize_m1;</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>   assert (freesize &lt; pd-&gt;stackblock_size);</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="va">+# ifdef __ia64__</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>   if (freesize &gt; PTHREAD_STACK_MIN)</span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="st">-    __madvise (pd-&gt;stackblock, freesize - PTHREAD_STACK_MIN, MADV_DONTNEED);</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="va">+    {</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a><span class="va">+      /* On ia64 stack grows both ways!</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a><span class="va">+         - normal &quot;sp&quot; stack (stack for local variables) grows down</span></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a><span class="va">+         - register stack &quot;bsp&quot; grows up from the opposite end of stack block</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a><span class="va">+         Thus we leave PTHREAD_STACK_MIN bytes from stack block top</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a><span class="va">+         and leave same PTHREAD_STACK_MIN at stack block bottom.  */</span></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a><span class="va">+      freeblock += PTHREAD_STACK_MIN;</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a><span class="va">+      freesize -= PTHREAD_STACK_MIN;</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a><span class="va">+    }</span></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a><span class="va">+# endif</span></span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a><span class="va">+  if (freesize &gt; PTHREAD_STACK_MIN)</span></span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a><span class="va">+    __madvise (freeblock, freesize - PTHREAD_STACK_MIN, MADV_DONTNEED);</span></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a> #else</span>
+<span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>   /* Page aligned start of memory to free (higher than or equal</span>
+<span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>      to current sp plus the minimum stack size).  */</span></code></pre></div>
+<p>Here we skip <strong>PTHREAD_STACK_MIN</strong> bytes from both beginning and end of <strong>pd-&gt;stackblock</strong>.
+This fixed pthread_create <strong>SIGSEGV</strong>s. Why it did not exhibit before? I have no idea!
+My guess would be that older glibc used less stack space and didn’t bother to reload
+from <strong>bsp</strong> after <strong>madvise</strong> call.</p>
+<h1 id="random-facts-about-ia64">Random facts about ia64</h1>
+<ul>
+<li>default page size on linux is <strong>64K</strong></li>
+<li>rare (unique?) setup of two stacks growing in opposite directions</li>
+<li>many garbage collector implementations have to special-case for <strong>bsp</strong> area as additional pointers can lurk there</li>
+<li>thread shutdown is delicate in <strong>glibc</strong></li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on June 26, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

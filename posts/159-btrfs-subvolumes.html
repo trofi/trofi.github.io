@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: btrfs subvolumes</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>btrfs subvolumes</h1>
+
+            <p>Немного порассуждаем о явлении фрагментации во всяких файловых системах
+и как их можно избежать на при разработке файловой системы и при ее
+использовании.</p>
+<!--more-->
+<p>Фрагментация бывает <a href="http://en.wikipedia.org/wiki/Fragmentation_%28computer%29#Internal_Fragmentation">внутренней</a>
+(несоответствие выделенного блока на диске реально занимаемым данным)
+и <a href="http://en.wikipedia.org/wiki/Fragmentation_%28computer%29#External_Fragmentation">внешней</a>
+(непоследовательное расположение данных на диске).</p>
+<p>Внутренняя фрагментация полностью определяется механизмом выделения блоков под данные
+на уровне архитектуры файловой системы.</p>
+<p>В <strong>FAT32/ext2/ext3</strong> это блоки постоянного размера (причем их число ограничено), так что средняя внутренняя фрагментация - пол блока на файл.</p>
+<p>Реальные числа можно рассматривать через прогу <strong>filefrag</strong>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> /usr/sbin/filefrag <span class="at">-v</span> /boot/vmlinuz <span class="co"># ext2</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Filesystem</span> type is: ef53</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Filesystem</span> cylinder groups is approximately 35</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">File</span> size of /boot/vmlinuz is 2476176 <span class="er">(</span><span class="ex">2419</span> blocks, blocksize 1024<span class="kw">)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a> <span class="ex">ext</span> logical physical expected length flags</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>   <span class="ex">0</span>       0    55412              12 merged</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>   <span class="ex">1</span>      12    55425    55423    256 merged</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>   <span class="ex">2</span>     268    55683    55680    256 merged</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>   <span class="ex">3</span>     524    55940    55938    256 merged</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>   <span class="ex">4</span>     780    56197    56195    256 merged</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>   <span class="ex">5</span>    1036    56454    56452    256 merged</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>   <span class="ex">6</span>    1292    56711    56709    256 merged</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>   <span class="ex">7</span>    1548    56968    56966    256 merged</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>   <span class="ex">8</span>    1804    57225    57223    120 merged</span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>   <span class="ex">9</span>    1924    57857    57344    136 merged</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>  <span class="ex">10</span>    2060    57994    57992    256 merged</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>  <span class="ex">11</span>    2316    58251    58249    103 merged,eof</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="ex">/boot/vmlinuz:</span> 12 extents found</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> filefrag <span class="at">-v</span> /usr/lib/ghc-7.0.4/hsc2hs <span class="co"># ext4</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="ex">Filesystem</span> type is: ef53</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="ex">File</span> size of /usr/lib/ghc-7.0.4/hsc2hs is 8852016 <span class="er">(</span><span class="ex">2162</span> blocks, blocksize 4096<span class="kw">)</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a> <span class="ex">ext</span> logical physical expected length flags</span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>   <span class="ex">0</span>       0  2414592            2048</span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>   <span class="ex">1</span>    2048  2413894  2416639    114 eof</span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a><span class="ex">/usr/lib/ghc-7.0.4/hsc2hs:</span> 2 extents found</span></code></pre></div>
+<p>Чем меньше размер блока - тем меньше внутренняя фрагментация, но тем больше нужно хранить данных об этих
+блоках (так как блоков нужно всё больше).</p>
+<p>Одно из решений - использовать блоки переменного размера. В <strong>ext4</strong> используются блоки, кратные базовому:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># e2freefrag /dev/sda2</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Device:</span> /dev/sda2</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Blocksize:</span> 4096 bytes</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Total</span> blocks: 12207391</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="ex">Free</span> blocks: 3951711 <span class="er">(</span><span class="ex">32.4%</span><span class="kw">)</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="ex">Min.</span> free extent: 4 KB </span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="ex">Max.</span> free extent: 1346200 KB</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="ex">Avg.</span> free extent: 2896 KB</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="ex">Num.</span> free extent: 8766</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="ex">HISTOGRAM</span> OF FREE EXTENT SIZES:</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="ex">Extent</span> Size Range :  Free extents   Free Blocks  Percent</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="ex">4K...</span>    8K-  :          2268          2268    0.06%</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    <span class="ex">8K...</span>   16K-  :          1733          3999    0.10%</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>   <span class="ex">16K...</span>   32K-  :          1379          7037    0.18%</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>   <span class="ex">32K...</span>   64K-  :           872          9102    0.23%</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>   <span class="ex">64K...</span>  128K-  :           620         13654    0.35%</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  <span class="ex">128K...</span>  256K-  :           511         22690    0.57%</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>  <span class="ex">256K...</span>  512K-  :           315         28042    0.71%</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  <span class="ex">512K...</span> 1024K-  :           223         39064    0.99%</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    <span class="ex">1M...</span>    2M-  :           200         74682    1.89%</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="ex">2M...</span>    4M-  :           176        128285    3.25%</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    <span class="ex">4M...</span>    8M-  :           182        276171    6.99%</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="ex">8M...</span>   16M-  :            91        257498    6.52%</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>   <span class="ex">16M...</span>   32M-  :            50        277533    7.02%</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>   <span class="ex">32M...</span>   64M-  :            60        673687   17.05%</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>   <span class="ex">64M...</span>  128M-  :            47       1036845   26.24%</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>  <span class="ex">128M...</span>  256M-  :            24       1060240   26.83%</span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  <span class="ex">256M...</span>  512M-  :             5        432677   10.95%</span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>  <span class="ex">512M...</span> 1024M-  :             9       1669131   42.24%</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>    <span class="ex">1G...</span>    2G-  :             1        336550    8.52%</span></code></pre></div>
+<p>В <strong>btrfs</strong> и <strong>reiserfs</strong> на минимальный размер блоков вообще не накладывается никаких ограничений.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># /usr/sbin/filefrag -v /usr/lib/ghc-7.0.4/hsc2hs # btrfs</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Filesystem</span> type is: 9123683e</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="ex">File</span> size of /usr/lib/ghc-7.0.4/hsc2hs is 1155640 <span class="er">(</span><span class="ex">283</span> blocks, blocksize 4096<span class="kw">)</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a> <span class="ex">ext</span> logical physical expected length flags</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>   <span class="ex">0</span>       0 70825707             283 eof</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="ex">/usr/lib/ghc-7.0.4/hsc2hs:</span> 1 extent found</span></code></pre></div>
+<p>В традиционных файловых системах есть 2 операции, изменяющая фрагментацию:
+- запись в конец файла (<strong>append</strong>, <strong>open(file, “a”)</strong>)
+- сокращение размера (<strong>truncation</strong>)</p>
+<p>Чем больше размер блока - тем реже нам нужно выделять новые блоки для увеличения файла (особенно
+актуально для файлов журнала, которые изменяются часто и понемногу).</p>
+<p>В <strong>не</strong>традиционных <strong>COW</strong> (aka. <strong>copy-on-write</strong>) файловых системах (<strong>btrfs</strong>, <strong>zfs</strong>, возможно, <strong>reiser4</strong>)
+любая модификация содержимого файла ведет к тому, что эта модификация записывается в новое место
+на диске, а оригинальные данные некоторое время остаются на старом месте (хоть и помечаются неиспользуемыми).
+То есть эффекта перезаписи данных нет.</p>
+<p><strong>COW</strong> можно выключить в <strong>btrfs</strong> для:</p>
+<ul>
+<li>отдельных файлов установив <strong>nodatacow</strong>: <a href="http://dave.jikos.cz/nocow.c">чудопрогой</a> (<a href="http://repo.or.cz/w/slyfox-gentoo.git/commitdiff/fd978ba60981b940b155722121e877c3dde7d216">она же, но пакованная в gentoo</a>)</li>
+<li>всей файловой системы: <strong>mount -o nodatacow</strong>.</li>
+</ul>
+<p>В <strong>btrfs</strong> <strong>COW</strong> семантика обновлений изменений на файловой системе проявляется не только при обновлении
+содержимого <strong>файла</strong>, но и <strong>при изменени каталогов</strong> (добавление/удаление файла, смена атрибутов файлов и т.п.).</p>
+<p>Это приводит к тому, что метаданные, хранящиеся в каталоге расползаются по диску даже при обновлении
+существующих записей о элементах каталогов (даже без добавления новых). Метаданные каталогов могут
+обновляться по разным причинам:</p>
+<ul>
+<li><strong>mtime/ctime/atime</strong> - модификация метаданных, данных и времени доступа к файлу</li>
+<li>добавление файлов/подкаталогов</li>
+</ul>
+<p>К счастью в <strong>btrfs</strong> есть <strong>on-line</strong> дефрагментатор. Он копирует весь файл в другую область на диске.
+Юзать так: <strong>btrfs fi de /bin/busybox</strong> (или <strong>btrfs filesystem defragment /bin/busybox</strong>).</p>
+<p>Но дефрагментировать можно и каталог. Не все файлы в нём (<strong>defrag</strong> этого не умеет) а именно
+<strong>метаданные</strong> каталога. Тут нужно представить что же именно дефрагментируется.</p>
+<p>В случае дефрагментации <strong>файла</strong> всё просто:</p>
+<ul>
+<li>данные файла - это дерево экстентов (блоков переменной длины).
+На каждый файл в <strong>btrfs</strong> заведено по отдельному дереву.</li>
+<li>создается новое дерево экстентов, в него заносятся новые блоки (в идеале 1 большой блок)</li>
+<li>новое дерево экстентов вписывается в метаданные каталога (атомарная операция, на которой
+дефрагментированный файл становится “виден” остальным)</li>
+</ul>
+<p>С каталогом веселее:</p>
+<ul>
+<li>дерево каталогов - одно на всю файловую систему (о <strong>subvolumes</strong> чуть позже).
+Используется особая реализация <strong>B-дерева</strong>, которая не требует обновления
+всех ссылок до родителя на диске. Я пока только догадываюсь, как и почему это работает :]</li>
+<li>Дефрагментация каталога - это перебалансировка поддерева <strong>B-дерева</strong>, в которое входит наш каталог</li>
+<li>Из-за особенностей обновления <strong>B-дерева</strong> в <strong>B</strong>-поддереве (не поддереве файловой системы)
+нашего каталога может находиться <strong>Что Угодно</strong>. Например, <strong>/usr/portage</strong> и <strong>/var/tmp</strong>
+могут (и скорее всего будут) сидеть в соседних узлах, если их часто обновляют.</li>
+</ul>
+<p>В итоге в процессе использования файловой часто изменяемые каталоги “размешиваются” по всей остальной
+редко изменяемой файловой системе.</p>
+<p>Вчера <strong>btrfs fi defrag /usr/portage</strong> у меня заняла <strong>40 минут</strong>. Я бы быстрее выкачал и перераспаковал
+новый снапшот.</p>
+<p>Но есть средство, которое позволяет разбить файловую систему на несколько независимых <strong>B-деревьев</strong> - <strong>subvolumes</strong>.
+Немного можно читануть <a href="http://www.funtoo.org/wiki/BTRFS_Fun#..._applied_to_BTRFS.21_.28or_what_is_a_volume.2Fsubvolume.29">тут</a>.</p>
+<p>Вкратце про <strong>subvolumes</strong>:</p>
+<ul>
+<li>это самодостаточная файловая система (ее можно отдельно монтировать: <strong>mount /some/device -osubvolume=subvol_name /mnt/foo</strong>)</li>
+<li><strong>subvolumes</strong> атомарно:
+<ul>
+<li>создаются (<strong>btrfs subvolume create</strong>)</li>
+<li>копируются (<strong>btrfs subvolume snapshot</strong>)</li>
+<li>удаляются (<strong>btrfs subvolume snapshot</strong>)</li>
+<li>переключаются (<strong>btrfs subvolume set-default</strong>).
+Очень прикольная штука. Можно иметь несколько корней для разных дистрибутивов на одном разделе.</li>
+</ul></li>
+</ul>
+<p>Я создал <strong>/usr/portage</strong> и <strong>/var/tmp</strong> как отдельные <strong>subvolumes</strong> и теперь не парюсь фрагментацией в них.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cd /</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co"># mkdir subvolumes</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co"># btrfs su cr gentoo-portage</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co"># btrfs su cr gentoo-x86</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="co"># btrfs su cr var_tmp</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="co"># # дальше наставил симлинков, пока монтирование по сложным путям не починили :]</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="co"># btrfs su li /</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="ex">ID</span> 664 top level 5 path subvolumes/gentoo-portage</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="ex">ID</span> 666 top level 5 path subvolumes/gentoo-x86</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="ex">ID</span> 673 top level 5 path subvolumes/var_tmp</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="co"># ls -ld /var/tmp /gentoo/gentoo-x86</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="ex">lrwxrwxrwx</span> 1 root root 22 Ноя  6 21:34 /gentoo/gentoo-x86 <span class="at">-</span><span class="op">&gt;</span> /subvolumes/gentoo-x86</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    <span class="ex">lrwxrwxrwx</span> 1 root root 19 Ноя  6 21:44 /var/tmp <span class="at">-</span><span class="op">&gt;</span> /subvolumes/var_tmp</span></code></pre></div>
+<p>Правда, всплыл небольшой косяк в ядре, который не позволяет монтировать <strong>subvolumes</strong>,
+которые находятся не в корне <strong>default subvolume</strong>, но
+<a href="http://www.mail-archive.com/linux-btrfs@vger.kernel.org/msg13284.html">это было легко исправить</a>
+с помощью <strong>usermode linux</strong> и <strong>debugging SLUB</strong> :]</p>
+<p><strong>debugging SLUB</strong> на мой тесткейс сказал следующее:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">device</span> fsid 4d55aa28-45b1-474b-b4ec-da912322195e devid 1 transid 4 /dev/ubda</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">kobject:</span> <span class="st">'btrfs-1'</span> <span class="er">(</span><span class="ex">00000000712ac4a0</span><span class="kw">)</span><span class="bu">:</span> kobject_add_internal: parent: <span class="st">'bdi'</span>, set: <span class="st">'devices'</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">kobject:</span> <span class="st">'btrfs-1'</span> <span class="er">(</span><span class="ex">00000000712ac4a0</span><span class="kw">)</span><span class="bu">:</span> kobject_uevent_env</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ex">kobject:</span> <span class="st">'btrfs-1'</span> <span class="er">(</span><span class="ex">00000000712ac4a0</span><span class="kw">)</span><span class="bu">:</span> fill_kobj_path: path = <span class="st">'/devices/virtual/bdi/btrfs-1'</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="ex">btrfs:</span> disk space caching is enabled</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ex">device</span> fsid 4d55aa28-45b1-474b-b4ec-da912322195e devid 1 transid 7 /dev/ubda</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="ex">=============================================================================</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="ex">BUG</span> kmalloc-2048: Object already free</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="ex">-----------------------------------------------------------------------------</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="ex">INFO:</span> Allocated in btrfs_mount+0x389/0x7f0 age=0 cpu=0 pid=277</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="ex">INFO:</span> Freed in btrfs_mount+0x51c/0x7f0 age=0 cpu=0 pid=277</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="ex">INFO:</span> Slab 0x0000000062886200 objects=15 used=9 fp=0x0000000070b4d2d0 flags=0x4081</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="ex">INFO:</span> Object 0x0000000070b4d2d0 @offset=21200 fp=0x0000000070b4a968</span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="op">&lt;</span>ПРОПУСТИМ<span class="op">&gt;</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="ex">Redzone</span> 0000000070b4dad0: bb bb bb bb bb bb bb bb                          ........</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="ex">Padding</span> 0000000070b4db10: 5a 5a 5a 5a 5a 5a 5a 5a                          ZZZZZZZZ</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="ex">Call</span> Trace: </span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31948:</span>  [<span class="op">&lt;</span>6008c522<span class="op">&gt;</span>] print_trailer+0xe2/0x130</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31978:</span>  [<span class="op">&lt;</span>6008c5aa<span class="op">&gt;</span>] object_err+0x3a/0x50</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a><span class="ex">70b319a8:</span>  [<span class="op">&lt;</span>6008e242<span class="op">&gt;</span>] free_debug_processing+0x142/0x2a0</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a><span class="ex">70b319e0:</span>  [<span class="op">&lt;</span>600ebf6f<span class="op">&gt;</span>] btrfs_mount+0x55f/0x7f0</span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a><span class="ex">70b319f8:</span>  [<span class="op">&lt;</span>6008e5c1<span class="op">&gt;</span>] __slab_free+0x221/0x2d0</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31a18:</span>  [<span class="op">&lt;</span>6018d55f<span class="op">&gt;</span>] __debug_check_no_obj_freed+0x16f/0x1f0</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31a58:</span>  [<span class="op">&lt;</span>60024d90<span class="op">&gt;</span>] set_signals+0x30/0x40</span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31a90:</span>  [<span class="op">&lt;</span>600ebf6f<span class="op">&gt;</span>] btrfs_mount+0x55f/0x7f0</span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31aa8:</span>  [<span class="op">&lt;</span>6008fed8<span class="op">&gt;</span>] kfree+0x108/0x150</span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31ab8:</span>  [<span class="op">&lt;</span>6022e1f9<span class="op">&gt;</span>] mutex_unlock+0x9/0x10</span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31af8:</span>  [<span class="op">&lt;</span>600ebf6f<span class="op">&gt;</span>] btrfs_mount+0x55f/0x7f0</span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31b38:</span>  [<span class="op">&lt;</span>60091241<span class="op">&gt;</span>] __kmalloc_track_caller+0x191/0x1b0</span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31b40:</span>  [<span class="op">&lt;</span>600af114<span class="op">&gt;</span>] alloc_vfsmnt+0x94/0x170</span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31bc8:</span>  [<span class="op">&lt;</span>6009663b<span class="op">&gt;</span>] mount_fs+0x1b/0xf0</span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31bf8:</span>  [<span class="op">&lt;</span>600afebe<span class="op">&gt;</span>] vfs_kern_mount+0x5e/0xd0</span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31c48:</span>  [<span class="op">&lt;</span>600ebb77<span class="op">&gt;</span>] btrfs_mount+0x167/0x7f0</span>
+<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31c88:</span>  [<span class="op">&lt;</span>60091241<span class="op">&gt;</span>] __kmalloc_track_caller+0x191/0x1b0</span>
+<span id="cb5-35"><a href="#cb5-35" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31c90:</span>  [<span class="op">&lt;</span>600af114<span class="op">&gt;</span>] alloc_vfsmnt+0x94/0x170</span>
+<span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31d18:</span>  [<span class="op">&lt;</span>6009663b<span class="op">&gt;</span>] mount_fs+0x1b/0xf0</span>
+<span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31d48:</span>  [<span class="op">&lt;</span>600afebe<span class="op">&gt;</span>] vfs_kern_mount+0x5e/0xd0</span>
+<span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31d98:</span>  [<span class="op">&lt;</span>600b0baf<span class="op">&gt;</span>] do_kern_mount+0x4f/0x110</span>
+<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31de8:</span>  [<span class="op">&lt;</span>600b147a<span class="op">&gt;</span>] do_mount+0x40a/0x800</span>
+<span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31e28:</span>  [<span class="op">&lt;</span>600b0fb1<span class="op">&gt;</span>] copy_mount_options+0xd1/0x150</span>
+<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31e88:</span>  [<span class="op">&lt;</span>600b1973<span class="op">&gt;</span>] sys_mount+0x93/0xe0</span>
+<span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31ee8:</span>  [<span class="op">&lt;</span>60018cb6<span class="op">&gt;</span>] handle_syscall+0x76/0x80</span>
+<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31f08:</span>  [<span class="op">&lt;</span>600272d6<span class="op">&gt;</span>] userspace+0x386/0x490</span>
+<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31f58:</span>  [<span class="op">&lt;</span>60023d97<span class="op">&gt;</span>] save_registers+0x17/0x40</span>
+<span id="cb5-45"><a href="#cb5-45" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31fc8:</span>  [<span class="op">&lt;</span>600157ad<span class="op">&gt;</span>] fork_handler+0x7d/0x90</span>
+<span id="cb5-46"><a href="#cb5-46" aria-hidden="true" tabindex="-1"></a><span class="ex">FIX</span> kmalloc-2048: Object at 0x0000000070b4d2d0 not freed</span></code></pre></div>
+<p>Самое интересное тут следующее:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">INFO:</span> Allocated in btrfs_mount+0x389/0x7f0 age=0 cpu=0 pid=277</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">INFO:</span> Freed in btrfs_mount+0x51c/0x7f0 age=0 cpu=0 pid=277</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">70b31a90:</span>  [<span class="op">&lt;</span>600ebf6f<span class="op">&gt;</span>] btrfs_mount+0x55f/0x7f0</span></code></pre></div>
+<p>Это одна точка выделения и две точки освобождения одной и той же памяти.
+Смотрим в <strong>gdb</strong>, куда они показывают:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gdb vmlinux.o</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="fu">gdb</span><span class="kw">)</span> <span class="ex">list</span> <span class="pp">*(</span>btrfs_mount+0x389c<span class="pp">)</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">0x600ebd99</span> is in btrfs_mount <span class="er">(</span><span class="ex">/home/slyfox/linux-2.6/fs/btrfs/super.c:937</span><span class="kw">)</span><span class="bu">.</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">932</span>              <span class="pp">*</span> it for searching for existing supers, so this lets us do that and</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">933</span>              <span class="pp">*</span> then open_ctree will properly initialize everything later.</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="ex">934</span>              <span class="pp">*</span>/</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="ex">935</span>             fs_info = kzalloc<span class="er">(</span><span class="ex">sizeof</span><span class="er">(</span><span class="ex">struct</span> btrfs_fs_info<span class="kw">)</span><span class="ex">,</span> GFP_NOFS<span class="kw">);</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="ex">936</span>             tree_root = kzalloc<span class="er">(</span><span class="ex">sizeof</span><span class="er">(</span><span class="ex">struct</span> btrfs_root<span class="kw">)</span><span class="ex">,</span> GFP_NOFS<span class="kw">);</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="ex">937</span>             if <span class="er">(</span><span class="ex">!fs_info</span> <span class="kw">||</span> <span class="ex">!tree_root</span><span class="kw">)</span> <span class="kw">{</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="ex">938</span>                     error = <span class="at">-ENOMEM</span><span class="kw">;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="ex">939</span>                     goto error_close_devices<span class="kw">;</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="ex">940</span>             }</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="ex">941</span>             fs_info-<span class="op">&gt;</span>tree_root = tree_root<span class="kw">;</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="fu">gdb</span><span class="kw">)</span> <span class="ex">list</span> <span class="pp">*(</span>btrfs_mount+0x51c<span class="pp">)</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="ex">0x600ebf2c</span> is in btrfs_mount <span class="er">(</span><span class="ex">/home/slyfox/linux-2.6/fs/btrfs/ctree.h:2500</span><span class="kw">)</span><span class="bu">.</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="ex">2495</span>    static inline void free_fs_info<span class="er">(</span><span class="ex">struct</span> btrfs_fs_info <span class="pp">*</span>fs_info<span class="kw">)</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a><span class="ex">2496</span>    {</span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a><span class="ex">2497</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>delayed_root<span class="kw">);</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a><span class="ex">2498</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>extent_root<span class="kw">);</span></span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a><span class="ex">2499</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>tree_root<span class="kw">);</span></span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a><span class="ex">2500</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>chunk_root<span class="kw">);</span></span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a><span class="ex">2501</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>dev_root<span class="kw">);</span></span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a><span class="ex">2502</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>csum_root<span class="kw">);</span></span>
+<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a><span class="ex">2503</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>super_copy<span class="kw">);</span></span>
+<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a><span class="ex">2504</span>            kfree<span class="er">(</span><span class="ex">fs_info-</span><span class="op">&gt;</span>super_for_commit<span class="kw">);</span></span>
+<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="fu">gdb</span><span class="kw">)</span> <span class="ex">list</span> <span class="pp">*(</span>btrfs_mount+0x55f<span class="pp">)</span></span></code></pre></div>
+<p>Я не сохранил вывод последнего, но легко видеть, что в патче это <strong>kfree(tree_root);</strong>
+сразу после вызова <strong>free_fs_info(fs_info)</strong>, в котором происходит первое освобождение:
+<strong>kfree(fs_info-&gt;tree_root);</strong></p>
+<p>Стоит заметить, что адреса в <strong>gdb</strong> показывают на адрес возврата (т.е. на следующую после выделения строку).</p>
+
+<div class="info">
+    Posted on November  7, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

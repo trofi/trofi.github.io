@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: A year on gcc from git</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>A year on gcc from git</h1>
+
+            <p>Almost <a href="../posts/213-gcc-10-in-gentoo.html">a year</a> passed since
+<strong>gcc-10</strong> arrival in gentoo. This means <strong>gcc-11</strong> will release
+very soon!</p>
+<p>Around that time I decided to switch
+my main workstation to <strong>gcc</strong> on git master branch to see how
+long it would survive before it destroys something due to a grave
+compiler bug. Nothing like that happened yet :)</p>
+<p>Having volatile compiler version has all sorts of nasty consequences:
+you could have a library or a binary miscompiled due to some transient
+compiler issue that was fixed a day after it was introduced.</p>
+<p>My solution to stale binaries is to rebuild all packages periodically.
+To ease the load on the system I have a cron job that rebuilds all
+the packages older than a month on my system. It has an effect of
+upgrading compiler itself once a month and rebuilds about 3% of all
+packages daily.</p>
+<p>In this post I’ll share a few issues that came up for such a bleeding
+edge system. It’s not quite a full list, but it touches majority of
+encountered bugs.</p>
+<h1 id="shf_gnu_retain-breaks-kernel-boot">SHF_GNU_RETAIN breaks kernel boot</h1>
+<p>New <strong>SHF_GNU_RETAIN</strong> section flag managed to break kernel boot:
+<a href="https://gcc.gnu.org/PR99113">https://gcc.gnu.org/PR99113</a> (originally reported as <a href="https://sourceware.org/PR27412">https://sourceware.org/PR27412</a>).</p>
+<p>The problem: <strong>gcc-11</strong> changed semantics of existing
+<strong>__attribute__((__used__))</strong> code (kernel happens to use it a lot):</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">*</span>print_fmt<span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s print_fmt_napi_poll<span class="op">[</span><span class="dv">1</span><span class="op">];</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>__used__<span class="op">))</span> <span class="kw">struct</span> s event_napi_poll <span class="op">=</span> <span class="op">{</span>print_fmt_napi_poll<span class="op">};</span></span></code></pre></div>
+<ul>
+<li>Before <strong>gcc-11</strong>: variable was placed into <strong>.date</strong> section</li>
+<li>In <strong>gcc-11</strong>: variable was placed into <strong>.data.event_napi_poll</strong></li>
+</ul>
+<p>Normally such a section name change is not a problem for userspace
+programs as binutils linker script can handle both names.
+But linux kernel has custom linker scripts that did not account for new names.</p>
+<p>The fix: <strong>gcc-11</strong> reverted semantic change and now enables it only
+with new <strong>__attribute__((__retain__))</strong> attribute: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=6347f4a0904fce17eedf5c071be6f3c118680290">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=6347f4a0904fce17eedf5c071be6f3c118680290</a></p>
+<p>The bug effect: kernel did not boot, kernel build log was full of
+unknown section warnings.</p>
+<h1 id="fipa-modref-breaks-glibcs-printf">-fipa-modref breaks glibc’s printf</h1>
+<p>New <strong>-fipa-modref</strong> gcc optimisation managed to break <strong>glibc</strong>:
+<a href="https://sourceware.org/PR26690">https://sourceware.org/PR26690</a> (originally reported as <a href="https://gcc.gnu.org/PR97264">https://gcc.gnu.org/PR97264</a>).</p>
+<p>The problem: <strong>glibc</strong> had an interesting aliasing violation bug
+in <strong>vfprintf</strong> family of functions. In it’s simpler form bug looked like that:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> vfprintf_internal<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> format_string<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> p <span class="op">=</span> format_string<span class="op">;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [1]: somewhere in another helper function:</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">++(</span><span class="dt">const</span> unsinged <span class="dt">char</span> <span class="op">**)&amp;</span>p<span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// continue using 'p':</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<ul>
+<li>Before <strong>gcc-11</strong>: variable <strong>p</strong> was advanced with <strong>[1]</strong></li>
+<li>In <strong>gcc-11</strong>: variable <strong>p</strong> did not change with <strong>[1]</strong> as gcc assumed
+<strong>char</strong> and <strong>unsinged char</strong> (and their pointers) are two different
+types that don’t alias and thus operations on them are independent.</li>
+</ul>
+<p>The fix: the aliasing was fixed in <strong>glibc</strong> with <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=c0e9ddf59e73e21afe15fca4e94cf7b4b7359bf2">https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=c0e9ddf59e73e21afe15fca4e94cf7b4b7359bf2</a></p>
+<p>The bug effect: <strong>uname -p</strong> did hang up and caused
+<strong>gcc-11</strong> Gentoo users some inconvenience: <a href="https://bugs.gentoo.org/750992">https://bugs.gentoo.org/750992</a>.</p>
+<p>This bug is very scary: it specifically breaks digit parsing
+in format strings like <strong>“%10s”</strong> and has the potential of causing
+silent data corruption.</p>
+<h1 id="fipa-modref-breaks-return-value-optimization">-fipa-modref breaks return value optimization</h1>
+<p>New <strong>-fipa-modref</strong> gcc optimisation managed to break <strong>libsass</strong>
+library tests and exposed a compiler flaw: <a href="https://gcc.gnu.org/PR98499">https://gcc.gnu.org/PR98499</a></p>
+<p>The sample example is:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c++"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> string <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> <span class="op">*</span> _M_buf<span class="op">;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// local store</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> _M_local_buf<span class="op">[</span><span class="dv">16</span><span class="op">];</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  string<span class="op">()</span> <span class="op">:</span> _M_buf<span class="op">(</span>_M_local_buf<span class="op">)</span> <span class="op">{}</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">~</span>string<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>_M_buf <span class="op">!=</span> _M_local_buf<span class="op">)</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>      <span class="fu">__builtin_trap</span><span class="op">();</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> string dir_name<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> string<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>   <span class="op">...</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>   string s <span class="op">=</span> dir_name<span class="op">();</span> </span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>   <span class="op">...</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Before <strong>gcc-11</strong>:</p>
+<pre class><code>$ g++-10.2.0 -O2 main.cc -o a &amp;&amp; ./a
+&lt;ok&gt;</code></pre>
+<p>In <strong>gcc-11</strong>:</p>
+<pre class><code>$ g++-11.0.0 -O2 main.cc -o a &amp;&amp; ./a
+Illegal instruction     (core dumped) ./a</code></pre>
+<p><strong>gcc-11</strong> managed to optimize <strong>if (_M_buf != _M_local_buf) __builtin_trap();</strong>
+into <strong>__builtin_trap();</strong> instead of expected no-op. It happened because <strong>gcc</strong>
+<strong>moderf</strong> analysis wrongly assumed that if <strong>s</strong> is a local variable then
+it’s <strong>s._M_buf</strong> is also a local variable and never escapes.</p>
+<p>Unfortunately Return Value Optimization effectively turns local variables
+into non-local variables as they escape outside the function they are defined.</p>
+<p>The fix: <strong>gcc</strong> was fixed to make less optimistic escaping rules for values
+touched by <strong>RVO</strong>: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=11056ab7687f7156846e93557c9171b77713bd7e">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=11056ab7687f7156846e93557c9171b77713bd7e</a>.</p>
+<p>Longer term <strong>gcc</strong> will improve on <strong>RVO</strong> tracking: <a href="https://gcc.gnu.org/PR98925">https://gcc.gnu.org/PR98925</a></p>
+<p>The bug effect: <a href="https://github.com/sass/libsass">libsass</a> tests started
+failing for <a href="https://github.com/jakubfijalkowski/hlibsass">libsass haskell bindings</a>.</p>
+<p>It took me quite a while (perhaps a week of winter evenings) to extract the reasonably
+sized test case. It was very elusive because bug only appears in cases when <strong>inliner</strong>
+did not do a reasonable job due to various corner cases while <strong>ipa-modref</strong> did
+(that’s why actual test case is full of <strong>__attribute__((noinline))</strong> annotations.</p>
+<p>I also used it as an opportunity to explore and fix my first non-trivial <strong>gcc</strong> bug :)</p>
+<h1 id="firefox-deadlock-in-ltopgo">firefox deadlock in LTO+PGO</h1>
+<p>New change in <strong>-fprofile-generate</strong> around most frequent value
+tracking introduced a deadlock scenario in <strong>firefox</strong>:
+<a href="https://gcc.gnu.org/PR97461">https://gcc.gnu.org/PR97461</a>. Firefox’s code is similar to:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Override default malloc with it's own allocator</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> malloc<span class="op">(</span><span class="dt">size_t</span> size<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// something with TOPN profile, like:</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> per_bucket_implementation<span class="op">[</span>size <span class="op">%</span> N<span class="op">]();</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> <span class="op">*</span> p <span class="op">=</span> malloc<span class="op">(</span><span class="dv">8</span><span class="op">);</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> p <span class="op">!=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Code, generated by <strong>gcc</strong> in <strong>-fprofile-generate</strong> mode converts it
+to:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// inserted by gcc</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> counter __gcov3_malloc<span class="op">;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Override default malloc with it's own allocator</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> malloc<span class="op">(</span><span class="dt">size_t</span> size<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// something with TOPN profile, like:</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// inserted by gcc</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    gcov_topn_add_value<span class="op">(</span>__gcov3_malloc<span class="op">,</span> pper_bucket_implementation<span class="op">[</span>size <span class="op">%</span> N<span class="op">]);</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> per_bucket_implementation<span class="op">[</span>size <span class="op">%</span> N<span class="op">]();</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> <span class="op">*</span> p <span class="op">=</span> malloc<span class="op">(</span><span class="dv">8</span><span class="op">);</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> p <span class="op">!=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>New implementation of <strong>gcov_topn_add_value</strong> now uses dynamic
+memory allocation: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=871e5ada6d53d5eb">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=871e5ada6d53d5eb</a>
+(previously it used static (<strong>GCOV_TOPN_VALUES = 4</strong>).</p>
+<p>This started causing infinite recursion:
+<strong>malloc() -&gt; gcov_topn_add_value() -&gt; malloc()</strong>.</p>
+<p>The fix: <strong>gcc</strong>’s <strong>gcov</strong> library now uses <strong>mmap()</strong> directly to
+track <strong>TOPN</strong> counters and avoids <strong>malloc()</strong>:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=00d79dc4be0b86ec564cfa2b32c47de6c07449e6">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=00d79dc4be0b86ec564cfa2b32c47de6c07449e6</a></p>
+<h1 id="array-attributes-typecheck">Array attributes typecheck</h1>
+<p><strong>gcc</strong> failed to compile <strong>emacs-27.1</strong> that uses unusual <strong>VLA</strong> declaration
+in function parameters: <a href="https://gcc.gnu.org/PR97413">https://gcc.gnu.org/PR97413</a></p>
+<pre class><code>$ cat fns.c
+int a(long b, const int a1[b], long c, const int a2[c], int a3[c]);
+
+$ gcc-11.0.0 -c fns.c.c
+fns.c.c:1:1: error: wrong number of arguments specified for 'access' attribute
+    1 | int a(long b, const int a1[b], long c, const int a2[c], int a3[c]);
+      | ^~~
+fns.c.c:1:1: note: expected between 1 and 3, found 4</code></pre>
+<p>The fix: <strong>gcc</strong> now correctly tracks function attributes:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=34efa5c2a84a8c7c7beb855dec24a321eebcbd6b">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=34efa5c2a84a8c7c7beb855dec24a321eebcbd6b</a></p>
+<h1 id="webkit-miscompilation">Webkit miscompilation</h1>
+<p><strong>gcc</strong> incorrectly compiled <strong>webkit-gtk-2.28.4</strong> around placement new:
+<a href="https://gcc.gnu.org/PR98130">https://gcc.gnu.org/PR98130</a>. The following code generates a crashing program:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c++"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;new&gt;</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">int</span> <span class="op">*</span>T<span class="op">;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">unsigned</span> <span class="dt">char</span> storage<span class="op">[</span><span class="kw">sizeof</span> <span class="op">(</span>T<span class="op">)]</span> <span class="kw">alignas</span> <span class="op">(</span>T<span class="op">);</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> T <span class="op">*</span>p <span class="op">=</span> <span class="op">(</span>T <span class="op">*)</span> storage<span class="op">;</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="kw">inline</span> <span class="ex">__attribute__((__always_inline__))</span> <span class="dt">void</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>foo <span class="op">(</span>T value<span class="op">)</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">new</span> <span class="op">(</span>p<span class="op">)</span> T<span class="op">(</span>value<span class="op">);</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>main <span class="op">()</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int</span> a<span class="op">;</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>  foo <span class="op">(&amp;</span>a<span class="op">);</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(!*</span>p<span class="op">)</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    <span class="fu">__builtin_abort</span> <span class="op">();</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <strong>gcc-11</strong> assumed that <strong>new (p) T(value);</strong> has no
+side-effect and removed ’<em>p = value’ part entirely as a
+dead store as it did not know ifp</em>* is dereferenced.</p>
+<p>The fix: <strong>gcc-11</strong> avoids the optimization for placement operator new:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=78c4a9feceaccf487516aa1eff417e0741556e10">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=78c4a9feceaccf487516aa1eff417e0741556e10</a></p>
+<p>That was not the only <strong>webkit</strong> miscompilation related to pointer
+handling.</p>
+<h1 id="unhandled-template-specialization">Unhandled template specialization</h1>
+<p>A few programs based on <strong>gtkmm</strong> library failed to type check:
+<a href="https://gcc.gnu.org/PR98115">https://gcc.gnu.org/PR98115</a>. In my case it was <strong>pavucontrol</strong>.
+Small examle:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span>class<span class="op">&gt;</span> class Stringify<span class="op">;</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span><span class="dt">long</span> N<span class="op">&gt;</span> class Stringify<span class="op">&lt;</span><span class="dt">const</span> <span class="dt">char</span><span class="op">[</span>N<span class="op">]&gt;;</span></span></code></pre></div>
+<pre class><code>$ g++ layout.ii -c
+layout.ii:2:25: error: partial specialization ‘class Stringify&lt;const char [N]&gt;’ is not more specialized than [-fpermissive]
+    2 | template &lt;long N&gt; class Stringify&lt;const char[N]&gt;;
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~
+layout.ii:1:24: note: primary template ‘template&lt;class&gt; class Stringify’
+    1 | template &lt;class&gt; class Stringify;
+      |                        ^~~~~~~~~</code></pre>
+<p><strong>gcc</strong> considered <strong>class</strong> equally unspecialized to <strong>long N</strong>.</p>
+<p>The fix: tweak type comparison in <strong>gcc</strong>’s type checker:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9d0eb0ae948f0fbee208cfb9a86133abea650f81">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9d0eb0ae948f0fbee208cfb9a86133abea650f81</a></p>
+<h1 id="overriding-target-attribute-behaviour">Overriding target attribute behaviour</h1>
+<p>At some point <strong>gcc</strong> failed <strong>grub</strong> linking with very obscure linker
+failure. I’ll provide only the source example without linker failure:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// build as:</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="co">//    gcc-11.0.0 -O1 -mcmodel=large -S a.c</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">void</span> grub_memmove<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>__target__<span class="op">(</span><span class="st">&quot;bmi2&quot;</span><span class="op">)))</span> <span class="dt">void</span> a_bmi<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">// expect:</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">//   movabsq $grub_memmove, %rbx</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">//   call    *%rbx</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>  <span class="co">// actual (bug):</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>  <span class="co">//   call    grub_memmove</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(;;)</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    grub_memmove<span class="op">();</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <strong>gcc</strong> effectively removed <strong>-mcmodel=large</strong> due to presence
+of <strong>__attribute__((__target__(“bmi2”)))</strong> and generated invalid
+assembly (<strong>-mcmodel=medium</strong>, assumed <strong>.text</strong> is within 4GB reach).</p>
+<p>The fix: <strong>gcc</strong> was fixed not to ignore <strong>-mcmodel=</strong> and friends
+when overriding target attributes are used: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=8f1cb70d7ca6a8da7f6bc7f43fb5e758c0ce88b5">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=8f1cb70d7ca6a8da7f6bc7f43fb5e758c0ce88b5</a></p>
+<p>This was a nasty bug. We were lucky that <strong>gcc</strong> managed to generate
+a relocation that linker does not understand instead of silently
+generating invalid <strong>grub</strong>.</p>
+<h1 id="other-minor-gcc-bugs">Other minor gcc bugs</h1>
+<p>A few more smaller bugs if you like that kind of stuff:</p>
+<ul>
+<li><a href="https://gcc.gnu.org/PR98753">https://gcc.gnu.org/PR98753</a>: <strong>-Wfree-nonheap-object</strong> false positive</li>
+<li><a href="https://gcc.gnu.org/PR98286">https://gcc.gnu.org/PR98286</a>: <strong>g++</strong> accepts <strong>void d(void) { typename foo; }</strong> as valid code</li>
+<li><a href="https://gcc.gnu.org/PR98306">https://gcc.gnu.org/PR98306</a>: <strong>g++</strong> accepts invalid template code as valid</li>
+<li><a href="https://gcc.gnu.org/PR97615">https://gcc.gnu.org/PR97615</a>: dolphin ICE in SLP (vectorization patterns need a tweak)</li>
+<li><a href="https://gcc.gnu.org/PR96863">https://gcc.gnu.org/PR96863</a>: dolphin varasm ICE</li>
+<li><a href="https://gcc.gnu.org/PR97206">https://gcc.gnu.org/PR97206</a>: array typecheck bug</li>
+<li><a href="https://sourceware.org/PR27004">https://sourceware.org/PR27004</a>: glibc tls reference bug</li>
+<li><a href="https://gcc.gnu.org/PR98403">https://gcc.gnu.org/PR98403</a>: grub build hangup</li>
+<li><a href="https://gcc.gnu.org/PR98597">https://gcc.gnu.org/PR98597</a>: ICE in print_mem_ref</li>
+<li><a href="https://gcc.gnu.org/PR97830">https://gcc.gnu.org/PR97830</a>: iCE in sccvn</li>
+</ul>
+<h1 id="parting-words">Parting words</h1>
+<p>Running a compiler from a development branch is a lot of fun. Every
+compiler upgrade fixed some existing bugs and introduced new ones.
+It is important to make sure fixes are intentional and not just
+masking bugs by other changes. And always keep a backup ready.
+You will need it.</p>
+<p>Many of the above regressions were not caught with regression tests
+as they were frequently not trivial feature interactions. Real
+world applications keep surprising <strong>gcc</strong>.</p>
+<p><a href="https://www.gentoo.org/">Gentoo</a> makes it very easy to break
+(and fix!) your system if you really want it. It’s perhaps the
+primary reason I keep using it for about 15 years. You might want
+to give it a try as well :)</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on March  7, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

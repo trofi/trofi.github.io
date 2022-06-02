@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: guix on gentoo howto</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>guix on gentoo howto</h1>
+
+            <h1 id="tldr">TL;DR</h1>
+<p>Getting guix on gentoo (<a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-apps/guix/guix-0.12.0-r2.ebuild#n72">same steps</a>):</p>
+<ul>
+<li><p>install guix from gentoo main tree: <strong>emerge guix</strong></p></li>
+<li><p>enable guix-daemon service:</p>
+<ul>
+<li>on systemd: <strong>systemctl enable guix-daemon</strong></li>
+<li>on openrc: <strong>rc-update add guix-daemon</strong></li>
+</ul></li>
+<li><p>create a profile symlink and set some environment variables:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># profiles and PATH</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ln <span class="at">-sf</span> /var/guix/profiles/per-user/<span class="va">$USER</span>/guix-profile <span class="va">$HOME</span>/.guix-profile</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> export PATH=<span class="st">&quot;</span><span class="va">${HOME}</span><span class="st">/.guix-profile/bin:</span><span class="va">${HOME}</span><span class="st">/.guix-profile/sbin</span><span class="va">${PATH</span><span class="op">:+</span>:<span class="va">}$PATH</span><span class="st">&quot;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co"># gnutls certs</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> export SSL_CERT_DIR=<span class="st">&quot;</span><span class="va">$HOME</span><span class="st">/.guix-profile/etc/ssl/certs&quot;</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> export SSL_CERT_FILE=<span class="st">&quot;</span><span class="va">$HOME</span><span class="st">/.guix-profile/etc/ssl/certs/ca-certificates.crt&quot;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> export GIT_SSL_CAINFO=<span class="st">&quot;</span><span class="va">$SSL_CERT_FILE</span><span class="st">&quot;</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="co"># libc locales</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> export GUIX_LOCPATH=<span class="va">$HOME</span>/.guix-profile/lib/locale</span></code></pre></div></li>
+</ul>
+<p>Ready!</p>
+<h1 id="more-commands">More commands</h1>
+<ul>
+<li>install a package: <strong>guix package -i icecat</strong></li>
+<li>uninstall a package: <strong>guix package -r icecat</strong></li>
+<li>start a new shell with only specified package(s) in environment: <strong>guix environment --ad-hoc --pure icecat</strong></li>
+</ul>
+<h1 id="some-words-on-guix">Some words on guix</h1>
+<p>Guix has the same underlying storage model as nix: package descriptions
+fully capture environment of inputs to get reproducible build result
+of built artifact. They are also called derivations.</p>
+<p>Commandline interface is slightly different from nix: to me it feels
+more consistent and more powerful. For example nix provides tools like
+<strong>nix-build</strong>, <strong>nix-env</strong>, <strong>nix-collect-garbage</strong>, <strong>nix-store</strong>,
+<strong>nix-shell</strong>. While guix provides single entry point <strong>guix</strong> command.</p>
+<p><strong>guix environment</strong> (sibling of <strong>nix-shell</strong>) allows you to create
+an isolated shell and optionally run it in a separate container.
+That provides additional isolation layer on foreign distros (I run gentoo).</p>
+<p>Example comparison to get <strong>ghc</strong> in isolated environment:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># get only 'ghc' into environemnt</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> nix-shell <span class="at">--pure</span> <span class="at">-p</span> ghc</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co"># same but for guix</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> guix environment <span class="at">--ad-hoc</span> ghc</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="ex">[sf]</span> ~:echo /bin/a<span class="pp">*</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="ex">/bin/attr</span> /bin/awk</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="co"># same as above but in container</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> guix environment <span class="at">--ad-hoc</span> <span class="at">--container</span> ghc</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="ex">slyfox@sf</span> ~ [env]# echo /bin/a<span class="pp">*</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="ex">/bin/a*</span></span></code></pre></div>
+<p>Here <strong>container</strong> mode allows us to hide all specifics of a host system.
+It gives me more confidence that nothing from my host system leaks into
+guix-built packages.</p>
+<p>Let’s look at an example <strong>guix</strong> package. One of tools missing in
+guix repos was <strong>re2c</strong>. I’ve dumped the following into current directory:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode scheme"><code class="sourceCode scheme"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">; cat ~/.guix/re2c.scm</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>(use-modules (guix)</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>             (guix build-system gnu)</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>             (guix licenses))</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>(package</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  (name <span class="st">&quot;re2c&quot;</span>)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  (version <span class="st">&quot;0.15&quot;</span>)</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  (source (origin</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>           (method url-fetch)</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>           (uri (<span class="kw">string-append</span> <span class="st">&quot;https://github.com/skvadrik/&quot;</span> name</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>                               <span class="st">&quot;/releases/download/&quot;</span> version <span class="st">&quot;/&quot;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>                               name <span class="st">&quot;-&quot;</span> version <span class="st">&quot;.tar.gz&quot;</span>))</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>           (sha256</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>            (base32</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>             <span class="co">; got as: guix download https://github.com/skvadrik/re2c/releases/download/0.15/re2c-0.15.tar.gz</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>             <span class="st">&quot;1kdfjs6jb1d4rymk8aqr3l775jx6hl8ml9wpv3q23i2vyfxnnsas&quot;</span>))))</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>  (build-system gnu-build-system)</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  (home-page <span class="st">&quot;http://re2c.org/&quot;</span>)</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  (synopsis <span class="st">&quot;Lexer generator for C/C++&quot;</span>)</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>  (description</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>   <span class="st">&quot;@code{re2c} generates minimalistic ...&quot;</span>)</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>  (license public-domain))</span></code></pre></div>
+<p>Tried to build the package:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> guix build <span class="at">-f</span> re2c.scm re2c</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">substitute:</span> updating list of substitutes from <span class="st">'https://mirror.hydra.gnu.org'</span>... 100.0%</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">@</span> build-started /gnu/store/1nwww0i3cgp59yyc0r9wsg98ynmj6dq8-re2c-0.15.drv <span class="at">-</span> x86_64-linux /var/log/guix/drvs/1n//www0i3cgp59yyc0r9wsg98ynmj6dq8-re2c-0.15.drv.bz2</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">starting</span> phase <span class="kw">`</span><span class="ex">set-SOURCE-DATE-EPOCH</span><span class="st">'</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="st">...</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="st">phase `compress-documentation'</span> succeeded after 0.0 seconds</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="ex">@</span> build-succeeded /gnu/store/1nwww0i3cgp59yyc0r9wsg98ynmj6dq8-re2c-0.15.drv <span class="at">-</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/8mcnjdismqmg25ds9jg7rf6ay3vwlqxr-re2c-0.16</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/wfmj24p5y3xva5jrc8rrk25z9zf6ssvx-re2c-0.15</span></span></code></pre></div>
+<p>Done!</p>
+<p>We can install built package with <strong>guix package -f re2c.scm -i re2c</strong>
+or run it in isolated environment: <strong>guix environment -l re2c.scm --ad-hoc -C re2c</strong></p>
+<p>The package was added upstream in <a href="http://git.savannah.gnu.org/cgit/guix.git/commit/gnu/packages/re2c.scm?id=cc1c3977d54728280ec6649e1883912b1226e63f">this form</a></p>
+<p>Once package got accepted into guix tree everyone is able to get it with mere
+<strong>guix pull</strong>.</p>
+<p>We can verify that local build matches hydra build:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> guix build <span class="at">--check</span> re2c</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/8mcnjdismqmg25ds9jg7rf6ay3vwlqxr-re2c-0.16</span></span></code></pre></div>
+<p>No errors so far.</p>
+<p>Or check size of runtime dependencies:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> guix size re2c</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">store</span> item                                                       total    self</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/8mcnjdismqmg25ds9jg7rf6ay3vwlqxr-re2c-0.16</span>               61.4     0.4   0.6%</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/cdi08kw7r6r684w8mk0xq0dkgpjhfpmd-gcc-4.9.4-lib</span>           61.0    22.7  37.0%</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/iwgi9001dmmihrjg4rqhd6pa6788prjw-glibc-2.24</span>              38.3    36.8  60.0%</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="ex">/gnu/store/rvgmixpmsq5lqr9qflhkm70kg7a4rys2-bash-static-4.4.0</span>        1.4     1.4   2.3%</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="ex">total:</span> 61.4 MiB</span></code></pre></div>
+<p>Another useful feature is to get build logs on hydra. Say, how did build
+look like on arm? Easy:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> guix build <span class="at">--log-file</span> re2c <span class="at">--system</span><span class="op">=</span>armhf-linux</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">substitute:</span> updating list of substitutes from <span class="st">'https://mirror.hydra.gnu.org'</span>... 100.0%</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">https://mirror.hydra.gnu.org/log/j6hlxb9bbvi8wvjcxj8mswkcdkjy8kc8-re2c-0.16</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">configure</span> flags: <span class="er">(</span><span class="st">&quot;CONFIG_SHELL=/gnu/store/dbsflrccll1laf2q0asr6gl995b9p7y7-bash-4.4.0/bin/bash&quot;</span> <span class="st">&quot;SHELL=/gnu/store/dbsflrccll1laf2q0asr6gl995b9p7y7-bash-4.4.0/bin/bash&quot;</span> <span class="st">&quot;--prefix=/gnu/store/j6hlxb9bbvi8wvjcxj8mswkcdkjy8kc8-re2c-0.16&quot;</span> <span class="st">&quot;--enable-fast-install&quot;</span> <span class="st">&quot;--build=arm-unknown-linux-gnueabihf&quot;</span><span class="kw">)</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of char... 1</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of short... 2</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of int... 4</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of long... 4</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of long long... 8</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of __int64... 0</span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of void <span class="pp">*</span>... 4</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of 0l... 4</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of 0ll... 8</span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="ex">checking</span> size of 0i8... 0</span></code></pre></div>
+<p>Looks like arm :)</p>
+<p>There is many more interesting topics in guix user manual: <a href="https://www.gnu.org/software/guix/manual/">https://www.gnu.org/software/guix/manual/</a></p>
+<p>Some of them are:</p>
+<ul>
+<li>visualise dependency graphs with <strong>guix graph</strong></li>
+<li>check for problems in packages (including known vulnerabilities) with <strong>guix lint</strong></li>
+<li>importing packages from other systems like cpan, hackage, nix and others</li>
+<li>checking for upstream updates of known packages with <strong>guix refresh</strong></li>
+<li>bootstrapping of a new architecture or OS</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on February 11, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

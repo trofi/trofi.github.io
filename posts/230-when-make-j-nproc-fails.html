@@ -1,0 +1,392 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: When make -j$(nproc) fails</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>When make -j$(nproc) fails</h1>
+
+            <p>The other day I noticed that <strong>nixpkgs</strong> repository has slightly outdated <strong>bison-3.7.6</strong>
+package while <strong>3.8.2</strong> was available upstream. I tried to update it. Usually it
+takes a 2 line change: update version and update upstream tarball hash. Something like:
+<a href="https://github.com/NixOS/nixpkgs/commit/88bdfc3b6cdd489abf480880aa01d71b6965a53c">https://github.com/NixOS/nixpkgs/commit/88bdfc3b6cdd489abf480880aa01d71b6965a53c</a></p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/tools/parsing/bison/default.nix</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/tools/parsing/bison/default.nix</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -7,11 +7,11 @@</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a> stdenv.mkDerivation rec {</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>   pname = &quot;bison&quot;;</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  version = &quot;3.7.6&quot;;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  version = &quot;3.8.2&quot;;</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>   src = fetchurl {</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>     url = &quot;mirror://gnu/${pname}/${pname}-${version}.tar.gz&quot;;</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="st">-    sha256 = &quot;sha256-adwLtG6o/DB9TKHgthyMNV6yB9Cwxp9PhGIyjnTXueo=&quot;;</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="va">+    sha256 = &quot;sha256-BsnhO99+sk1M62tZIFpPZ8LH5yExGWREMP6C+9FKCrs=&quot;;</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>   };</span></code></pre></div>
+<p>I updated it locally and noticed that <strong>bison</strong> was somewhat slow to build.
+The build process looked sequential:</p>
+<pre class><code>$ time nix build --impure --expr 'with import ./.{}; bison' --rebuild
+real    0m28,695s</code></pre>
+<p>I tried to enable parallelism and got 1.5x speedup:</p>
+<pre class><code>$ time nix build --impure --expr 'with import ./.{}; bison.overrideAttrs (oa: { enableParallelBuilding = true; })'
+real    0m19,090s</code></pre>
+<p>And then applied the same to <strong>bison/default.nix</strong> build definition: <a href="https://github.com/NixOS/nixpkgs/commit/faf06a88de74364d4544e1ae8adbc5a31b51e4fe">https://github.com/NixOS/nixpkgs/commit/faf06a88de74364d4544e1ae8adbc5a31b51e4fe</a></p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/tools/parsing/bison/default.nix</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/tools/parsing/bison/default.nix</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -17,8 +17,10 @@ stdenv.mkDerivation rec {</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>   nativeBuildInputs = [ m4 perl ] ++ lib.optional stdenv.isSunOS help2man;</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>   propagatedBuildInputs = [ m4 ];</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  doCheck = false; # fails</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="st">-  doInstallCheck = false; # fails</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="va">+  enableParallelBuilding = true;</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="va">+  doCheck = true;</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="va">+  doInstallCheck = true;</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>   meta = {</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>     homepage = &quot;https://www.gnu.org/software/bison/&quot;;</span></code></pre></div>
+<p>While at it I also enabled bison tests and slowed build down to 1m22s.
+<strong>bison</strong> has ~700 tests. 3x slowdown compared to initial state. But at
+least tests now use all the CPUs I have :) Leaving it for another day.</p>
+<p><strong>bison</strong> happens to be a bootstrap package that causes rebuild of almost
+all packages. None of ~2400 failed for my system. Yay! While at it I noticed
+that a few other packages were running sequentially, like <strong>coreutils</strong>:</p>
+<pre class><code>$ time nix build --impure --expr 'with import ./. {}; coreutils' --rebuild
+real    3m4,589s
+
+$ time nix build --impure --expr 'with import ./. {}; coreutils.overrideAttrs (oa: { enableParallelBuilding = true; })'
+real    0m52,312s</code></pre>
+<p>3.5x speedup just like that. At this point I wondered why parallelism is not a default.
+I suspected I have a lot more packages that build sequentially for no real reason.</p>
+<p>Mechanically it’s a tiny change in <strong>stdenv.mkDerivation</strong> function:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/generic/make-derivation.nix</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/generic/make-derivation.nix</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -60,6 +60,8 @@ in</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>     (stdenv.hostPlatform != stdenv.buildPlatform)</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>     [ &quot;build&quot; &quot;host&quot; ]</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="va">+, enableParallelBuilding ? true</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a> # TODO(@Ericson2314): Make unconditional / resolve #33599</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a> # Check phase</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a> , doCheck ? config.doCheckByDefault or false</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -310,7 +312,8 @@ else let</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>           llvm-config = 'llvm-config-native'</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>         '';</span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>       in [ &quot;--cross-file=${crossFile}&quot; ] ++ mesonFlags;</span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="st">-    } // lib.optionalAttrs (attrs.enableParallelBuilding or false) {</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="va">+    } // lib.optionalAttrs enableParallelBuilding {</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a><span class="va">+      inherit enableParallelBuilding;</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>       enableParallelChecking = attrs.enableParallelChecking or true;</span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>     } // lib.optionalAttrs (hardeningDisable != [] || hardeningEnable != [] || stdenv.hostPlatform.isMusl) {</span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>       NIX_HARDENING_ENABLE = enabledHardeningOptions;</span></code></pre></div>
+<p>It is safe? Some packages will likely fail horribly when they get built
+in parallel. Scary and so tempting!</p>
+<p>With the change above I built all the packages my system had with
+<strong>nix build -f nixos system --keep-going</strong> and immediately uncovered a
+bunch of failures:</p>
+<ul>
+<li>cramfsswap</li>
+<li>discount</li>
+<li>perlPackages.X11XCB</li>
+<li>libomxil-bellagio</li>
+<li>vde2</li>
+<li>adns</li>
+<li>portaudio</li>
+<li>dmraid</li>
+<li>directfb</li>
+<li>ocaml</li>
+<li>cdparanoiaIII</li>
+<li>gnome2.ORBit2</li>
+</ul>
+<p>12 packages out of ~2400 is not too much. Worst case I could mark them
+with <strong>enableParallelChecking = false;</strong> and move on.</p>
+<p>I decided to spend some time on each of failures to possibly fix them
+upstream or at least get some insight into why build systems sometimes
+fail at this.</p>
+<p>I love build system failures. Most of the time they are trivial to debug
+and fix. And when they are not it’s always a mystery to find out what a
+fancy failure mode awaits us there.</p>
+<h1 id="cramfsswap">cramfsswap</h1>
+<p><strong>cramfsswap</strong> was easy to reproduce on rerun:</p>
+<pre class><code>$ nix build --impure --expr 'with import ./.{}; cramfsswap.overrideAttrs (oa: { enableParallelBuilding = true; })' -L
+...
+cramfsswap&gt; build flags: -j16 -l16 SHELL=/nix/store/wadmyilr414n7bimxysbny876i2vlm5r-bash-5.1-p8/bin/bash
+cramfsswap&gt; gcc -Wall -g -O    -o cramfsswap cramfsswap.c -lz
+cramfsswap&gt; strip cramfsswap
+cramfsswap&gt; strip: 'cramfsswap': No such file
+cramfsswap&gt; make: *** [Makefile:10: strip] Error 1
+cramfsswap&gt; make: *** Waiting for unfinished jobs....</code></pre>
+<p>Looks like <strong>strip</strong> is called a bit early. Let’s check the <strong>Makefile</strong> contents
+(<strong>nix develop -f. cramfsswap --phase unpack</strong>):</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> cramfsswap strip</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dv">cramfsswap:</span><span class="dt"> cramfsswap.c</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">CC</span><span class="ch">)</span> -Wall -g -O <span class="ch">$(</span><span class="dt">CPPFLAGS</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">LDFLAGS</span><span class="ch">)</span> -o cramfsswap cramfsswap.c -lz</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="dv">strip:</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>        strip cramfsswap</span></code></pre></div>
+<p>Can you spot the failure?</p>
+<p><strong>strip</strong> target should depend on <strong>cramfsswap</strong> target. Nice thing
+about such bugs is that these are easy to verify by running an individual
+target with incomplete depends:</p>
+<pre class><code>$ LANG=C make strip
+strip cramfsswap
+strip: 'cramfsswap': No such file
+make: *** [Makefile:10: strip] Error 1</code></pre>
+<p>The fix is trivial:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/Makefile</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/Makefile</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -6,7 +6,7 @@ debian: cramfsswap</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a> cramfsswap: cramfsswap.c</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>        $(CC) -Wall -g -O $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o cramfsswap cramfsswap.c -lz</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="st">-strip:</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="va">+strip: cramfsswap</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>        strip cramfsswap</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a> install: cramfsswap</span></code></pre></div>
+<p>Even better would be to get rid of <strong>strip</strong> entirely. But let’s keep the
+build system’s behaviour unchanged for now.</p>
+<p>Reported upstream as <a href="https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=996964">https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=996964</a>.</p>
+<p>This is an example of class of bugs where direct dependency is missing
+in <strong>Makefile</strong>.</p>
+<p>Very similar failures were found in:</p>
+<ul>
+<li>discount: <a href="https://github.com/Orc/discount/commit/c00ad392bf96d723f4ae01edebb3328290d11a5c">https://github.com/Orc/discount/commit/c00ad392bf96d723f4ae01edebb3328290d11a5c</a></li>
+<li>X11-XCB: <a href="https://github.com/stapelberg/X11-XCB/commit/813608dacdae1ae35c9eb0f171a958617e014520">https://github.com/stapelberg/X11-XCB/commit/813608dacdae1ae35c9eb0f171a958617e014520</a></li>
+<li>libomxil-bellagio (no upstream fix yet)</li>
+<li>vde2: <a href="https://github.com/virtualsquare/vde-2/commit/7dd9ed46d5dca125ca45d679ac9f3acbfb0f9300">https://github.com/virtualsquare/vde-2/commit/7dd9ed46d5dca125ca45d679ac9f3acbfb0f9300</a></li>
+</ul>
+<h1 id="adns">adns</h1>
+<p><strong>adns</strong> was more elusive and required a bit of persistence to reproduce again:</p>
+<pre class><code>$ nix build --impure --expr 'with import ./.{}; adns.overrideAttrs (oa: { enableParallelBuilding = true; })' -L
+...
+m4 -P -I. hredirect.h.m4 &gt;hredirect.h-a.new
+sed -e 's/hm_comma/,/g; s/hm_squote/'\''/g; /^[  ]*$/d' &lt;hredirect.h-a.new &gt;hredirect.h-b.new
+m4 -P -I. hfuzzraw.c.m4 &gt;hfuzzraw.c-a.new
+sed -e 's/hm_comma/,/g; s/hm_squote/'\''/g; /^[  ]*$/d' &lt;hfuzzraw.c-a.new &gt;hfuzzraw.c-b.new
+gcc -g -O2 -Wall -Wmissing-prototypes -Wwrite-strings -Wstrict-prototypes -Wcast-qual -Wpointer-arith -Wno-pointer-sign -Wno-unused-value  -I../src -I. -I./../src  -DADNS_REGRESS_TEST -I. -I ./../src -c -g -o adnsresfilter_c.o ../client/adnsresfilter.c
+In file included from ../client/adnsresfilter.c:46:
+./hredirect.h:3:10: fatal error: hsyscalls.h: No such file or directory
+    3 | #include &quot;hsyscalls.h&quot;
+      |          ^~~~~~~~~~~~~
+compilation terminated.
+make[1]: *** [Makefile:130: adnsresfilter_c.o] Error 1</code></pre>
+<p>In this case very occasionally <strong>hsyscalls.h</strong> file was not present. In
+this case <strong>hsyscalls.h</strong> was autogenerated from <strong>Makefile</strong> itself
+(as opposed to <strong>./configure</strong>-time generation) in <strong>regress/Makefile.in</strong>:
+<a href="http://www.chiark.greenend.org.uk/ucgi/~ianmdlvl/git?p=adns.git;a=blob;f=regress/Makefile.in;h=993c1af66e2fbda331aee965ac2bfc8d3665c43e;hb=HEAD">http://www.chiark.greenend.org.uk/ucgi/~ianmdlvl/git?p=adns.git;a=blob;f=regress/Makefile.in;h=993c1af66e2fbda331aee965ac2bfc8d3665c43e;hb=HEAD</a></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">REDIRLIBOBJS</span><span class="ch">=</span><span class="st">   </span><span class="ch">$(</span><span class="kw">addsuffix</span><span class="st"> _d.o</span><span class="kw">,</span><span class="st"> </span><span class="ch">$(</span><span class="kw">basename</span><span class="st"> </span><span class="ch">$(</span><span class="dt">LIBOBJS</span><span class="ch">)))</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="dt">HARNLOBJS</span><span class="ch">=</span><span class="st">      hcommon.o </span><span class="ch">$(</span><span class="dt">REDIRLIBOBJS</span><span class="ch">)</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="dt">ALL_OBJS</span><span class="ch">=</span><span class="st">       </span><span class="ch">$(</span><span class="dt">HARNLOBJS</span><span class="ch">)</span><span class="st"> dtest.o hrecord.o hplayback.o hnonfuzz.o hfuzz.o</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="dv">%_c.o:</span><span class="dt">          </span><span class="ch">$(</span><span class="dt">srcdir</span><span class="ch">)</span><span class="dt">/../client/%.c hredirect.h</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>            <span class="ch">$(</span><span class="dt">CC</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">HCPPFLAGS</span><span class="ch">)</span> -I <span class="ch">$(</span><span class="dt">srcdir</span><span class="ch">)</span>/../src -c -g -o <span class="ch">$@</span> <span class="ch">$&lt;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="dv">$(ALL_OBJS):</span><span class="dt">    </span><span class="ch">$(</span><span class="dt">srcdir</span><span class="ch">)</span><span class="dt">/../src/adns.h </span><span class="ch">$(</span><span class="dt">srcdir</span><span class="ch">)</span><span class="dt">/../src/internal.h</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="dv">$(ALL_OBJS):</span><span class="dt">    harness.h hsyscalls.h</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a><span class="dv">%:</span><span class="dt">:     %.m4 hmacros.i4 hsyscalls.i4</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    <span class="ch">$(</span><span class="dt">M4</span><span class="ch">)</span> -P -I<span class="ch">$(</span><span class="dt">srcdir</span><span class="ch">)</span> <span class="ch">$&lt;</span> &gt;<span class="ch">$@</span>-a.new</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    sed -e <span class="st">'s/hm_comma/,/g; s/hm_squote/'</span>\<span class="st">''</span>/g; /^[  ]*<span class="ch">$$</span>/d<span class="st">' &lt;</span><span class="ch">$@</span><span class="st">-a.new &gt;</span><span class="ch">$@</span><span class="st">-b.new</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>    <span class="ch">@</span><span class="fu">mv -f </span><span class="ch">$@</span><span class="fu">-b.new </span><span class="ch">$(</span><span class="dt">srcdir</span><span class="ch">)</span><span class="fu">/</span><span class="ch">$@</span><span class="fu">; rm -f </span><span class="ch">$@</span><span class="fu">-a.new</span></span></code></pre></div>
+<p>Here <strong>hsyscalls.h.m4</strong> is used to produce <strong>hsyscalls.h</strong>,
+but <strong>adnsresfilter_c.o</strong> in no way specifies the dependency against it. It should.</p>
+<p>Minor note: <strong>../client/adnsresfilter.c</strong> includes <strong>hsyscalls.h</strong> only indirectly
+via <strong>hredirect.h</strong> and thus requires some care to specify actual dependency.
+Should <strong>adnsresfilter.c</strong> require <strong>hsyscalls.h</strong> dependency? Or should
+<strong>hredirect.h</strong> require <strong>hsyscalls.h</strong> as a depdendency? Up to build system author.</p>
+<p>Upstream report: <a href="https://debbugs.gnu.org/cgi/bugreport.cgi?bug=51329">https://debbugs.gnu.org/cgi/bugreport.cgi?bug=51329</a></p>
+<p>This is a class of bugs where source dependency is autogenerated, but <strong>Makefile</strong>
+does not specify object dependency on generated source.</p>
+<p>Very similar failures were found in:</p>
+<ul>
+<li>portaudio</li>
+<li>dmraid</li>
+<li>directfb</li>
+</ul>
+<h1 id="ocaml">ocaml</h1>
+<p><strong>ocaml</strong> is a a big project that takes a while to compile.
+Normally such projects have <strong>Makefile</strong> ready for parallel build as is.
+And yet:</p>
+<pre class><code>$ nix build --impure --expr 'with import ./.{}; ocaml.overrideAttrs (oa: { enableParallelBuilding = true; })' -L
+...
+ocaml&gt; build flags: -j16 -l16 SHELL=/nix/store/wadmyilr414n7bimxysbny876i2vlm5r-bash-5.1-p8/bin/bash world bootstrap world.opt
+ocaml&gt; make -C runtime  all
+ocaml&gt; make promote-cross
+ocaml&gt; make coldstart
+ocaml&gt; make[1]: Entering directory '/build/ocaml-4.12.0/runtime'
+ocaml&gt; make[1]: Entering directory '/build/ocaml-4.12.0'
+ocaml&gt; make[1]: Entering directory '/build/ocaml-4.12.0'
+ocaml&gt; make -C runtime  all
+ocaml&gt; cp ocamlc boot/ocamlc
+ocaml&gt; make[2]: Entering directory '/build/ocaml-4.12.0/runtime'
+ocaml&gt; cp: cannot stat 'ocamlc': No such file or directory
+ocaml&gt; make[1]: *** [Makefile:179: promote-common] Error 1
+ocaml&gt; make[1]: Leaving directory '/build/ocaml-4.12.0'
+ocaml&gt; make: *** [Makefile:233: coreboot] Error 2
+ocaml&gt; make: *** Waiting for unfinished jobs....</code></pre>
+<p>Such an early failure! Note that bulder calls <strong>make</strong> with multiple targets: <strong>make -j16 world bootstrap world.opt</strong>.
+Looking at <strong>Makefile</strong> reveals an interesting pattern: <a href="https://github.com/ocaml/ocaml/blob/trunk/Makefile#L305">https://github.com/ocaml/ocaml/blob/trunk/Makefile#L305</a></p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="ot">.PHONY:</span><span class="dt"> world</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="dv">world:</span><span class="dt"> coldstart</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> all</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Compile also native code compiler and libraries, fast</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="ot">.PHONY:</span><span class="dt"> world.opt</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="dv">world.opt:</span><span class="dt"> checknative</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> coldstart</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> opt.opt</span></code></pre></div>
+<p>Normally I would expect it to be something like:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="dv">world:</span><span class="dt"> coldstart all</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dv">world.opt:</span><span class="dt"> checknative coldstart opt.opt</span></span></code></pre></div>
+<p>Otherwise nothing prevents <strong>coldstrat</strong> to be built from both <strong>world</strong>
+and <strong>world.opt</strong> targets in parallel. That’s what happens in our case.</p>
+<p>To workaround this failure my suggestion is to artificially sequence targets
+together:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="dv">nixpkgs_world_bootstrap_world_opt:</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> world</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> bootstrap</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> world.opt</span></code></pre></div>
+<p>That way we can still preserve the ordering and have each component to build
+in parallel. Longer term the build system should allow us to specify multiple
+top-level targets. They should not be special in any way.</p>
+<p>This change speeds ocaml buuild time from <strong>6m55s</strong> to <strong>1m35s</strong> on my machines.
+A 4.3x speedup does not sound bad for 4 lines of <strong>Makefile</strong>.</p>
+<h1 id="cdparanoiaiii">cdparanoiaIII</h1>
+<p><strong>cdparanoiaIII</strong> took me quite a while to be able to reproduce the failure.
+The following managed to trigger rebuild eventually:</p>
+<pre class><code>$ while nix build -f . cdparanoiaIII --rebuild --cores 64; do echo again; done
+...
+make libcdda_interface.a CFLAGS=&quot;-O2 -fsigned-char -g -O2&quot;
+make[2]: Entering directory '/build/cdparanoia-III-10.2/interface'
+gcc -O2 -fsigned-char -g -O2 -c scan_devices.c
+...
+make[2]: Leaving directory '/build/cdparanoia-III-10.2/interface'
+make libcdda_interface.so CFLAGS=&quot;-O2 -fsigned-char -g -O2 -fpic&quot;
+...
+gcc -O2 -fsigned-char -g -O2 -fpic -c scan_devices.c
+...
+gcc -fpic -shared -o libcdda_interface.so.0.10.2 -Wl,-soname -Wl,libcdda_interface.so.0 scan_devices.o  common_interface.o cooked_interface.o interface.o scsi_interface.o smallft.o toc.o test_interface.o -lm -lrt
+scan_devices.o: file not recognized: file format not recognized
+collect2: error: ld returned 1 exit status
+make[2]: *** [Makefile:49: libcdda_interface.so] Error 1</code></pre>
+<p>Here <strong>scan_devices.o</strong> gets rebuilt twice within a single <strong>make</strong> invocation:
+once with <strong>-fpic</strong> option (to build shared library) and once without (to build
+static library): <a href="https://svn.xiph.org/trunk/cdparanoia/interface/Makefile.in">https://svn.xiph.org/trunk/cdparanoia/interface/Makefile.in</a></p>
+<p><strong>interface/Makefile.in</strong> is very illustrative in this case:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> lib slib</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="dv">lib:</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> libcdda_interface.a CFLAGS=<span class="st">&quot;</span><span class="ch">$(</span><span class="dt">OPT</span><span class="ch">)</span><span class="st">&quot;</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="dv">slib:</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">MAKE</span><span class="ch">)</span> libcdda_interface.so CFLAGS=<span class="st">&quot;</span><span class="ch">$(</span><span class="dt">OPT</span><span class="ch">)</span><span class="st"> -fpic&quot;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a><span class="dv">libcdda_interface.a:</span><span class="dt">    </span><span class="ch">$(</span><span class="dt">OFILES</span><span class="ch">)</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">AR</span><span class="ch">)</span> -r libcdda_interface.a <span class="ch">$(</span><span class="dt">OFILES</span><span class="ch">)</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">RANLIB</span><span class="ch">)</span> libcdda_interface.a</span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a><span class="dv">libcdda_interface.so:</span><span class="dt">   </span><span class="ch">$(</span><span class="dt">OFILES</span><span class="ch">)</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">CC</span><span class="ch">)</span> -fpic -shared -o libcdda_interface.so.0.<span class="ch">$(</span><span class="dt">VERSION</span><span class="ch">)</span> -Wl,-soname -Wl,libcdda_interface.so.0 <span class="ch">$(</span><span class="dt">OFILES</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">LIBS</span><span class="ch">)</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a><span class="ot">.c.o:</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>        <span class="ch">$(</span><span class="dt">CC</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span> -c <span class="ch">$&lt;</span></span></code></pre></div>
+<p>Note that <strong>$(OFILES)</strong>
+are shared across <strong>libcdda_interface.a</strong> and <strong>libcdda_interface.so</strong>.
+Nothing prevented both to run on parallel.</p>
+<p>Nowadays those have slightly different names (or paths) to allow for
+parallel build. Reusing file names in different parts of a single build
+is very tricky.</p>
+<h1 id="is-12-failures-a-lot">Is 12 failures a lot?</h1>
+<p>Getting 12 failures for my local system was a bit worrying: most of the
+failures happened in somewhat niche but not that rare packages. What if
+we try to build really obscure ones?</p>
+<p>I attempted to build a few random packages from the whole of <strong>nixpkgs</strong> as:</p>
+<pre class><code>$ nix-env -qaP | awk '{print $1}' | sed -e 's/^nixos.//g' | shuf | xargs -n 10 nix build -f. --no-link</code></pre>
+<p>Over one night 20 more failures popped up in over ~5000 built packages:</p>
+<ul>
+<li>pth</li>
+<li>openjdk</li>
+<li>libb64</li>
+<li>m17n_lib</li>
+<li>xalanc</li>
+<li>ion3</li>
+<li>espeak-ng</li>
+<li>dhcp</li>
+<li>judy</li>
+<li>ocaml-ng.ocamlPackages_4_12.stdcompat</li>
+<li>mlton20130715, mltonHEAD</li>
+<li>mlkit</li>
+<li>clisp</li>
+<li>cloog</li>
+<li>xfce.garcon</li>
+<li>munin</li>
+<li>jade</li>
+<li>ocamlPackages.camlidl</li>
+<li>lazarus-qt</li>
+<li>ocamlPackages_4_03.camlp4</li>
+<li>gengetopt</li>
+</ul>
+<p>I think we are heading towards ~200 failures over all of <strong>nixpkgs</strong>.</p>
+<p>~200 a lot more than I personally could triage and fix myself but is
+very reasonable to offload to individual maintainers or enthusiasts
+who would like to get their feet wet by fixing a simple package build
+failure problem.</p>
+<h1 id="bonus-question">Bonus question</h1>
+<p>So these are examples of failures when sequential build normally
+succeeds due to deterministic rule execution order.</p>
+<p>Do you think there could be a bug when parallel build almost always
+succeeds while sequential would always fail?</p>
+<p>I encountered it once in my life: <a href="https://bugs.gentoo.org/566620">https://bugs.gentoo.org/566620</a>. By
+There missing dependency was alwasy satisfied by a builder from other
+rules runnig in parallel.</p>
+<p>The fix adds missing dependency (as expected):
+<a href="https://github.com/skvadrik/re2c/commit/88a7cec2e644c6d890f68133ed8fd6362e5beeab">https://github.com/skvadrik/re2c/commit/88a7cec2e644c6d890f68133ed8fd6362e5beeab</a></p>
+<h1 id="parting-words">Parting words</h1>
+<p>To state the obvious: building packages in parallell speeds builds up. Sometimes by a lot.</p>
+<p>Vast majority of packages do support parallel builds. Probably not a surprise to anyone.
+I think we can flip a default on in <strong>nixpkgs</strong> and sort out the fallout.</p>
+<p>Recursive calls to <strong>$(MAKE)</strong> work as is only if you build non-overlapping targets (say,
+disjoint selfcontained subdirectories). They blow up when you try to do clever things like
+slignt environment change to rebuild the same target and reuse intermediate file names or
+have cross-directory dependencies.</p>
+<p>There is a list of yet unfixed packages at <a href="https://github.com/NixOS/nixpkgs/issues/142338">https://github.com/NixOS/nixpkgs/issues/142338</a>.
+Feel free to grab one and give it a try.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on October 28, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

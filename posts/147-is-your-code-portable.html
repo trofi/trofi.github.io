@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: is your code portable?</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>is your code portable?</h1>
+
+            <p>Когда я пытаюсь разобраться в новом коде - я беру свой любимый
+компилятор и пытаюсь пофиксить (или хотя-бы рассмотреть) большинство
+предупреждений, которые он выдает. Потом выворачиваю уровень выдачи предупреждений
+на максимум и всё начинаю сначала.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">gcc</span> <span class="at">-Wall</span> <span class="at">-W</span> <span class="at">-Wextra</span> <span class="at">-Weff-c++</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">gcc</span> <span class="at">--help</span><span class="op">=</span>warnings <span class="co"># и еще штук 20 из этого списка :]</span></span></code></pre></div>
+<!--more-->
+<p>Сам я это делаю, чтобы смотреть в чужой код было веселее. Побочным
+эффектом получается более переносимый (а часто и более корректный) код.</p>
+<p>Сегодня рассмотрим пару предупреждений, которые мне выкопал <strong>gcc</strong>
+на реальном коде, который у нас (пока) собирается только под винду.
+Для этого я собрал кросс-компилятор <strong>mingw32-gcc</strong> и попытался его заюзать.</p>
+<p>Пример 1:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * warning: operation on 'block_size' may be undefined</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>block_size <span class="op">=</span> <span class="op">((</span>block_size <span class="op">&lt;&lt;</span> <span class="dv">1</span><span class="op">)</span> <span class="op">&lt;</span> block_size<span class="op">)</span> <span class="op">?</span> <span class="dv">0</span><span class="op">:</span> <span class="op">(</span>block_size <span class="op">&lt;&lt;=</span> <span class="dv">1</span><span class="op">);</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="co"> * В одном выражении переменнй 'block_size' присваивается 2 (одинаковых) значения:</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="co"> *     block_size = ... (block_size &lt;&lt;= 1);</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="co"> *</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="co"> * Кстати, с '(block_size &lt;&lt; 1) &lt; block_size' тоже надо быть осторожным:</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="co"> *     компилятор может счесть целочисленное переполнение неопределенным поведением</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="co"> *     (в gcc отключается через -fwrapv) и выполнять только false ветвь.</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span></code></pre></div>
+<p>Пример 2:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// warning: left-hand operand of comma expression has no effect</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="op">(</span>hRoot <span class="op">==</span> <span class="dv">0</span> <span class="op">||</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    lpSubKey <span class="op">==</span> NULL<span class="op">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    lpValue <span class="op">==</span> NULL<span class="op">)</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> FALSE<span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="co"> * С виду всё хорошо, но ',' во второй строке делает выражение очень веселым :]</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="co"> * Предупреждение говорит, что всё, что до запятой не имеет никакой силы.</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span></code></pre></div>
+<p>Сами ошибки, конечно, не являются виндоспецифичными, но они зарыты посреди
+непортабельного кода. Его хотелось бы компилировать чем-то более параноидальным,
+чем <strong>MSVS</strong>. Как видим, у <strong>gcc</strong> неплохо получается.</p>
+<p>Как бонус - реже коммитим код, который не компилируется только под виндой :]</p>
+
+<div class="info">
+    Posted on September 29, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

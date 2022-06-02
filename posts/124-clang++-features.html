@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: clang++ features</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>clang++ features</h1>
+
+            <p>Недавно тут вышел <a href="http://llvm.org/releases/2.8/docs/ReleaseNotes.html">clang-2.8</a>,
+в котором таки пофиксили зарерпорчееный мной
+<a href="http://llvm.org/bugs/show_bug.cgi?id=6974">баг про -fno-rtti и try/catch</a>.</p>
+<p>Это должно было позволить собрать с помощью <strong>clang++</strong> большой <strong>C++</strong> проект на работе.</p>
+<p><strong>clang++</strong> споймал пару прикольных подозрительных кусков кода (все примеры - реальные):</p>
+<ol type="1">
+<li>Использование логических (<strong>|</strong>, <strong>&amp;</strong>) операций вместо булевых (<strong>||</strong>, <strong>&amp;&amp;</strong>):</li>
+</ol>
+<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a> <span class="dt">int</span> CheckFileMask <span class="op">(</span><span class="at">const</span> <span class="dt">char</span> <span class="op">*</span> lpPath<span class="op">)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a> <span class="op">{</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>     <span class="dt">int</span> result <span class="op">=</span> CheckPathName <span class="op">(</span>lpPath<span class="op">);</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>     <span class="co">// Что-то делается ...</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>     <span class="cf">return</span> result <span class="op">||</span> <span class="bn">0x00000002</span><span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a> <span class="op">}</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a> <span class="op">...</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a> <span class="dt">bool</span> SetDOSMask <span class="op">(</span><span class="dt">char</span> <span class="op">*</span> lpMask<span class="op">)</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a> <span class="op">{</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>     <span class="co">// Что-то делается ...</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>     <span class="dt">int</span> result <span class="op">=</span> CheckFileMask <span class="op">(</span>lpMask<span class="op">);</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>     <span class="cf">if</span><span class="op">(</span> result <span class="op">&amp;&amp;</span> <span class="bn">0x00000001</span> <span class="op">!=</span> <span class="dv">0</span> <span class="op">)</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>     <span class="op">{</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>         <span class="co">// обрабатываем бит '0'</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>     <span class="cf">if</span><span class="op">(</span> result <span class="op">&amp;&amp;</span> <span class="bn">0x00000002</span> <span class="op">!=</span> <span class="dv">0</span> <span class="op">)</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>     <span class="op">{</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>         <span class="co">// обрабатываем бит '1'</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>     <span class="cf">return</span> result <span class="op">&gt;=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a> <span class="op">}</span></span></code></pre></div>
+<p><strong>Clang</strong> говорит:</p>
+<pre><code>use of logical || with constant operand; switch to bitwise | or remove constant
+    [-Wconstant-logical-operand]
+  return result || 0x00000002;</code></pre>
+<p>исправляем:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a> <span class="dt">int</span> CheckFileMask <span class="op">(</span><span class="at">const</span> <span class="dt">char</span> <span class="op">*</span> lpPath<span class="op">)</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a> <span class="op">{</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>     <span class="dt">int</span> result <span class="op">=</span> CheckPathName <span class="op">(</span>lpPath<span class="op">);</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>     <span class="co">// Что-то делается ...</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>     <span class="cf">return</span> result <span class="op">|</span> <span class="bn">0x00000002</span><span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a> <span class="op">}</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a> <span class="op">...</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a> <span class="dt">bool</span> SetDOSMask <span class="op">(</span><span class="dt">char</span> <span class="op">*</span> lpMask<span class="op">)</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a> <span class="op">{</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>     <span class="co">// Что-то делается ...</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>     <span class="dt">int</span> result <span class="op">=</span> CheckFileMask <span class="op">(</span>lpMask<span class="op">);</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>     <span class="cf">if</span> <span class="op">(</span>result <span class="op">&amp;</span> <span class="bn">0x00000001</span><span class="op">)</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>     <span class="op">{</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>         <span class="co">// обрабатываем бит '0'</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>     <span class="cf">if</span> <span class="op">(</span>result <span class="op">&amp;</span> <span class="bn">0x00000002</span><span class="op">)</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>     <span class="op">{</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>         <span class="co">// обрабатываем бит '1'</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>     <span class="cf">return</span> result <span class="op">&gt;=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a> <span class="op">}</span></span></code></pre></div>
+<ol start="2" type="1">
+<li>Неиспользуемый результат в выражении:</li>
+</ol>
+<p>Оригинал:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>     <span class="cf">while</span><span class="op">(</span> <span class="op">(</span> <span class="op">*</span> lpTmp <span class="op">==</span> <span class="ch">' '</span> <span class="op">)</span> <span class="op">||</span> <span class="op">(</span> <span class="op">*</span> lpTmp <span class="op">==</span> <span class="ch">'</span><span class="sc">\t</span><span class="ch">'</span> <span class="op">)</span> <span class="op">)</span> <span class="op">*</span> lpTmp <span class="op">++;</span></span></code></pre></div>
+<p>Предупреджение:</p>
+<pre><code>boot/emucfg.cpp:244:56: warning: expression result unused [-Wunused-value]
+    while( ( * lpTmp == ' ' ) || ( * lpTmp == '\t' ) ) * lpTmp ++;
+                                                       ^ ~~~~~~~~</code></pre>
+<p>Исправляем:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>     <span class="cf">while</span><span class="op">(</span> <span class="op">(</span> <span class="op">*</span> lpTmp <span class="op">==</span> <span class="ch">' '</span> <span class="op">)</span> <span class="op">||</span> <span class="op">(</span> <span class="op">*</span> lpTmp <span class="op">==</span> <span class="ch">'</span><span class="sc">\t</span><span class="ch">'</span> <span class="op">)</span> <span class="op">)</span> lpTmp <span class="op">++;</span></span></code></pre></div>
+<p>Было еще несколько красивых ошибок типизации, про которые лень писать.</p>
+<ol start="3" type="1">
+<li>И самое интересное: <strong>clang++</strong> правильно реализует <strong>ADL</strong> (argument dependent lookup),
+в отличие от <strong>g++</strong>.</li>
+</ol>
+<p>Рассмотрим пример из бага, который я <a href="http://gcc.gnu.org/bugzilla/show_bug.cgi?id=46075">завел</a>
+и тут же огрёб:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span><span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">struct</span> my_T <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    my_T<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>        my_foo <span class="op">((</span><span class="at">const</span> T <span class="op">*)</span><span class="dv">0</span><span class="op">);</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> User <span class="op">{</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    User<span class="op">();</span> <span class="co">// explicit c-tor</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    my_T<span class="op">&lt;</span><span class="dt">char</span><span class="op">&gt;</span> t<span class="op">;</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="co">// we specialize my_foo for 'const char *'</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">void</span> my_foo <span class="op">(</span><span class="at">const</span> <span class="dt">char</span> <span class="op">*)</span> <span class="op">{}</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>User<span class="op">::</span>User<span class="op">()</span> <span class="op">{</span> <span class="op">}</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>    User u<span class="op">;</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Этот код <strong>g++</strong> собирает, а <strong>clang++</strong> - нет:</p>
+<pre><code>a.cc:4:9: error: use of undeclared identifier 'my_foo'
+        my_foo ((const T *)0);
+        ^
+a.cc:16:7: note: in instantiation of member function 'my_T&lt;char&gt;::my_T' requested here
+User::User() { }</code></pre>
+<p><strong>Внимательно</strong> читаем по <a href="http://blog.llvm.org/2009/12/dreaded-two-phase-name-lookup.html">ссылке</a>.
+Читаем еще раз!</p>
+<p>Тут мы видим, что:</p>
+<ol type="1">
+<li><strong>my_foo()</strong> в шаблоне явно зависит от параметра шаблона</li>
+<li>значит имя является зависимым</li>
+<li>то есть его поиск производится в точке инстанцирования (определении конструктора <strong>User::User()</strong>)</li>
+<li>значит <strong>my_foo()</strong> должно находиться при инстанцировании</li>
+</ol>
+<p>А вот и нет! <strong>4.</strong> пункт является верным только для типов, находящихся в пространстве имён <strong>my_T</strong> или пространстве
+имён точки инстанцирования.</p>
+<p>Но(<strong>!</strong>) встроенные типы(<strong>int</strong>, <strong>char</strong>, etc.) находятся в “нигде” (ни в каком из пространств имён)
+и, как следствие, не подлежат поиску в <strong>ADL</strong> при специализации (это текущая формулировака поиска Кёнига
+в стандарте). Вот если бы я вместо <strong>char</strong> объявил свой тип - всё было бы хорошо:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span><span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">struct</span> my_T <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    my_T<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>        my_foo <span class="op">((</span><span class="at">const</span> T <span class="op">*)</span><span class="dv">0</span><span class="op">);</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> myO <span class="op">{};</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> User <span class="op">{</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    User<span class="op">();</span> <span class="co">// explicit c-tor</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    my_T<span class="op">&lt;</span>myO<span class="op">&gt;</span> t<span class="op">;</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">void</span> my_foo <span class="op">(</span><span class="at">const</span> myO <span class="op">*)</span> <span class="op">{}</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>User<span class="op">::</span>User<span class="op">()</span> <span class="op">{</span> <span class="op">}</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    User u<span class="op">;</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>g++</strong> с таким положением дел не согласен и считает это
+<a href="http://www.open-std.org/JTC1/SC22/WG21/docs/cwg_active.html#225">ошибкой в стандарте</a>.
+Правда, его в этом никто не поддерживает уже N лет.</p>
+<p><strong>clang++</strong> считает, что стандарту 10 лет, формулировка не менялась и по сему можно реализовать
+в точности с формулировкой:</p>
+<pre><code>you'll need to move the declaration up, or instantiate my_T with a non-builtin type (so that 
+argument-dependent lookup can find my_foo in the namespace of that type)
+
+so builtin types are special?
+
+not special, really; they have no &quot;associated namespaces&quot;, i.e., there's nowhere for the compiler to look 
+at instantiation time
+
+do coercions work in such case? Will 'static void my_foo(const void *) {}' for my user's types?
+
+implicit conversions do work
+static functions might not, though; I'd have to check the standard
+
+the C++ DR in question is at http://www.open-std.org/jtc1/sc22/wg21/docs/cwg_active.html#225 ,
+and apparently hasn't been touched in 10 years. me, I'll stick with what the standard says :)</code></pre>
+<p>Для достижения портабельности придется декларацию <strong>my_foo()</strong> вытаскивать раньше шаблонного кода.</p>
+<p>Спасибо <strong>dgregor</strong> на <strong>oftc/#llvm</strong> и <strong>Andrew Pinski</strong> в
+<a href="http://gcc.gnu.org/bugzilla/show_bug.cgi?id=46075">gcc bugzilla</a> за разьяснения.</p>
+
+<div class="info">
+    Posted on October 19, 2010 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

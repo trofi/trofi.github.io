@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: ANNOUNCE: uselex.rb - useless exports extinguisher</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>ANNOUNCE: uselex.rb - useless exports extinguisher</h1>
+
+            <p>Ladies and gentlemen! Welcome new (tiny) tool to find
+another kind of <strong>C</strong>/<strong>C++</strong> code deficiency: needlessly externally visible symbols.</p>
+<p>TL;DR:</p>
+<blockquote>
+<p>uselex.rb /path/to/project/build/dir/ <span class="title-ref">find -name '*.o'</span></p>
+</blockquote>
+<p>Lives <a href="https://github.com/trofi/uselex">here</a>.</p>
+<!--more-->
+<p>Let’s consider simple example:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode C"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main.c</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> add_a_to_b <span class="op">(</span><span class="dt">int</span> a<span class="op">,</span> <span class="dt">int</span> b<span class="op">)</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> a <span class="op">+</span> b<span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span> argv<span class="op">[])</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> add_a_to_b <span class="op">(</span>argc<span class="op">,</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>and build it:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>$ gcc <span class="op">-</span>O2 <span class="op">-</span>c main<span class="op">.</span>c</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>$ objdump <span class="op">-</span>d a<span class="op">.</span>o</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>0000000000000000 &lt;add_a_to_b<span class="op">&gt;:</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>0:   8d 04 37                <span class="bu">lea</span>    <span class="op">(%</span><span class="kw">rdi</span><span class="op">,%</span><span class="kw">rsi</span><span class="op">,</span><span class="dv">1</span><span class="op">),%</span><span class="kw">eax</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>3:   c3                      retq</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>Disassembly of section <span class="op">.</span>text<span class="op">.</span>startup<span class="op">:</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>0000000000000000 &lt;main<span class="op">&gt;:</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>0:   8d 47 04                <span class="bu">lea</span>    <span class="bn">0x4</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">),%</span><span class="kw">eax</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>3:   c3                      retq</span></code></pre></div>
+<p>See that useleless piece of generated code? It’s <strong>add_a_to_b</strong>.
+To make sure we don’t need it we should add <strong>static</strong> keyword to it.
+(provided nobody from another module uses that function as well obviously).</p>
+<p>This</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode C"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main.c</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> add_a_to_b <span class="op">(</span><span class="dt">int</span> a<span class="op">,</span> <span class="dt">int</span> b<span class="op">)</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> a <span class="op">+</span> b<span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span> argv<span class="op">[])</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> add_a_to_b <span class="op">(</span>argc<span class="op">,</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>will give</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>0000000000000000 &lt;main<span class="op">&gt;:</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>0:   8d 47 04                <span class="bu">lea</span>    <span class="bn">0x4</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">),%</span><span class="kw">eax</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>3:   c3                      retq</span></code></pre></div>
+<p>As you see a chunk of <strong>.text</strong> section gone away. In many cases it helps in more aggressive inlining.
+Large programs have a ton of useleccly exported stuff: global variables, global functions, global
+constans. They are usually used only in one place (even if they were used in many places long ago).</p>
+<p>I’ve decided to try to write small tool to find such unused exports <strong>uselex.rb</strong>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> uselex.rb main.o</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">add_a_to_b:</span> [R]: exported from: a.o</span></code></pre></div>
+<p>Caught the guy. Let’s try for more advanced projects:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">~/dev/git/btrfs-progs</span> $ uselex.rb <span class="kw">`</span><span class="fu">find</span> <span class="at">-name</span> <span class="st">'*.o'</span><span class="kw">`</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">write_all_supers:</span> [R]: exported from: ./disk-io.o</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">btrfs_lookup_dir_index_item:</span> [R]: exported from: ./dir-item.o</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="ex">update_seeding_flag:</span> [R]: exported from: ./btrfstune.o</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="ex">enable_extrefs_flag:</span> [R]: exported from: ./btrfstune.o</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="ex">write_tree_block:</span> [R]: exported from: ./disk-io.o</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="ex">receive_cmd_group:</span> [R]: exported from: ./cmds-receive.o</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="ex">radix_tree_delete:</span> [R]: exported from: ./radix-tree.o</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span></code></pre></div>
+<p>Not all of them are problems. <strong>btrfs-progs</strong> exports a library, thus you need
+to ignore functions exported from installable headers.</p>
+<p>And the <strong>linux</strong> kernel for stress test:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">~/linux-2.6-mytree</span> $ time uselex.rb <span class="kw">`</span><span class="fu">find</span> <span class="at">-name</span> <span class="st">'*.o'</span><span class="kw">`</span> <span class="kw">|</span> <span class="fu">wc</span> <span class="at">-l</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">3808</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span>    0m15.971s</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">user</span>    0m7.526s</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">sys</span>     0m7.070s</span></code></pre></div>
+<p>You can read some implementation details in help output for <strong>uselex</strong>.</p>
+<p>Thanks for your patience!</p>
+
+<div class="info">
+    Posted on July  7, 2013 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,718 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: page fault handling on alpha</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>page fault handling on alpha</h1>
+
+            <h1 id="bug">Bug</h1>
+<p>This was a quiet evening on <strong>#gentoo-alpha</strong>. Matt Turner
+shared an unusual
+<a href="https://bugs.gentoo.org/672040">kernel crash report</a> seen by Dmitry V. Levin.</p>
+<p>Dmitry noticed that one of <strong>AlphaServer ES40</strong> machines does
+not handle <strong>strace</strong> test suite and generates kernel oopses:</p>
+<pre class><code>Unable to handle kernel paging request at virtual address ffffffffffff9468
+CPU 3 
+aio(26027): Oops 0
+pc = [&lt;fffffc00004eddf8&gt;]  ra = [&lt;fffffc00004edd5c&gt;]  ps = 0000    Not tainted
+pc is at sys_io_submit+0x108/0x200
+ra is at sys_io_submit+0x6c/0x200
+v0 = fffffc00c58e6300  t0 = fffffffffffffff2  t1 = 000002000025e000
+t2 = fffffc01f159fef8  t3 = fffffc0001009640  t4 = fffffc0000e0f6e0
+t5 = 0000020001002e9e  t6 = 4c41564e49452031  t7 = fffffc01f159c000
+s0 = 0000000000000002  s1 = 000002000025e000  s2 = 0000000000000000
+s3 = 0000000000000000  s4 = 0000000000000000  s5 = fffffffffffffff2
+s6 = fffffc00c58e6300
+a0 = fffffc00c58e6300  a1 = 0000000000000000  a2 = 000002000025e000
+a3 = 00000200001ac260  a4 = 00000200001ac1e8  a5 = 0000000000000001
+t8 = 0000000000000008  t9 = 000000011f8bce30  t10= 00000200001ac440
+t11= 0000000000000000  pv = fffffc00006fd320  at = 0000000000000000
+gp = 0000000000000000  sp = 00000000265fd174
+Disabling lock debugging due to kernel taint
+Trace:
+[&lt;fffffc0000311404&gt;] entSys+0xa4/0xc0</code></pre>
+<p>Oopses should never happen against userland workloads.</p>
+<p>Here crash happened right in the <strong>io_submit()</strong> syscall.
+“Should be a very simple arch-specific bug. Can’t take much
+time to fix.” was my thought. Haha.</p>
+<h1 id="reproducer">Reproducer</h1>
+<p>Dmitry provided very nice reproducer of the problem (extracted
+from <strong>strace</strong> test suite):</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat aio.c</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;err.h&gt;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;unistd.h&gt;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;sys/mman.h&gt;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;asm/unistd.h&gt;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> ctx <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>syscall<span class="op">(</span>__NR_io_setup<span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="op">&amp;</span>ctx<span class="op">))</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        err<span class="op">(</span><span class="dv">1</span><span class="op">,</span> <span class="st">&quot;io_setup&quot;</span><span class="op">);</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">size_t</span> page_size <span class="op">=</span> sysconf<span class="op">(</span>_SC_PAGESIZE<span class="op">);</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">size_t</span> size <span class="op">=</span> page_size <span class="op">*</span> <span class="dv">2</span><span class="op">;</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> <span class="op">*</span>ptr <span class="op">=</span> mmap<span class="op">(</span>NULL<span class="op">,</span> size<span class="op">,</span> PROT_READ <span class="op">|</span> PROT_WRITE<span class="op">,</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>                     MAP_PRIVATE <span class="op">|</span> MAP_ANONYMOUS<span class="op">,</span> <span class="op">-</span><span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">);</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>MAP_FAILED <span class="op">==</span> ptr<span class="op">)</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>        err<span class="op">(</span><span class="dv">1</span><span class="op">,</span> <span class="st">&quot;mmap(%zu)&quot;</span><span class="op">,</span> size<span class="op">);</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>munmap<span class="op">(</span>ptr<span class="op">,</span> size<span class="op">))</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        err<span class="op">(</span><span class="dv">1</span><span class="op">,</span> <span class="st">&quot;munmap&quot;</span><span class="op">);</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    syscall<span class="op">(</span>__NR_io_submit<span class="op">,</span> ctx<span class="op">,</span> <span class="dv">1</span><span class="op">,</span> ptr <span class="op">+</span> page_size<span class="op">);</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    syscall<span class="op">(</span>__NR_io_destroy<span class="op">,</span> ctx<span class="op">);</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The idea of this test is simple: create valid context for
+asynchronous IO and pass invalid pointer <strong>ptr</strong> to it.
+<strong>mmap()</strong>/<strong>munmap()</strong> trick makes sure the <strong>ptr</strong> is
+pointing at an invalid non-<strong>NULL</strong> user memory location.</p>
+<p>To reproduce and explore the bug locally I picked
+<strong>qemu</strong> alpha system emulation. To avoid complexity of
+searching for proper IDE driver for root filesystem I built
+minimal linux kernel with only initramfs support without
+filesystem or block device support.</p>
+<p>Then I put statically linked reproducer and busybox into
+initramfs:</p>
+<pre class><code>$ LANG=C tree root/
+root/
+|-- aio (statically linked aio.c)
+|-- aio.c (source above)
+|-- bin
+|   |-- busybox (statically linked busybox)
+|   `-- sh -&gt; busybox
+|-- dev (empty dir)
+|-- init (script below)
+|-- proc (empty dir)
+`-- sys (empty dir)
+
+4 directories, 5 files
+
+$ cat root/init
+#!/bin/sh
+
+mount -t proc none /proc
+mount -t sysfs none /sys
+exec bin/sh</code></pre>
+<p>To run <strong>qemu</strong> system emulation against the above I used
+the following one-liner:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">#  run-qemu.sh</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">alpha-unknown-linux-gnu-gcc</span> root/aio.c <span class="at">-o</span> root/aio <span class="at">-static</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span> <span class="bu">cd</span> root <span class="kw">&amp;&amp;</span> <span class="fu">find</span> . <span class="at">-print0</span> <span class="kw">|</span> <span class="fu">cpio</span> <span class="at">--null</span> <span class="at">-ov</span> <span class="at">--format</span><span class="op">=</span>newc<span class="kw">;</span> <span class="kw">)</span> <span class="kw">|</span> <span class="fu">gzip</span> <span class="at">-9</span> <span class="op">&gt;</span> initramfs.cpio.gz</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="ex">qemu-system-alpha</span> <span class="at">-kernel</span> vmlinux <span class="at">-initrd</span> initramfs.cpio.gz <span class="at">-m</span> 1G <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
+<p><strong>run-qemu.sh</strong> builds <strong>initramfs</strong> image and runs kernel
+against it.</p>
+<p>Cross-compiling <strong>vmlinux</strong> on <strong>alpha</strong> is also
+straightforward:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">#  mk.sh</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="va">ARCH</span><span class="op">=</span>alpha                      <span class="dt">\</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="va">CROSS_COMPILE</span><span class="op">=</span>alpha-unknown-linux-gnu- <span class="dt">\</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> <span class="at">-C</span> ../linux.git        <span class="dt">\</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>O=<span class="st">&quot;</span><span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span><span class="st">&quot;</span>                  <span class="dt">\</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>                            <span class="dt">\</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
+<p>I built kernel and started a VM as:</p>
+<pre class><code># build kernel
+$ ./mk.sh -j$(nproc)
+
+# run kernel
+$ ./run-qemu.sh -curses
+...
+[    0.650390] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input0
+/ #</code></pre>
+<p>That was simple. I got the prompt! Then I ran statically
+linked <strong>/aio</strong> reproducer as:</p>
+<pre class><code>/ # /aio
+Unable to handle kernel paging request at virtual address 0000000000000000
+aio(26027): Oops -1
+...</code></pre>
+<p>Woohoo! Crashed \o/ This allowed me to explore failure in more detail.</p>
+<p>I used <strong>-curses</strong> (instead of default <strong>-sdl</strong>) to ease copying
+of text back from VM.</p>
+<p>Fault address pattern was slightly different from the original
+report. I hoped it’s a manifestation of the same bug. Worst case
+I would find another bug to fix and get back to original one again :)</p>
+<h1 id="into-the-rabbit-hole">Into the rabbit hole</h1>
+<p>Oops was happening every time I ran <strong>/aio</strong> on <strong>4.20</strong>
+kernel. <strong>io_submit(2)</strong> man page claims it’s an old system
+call from <strong>2.5</strong> kernel era. Thus it should not be a recent addition.</p>
+<p>How about older kernels? Did they also fail?</p>
+<p>I was still not sure I had correct qemu/kernel setup. I
+decided to pick older <strong>4.14</strong> kernel version known to run
+without major problems on our <strong>alpha</strong> box. <strong>4.14</strong> kernel
+version did not crash in <strong>qemu</strong> either. This reassured me I
+have not completely broken setup.</p>
+<p>I got first suspect: kernel regression.</p>
+<p>Reproducer was very stable. Kernel bisection got me
+to <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95af8496ac48263badf5b8dde5e06ef35aaace2b">first regressed commit</a>:</p>
+<pre class><code>commit 95af8496ac48263badf5b8dde5e06ef35aaace2b
+Author: Al Viro &lt;viro@zeniv.linux.org.uk&gt;
+Date:   Sat May 26 19:43:16 2018 -0400
+
+    aio: shift copyin of iocb into io_submit_one()
+
+    Reviewed-by: Christoph Hellwig &lt;hch@lst.de&gt;
+    Signed-off-by: Al Viro &lt;viro@zeniv.linux.org.uk&gt;
+
+:040000 040000 20dd44ac4706540b1c1d4085e4269bd8590f4e80 05d477161223e5062f2f781b462e0222c733fe3d M      fs</code></pre>
+<p>The commit clearly touched <strong>io_submit()</strong> syscall handling.
+But there is a problem: the change was not alpha-specific at all.
+If commit had any problems it also should have caused problems
+on other systems.</p>
+<p>To get better understanding of probable cause I decided to
+look at failure mechanics. Actual values of local variables
+in <strong>io_submit()</strong> right before crash might get me somewhere.
+I started adding <strong>printk()</strong> statements around
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/aio.c#n1923">SYSCALL_DEFINE3(io_submit, …)</a>
+implementation.</p>
+<p>At some point after enough <strong>printk()</strong> calls added crashes
+disappeared. This confirmed it was not just a logical bug but
+something more subtle.</p>
+<p>I also was not able to analyze the generated code difference
+between <strong>printk()</strong>/no-<strong>printk()</strong> versions.</p>
+<p>Then I attempted to isolate faulty code into a separate function
+but not much success here either. Any attempt to factor out a
+subset of <strong>io_submit()</strong> into a separate function made bug to
+go away.</p>
+<p>It was time for a next hypothesis: mysterious incorrect compiler
+code generation or invalid <strong>__asm__</strong> constraints for some kernel
+macro exposed after minor code motion.</p>
+<h1 id="single-stepping-through-kernel">Single stepping through kernel</h1>
+<p>How to get an insight into the details without affecting
+original code too much?</p>
+<p>Having failed at minimal code snippet I attempted to catch exact
+place of page fault by single-stepping through kerenel using <strong>gdb</strong>.</p>
+<p>For <strong>qemu</strong>-loadable kernels the procedure very straightforward:</p>
+<ul>
+<li>start gdb server on qemu side with <strong>-s</strong> option</li>
+<li>start gdb client on host side with <strong>target remote localhost:1234</strong></li>
+</ul>
+<p>The same procedure in exact commands (I’m hooking into <strong>sys_io_submit()</strong>):</p>
+<pre class><code>&lt;at tty1&gt;
+$ ./run-qemu.sh -s
+
+&lt;at tty2&gt;
+$ gdb --quiet vmlinux
+(gdb) target remote localhost:1234
+  Remote debugging using localhost:1234
+  0xfffffc0000000180 in ?? ()
+(gdb) break sys_io_submit 
+  Breakpoint 1 at 0xfffffc000117f890: file ../linux-2.6/fs/aio.c, line 1890.
+(gdb) continue
+  Continuing.
+
+&lt;at qemu&gt;
+  # /aio
+
+&lt;at tty2 again&gt;
+  Breakpoint 1, 0xfffffc000117f89c in sys_io_submit ()
+(gdb) bt
+  Breakpoint 1, __se_sys_io_submit (ctx_id=2199023255552, nr=1, iocbpp=2199023271936) at ../linux-2.6/fs/aio.c:1890
+  1890    SYSCALL_DEFINE3(io_submit, aio_context_t, ctx_id, long, nr,
+(gdb) bt
+  #0  __se_sys_io_submit (ctx_id=2199023255552, nr=1, iocbpp=2199023271936) at ../linux-2.6/fs/aio.c:1890
+  #1  0xfffffc0001011254 in entSys () at ../linux-2.6/arch/alpha/kernel/entry.S:476</code></pre>
+<p>Now we can single-step through every instruction with
+<strong>nexti</strong> and check where things go wrong.</p>
+<p>To poke around efficiently I kept looking at these cheat sheets:</p>
+<ul>
+<li><a href="https://www2.cs.arizona.edu/projects/alto/Doc/local/alpha.register.html">alpha register names and meaning</a> (1 page)</li>
+<li><a href="https://www2.cs.arizona.edu/projects/alto/Doc/local/alpha.instruction.html">alpha instruction names and meaning</a> (3 pages)</li>
+</ul>
+<p>Register names are especially useful as each <strong>alpha</strong> register
+has two names: numeric and mnemonic. Source code might use one
+form and gdb disassembly might use another. For example
+<strong>$16</strong>/<strong>a0</strong> for <strong>gas</strong> (<strong>$r16</strong>/<strong>$a0</strong> for <strong>gdb</strong>)
+is a register to pass first integer argument to function.</p>
+<p>After many backs and forths I found the suspicious behaviour
+when handling single instruction:</p>
+<pre class><code>(gdb) disassemble
+  =&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
+     0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
+(gdb) p $gp
+    $1 = (void *) 0xfffffc0001c70908 # GOT
+(gdb) p $a1
+    $2 = 0
+(gdb) p $t0
+    $3 = 0
+(gdb) nexti
+     0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
+  =&gt; 0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
+(gdb) p $gp
+    $4 = (void *) 0x0
+(gdb) p $a1
+    $5 = 0
+(gdb) p $t0
+   $6 = -14 # -EFAULT</code></pre>
+<p>The above <strong>gdb</strong> session executes single <strong>ldq a1,0(t1)</strong> instruction
+and observes effect on the registers <strong>gp</strong>, <strong>a1</strong>, <strong>t0</strong>.</p>
+<p>Normally <strong>ldq a1, 0(t1)</strong> would read 64-bit value pointed by <strong>t1</strong>
+into <strong>a1</strong> register and leave <strong>t0</strong> and <strong>gp</strong> untouched.</p>
+<p>The main effect seen here that causes later OOps is sudden
+<strong>gp</strong> change. <strong>gp</strong> is supposed to point to <strong>GOT</strong> (global
+offset table) table in current “program” (kernel in this case).
+Something managed to corrupt it.</p>
+<p>By <strong>/aio</strong> test case construction instruction <strong>ldq a1,0(t1)</strong>
+is not supposed to read any valid data: our test case passes
+invalid memory location there. All the register changing
+effects are the result of page fault handling.</p>
+<h1 id="the-smoking-gun">The smoking gun</h1>
+<p>Grepping around <strong>arch/alpha</strong> directory I noticed
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199">entMM page fault handling entry</a>.</p>
+<p>It claims to handle page faults and keeps <strong>gp</strong> value on stack.
+Let’s trace the fate of that on-stack value as page fault happens:</p>
+<pre class><code>(gdb) disassemble
+  =&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
+     0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
+(gdb) p $gp
+    $1 = (void *) 0xfffffc0001c70908 # GOT
+
+(gdb) break entMM
+    Breakpoint 2 at 0xfffffc0001010e10: file ../linux-2.6/arch/alpha/kernel/entry.S, line 200
+(gdb) continue
+    Breakpoint 2, entMM () at ../linux-2.6/arch/alpha/kernel/entry.S:200
+(gdb) x/8a $sp
+    0xfffffc003f51be78:     0x0     0xfffffc000117f968 &lt;__se_sys_io_submit+216&gt;
+    0xfffffc003f51be88:     0xfffffc0001c70908 &lt;# GOT&gt; 0xfffffc003f4f2040
+    0xfffffc003f51be98:     0x0     0x20000004000 &lt;# userland address&gt;
+    0xfffffc003f51bea8:     0xfffffc0001011254 &lt;entSys+164&gt; 0x120001090
+(gdb) watch -l *0xfffffc003f51be88
+    Hardware watchpoint 3: -location *0xfffffc003f51be88
+(gdb) continue
+    Old value = 29821192
+    New value = 0
+    0xfffffc00010319d0 in do_page_fault (address=2199023271936, mmcsr=&lt;optimized out&gt;, cause=0, regs=0xfffffc003f51bdc0)
+       at ../linux-2.6/arch/alpha/mm/fault.c:199
+    199                     newpc = fixup_exception(dpf_reg, fixup, regs-&gt;pc);</code></pre>
+<p>Above <strong>gdb</strong> session does the following:</p>
+<ul>
+<li><strong>break entMM</strong>: break at page fault</li>
+<li><strong>x/8a $sp</strong>: print <strong>8</strong> top stack values at <strong>entMM</strong> call time</li>
+<li>spot <strong>gp</strong> value at <strong>0xfffffc003f51be88</strong> (<strong>sp</strong>+16) address</li>
+<li><strong>watch -l *0xfffffc003f51be88</strong>: set hardware watchpoint at
+a memory location where <strong>gp</strong> is stored.</li>
+</ul>
+<p>Watch triggers at seemingly relevant place:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/extable.h#n39">fixup_exception()</a>
+where exception handler adjusts registers before resuming the
+faulted task.</p>
+<p>Looking around I found an off-by-two bug in page fault handling
+code. The fix was simple:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="op">---</span> a<span class="op">/</span>arch<span class="op">/</span>alpha<span class="op">/</span>mm<span class="op">/</span>fault<span class="op">.</span>c</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="op">+++</span> b<span class="op">/</span>arch<span class="op">/</span>alpha<span class="op">/</span>mm<span class="op">/</span>fault<span class="op">.</span>c</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>@@ <span class="op">-</span><span class="dv">80</span><span class="op">,</span><span class="dv">2</span> <span class="op">+</span><span class="dv">80</span><span class="op">,</span><span class="dv">2</span> @@ __load_new_mm_context<span class="op">(</span><span class="kw">struct</span> mm_struct <span class="op">*</span>next_mm<span class="op">)</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">(((</span><span class="dt">unsigned</span> <span class="dt">long</span> <span class="op">*)</span>regs<span class="op">)[(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">8</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)</span> <span class="op">:</span> <span class="op">(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">15</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)-</span><span class="dv">16</span> <span class="op">:</span>  \</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="op">-</span>                                <span class="op">(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">18</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)+</span><span class="dv">8</span> <span class="op">:</span> <span class="op">(</span>r<span class="op">)-</span><span class="dv">10</span><span class="op">])</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="op">+</span>                                <span class="op">(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">18</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)+</span><span class="dv">10</span> <span class="op">:</span> <span class="op">(</span>r<span class="op">)-</span><span class="dv">10</span><span class="op">])</span></span></code></pre></div>
+<p>Patch is proposed upstream as <a href="https://lkml.org/lkml/2018/12/31/83">https://lkml.org/lkml/2018/12/31/83</a>.</p>
+<p>Effect of the patch is to write <strong>0</strong> into on-stack location
+of <strong>a1</strong> (<strong>$17</strong> register) instead of location of <strong>gp</strong>.</p>
+<p>That’s it!</p>
+<h1 id="page-fault-handling-magic">Page fault handling magic</h1>
+<p>I always wondered how kernel reads data from userspace when
+it’s needed. How does it do swap-in if data is not available?
+How does it check for permission privilege access? That kind
+of stuff.</p>
+<p>The above investigation covers most of involved components:</p>
+<ul>
+<li><strong>ldq</strong> instruction is used to force the read from userspace
+(as one would read from kernel’s memory)</li>
+<li><strong>entMM</strong>/<strong>do_page_fault()</strong> handles the userspace fault as
+if fault would not happen</li>
+</ul>
+<p>The few minor missing details are:</p>
+<ul>
+<li>How does kernel know which instructions are known to generate
+user page faults?</li>
+<li>What piece of hardware holds a pointer to page fault handler
+on <strong>alpha</strong>?</li>
+</ul>
+<p>Let’s expand the code involved in page fault handling. Call site:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>SYSCALL_DEFINE3<span class="op">(</span>io_submit<span class="op">,</span> aio_context_t<span class="op">,</span> ctx_id<span class="op">,</span> <span class="dt">long</span><span class="op">,</span> nr<span class="op">,</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>                <span class="kw">struct</span> iocb __user <span class="op">*</span> __user <span class="op">*,</span> iocbpp<span class="op">)</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> iocb __user <span class="op">*</span>user_iocb<span class="op">;</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>unlikely<span class="op">(</span>get_user<span class="op">(</span>user_iocb<span class="op">,</span> iocbpp <span class="op">+</span> i<span class="op">)))</span> <span class="op">{</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span></code></pre></div>
+<p>which is translated to already familiar pair of instructions:</p>
+<pre class><code>=&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
+   0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;</code></pre>
+<p>Fun fact: <strong>get_user()</strong> has two return values: normal function
+return value (stored into <strong>t0</strong> register) and <strong>user_iocb</strong>
+effect (stored into <strong>a1</strong> register).</p>
+<p>Let’s expand <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/uaccess.h#n59">get_user() implementation</a>
+on <strong>alpha</strong>:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere at arch/alpha/include/asm/uaccess.h:</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#define get_user(x, ptr) \</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="pp">    __get_user_check((x), (ptr), sizeof(*(ptr)))</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define __get_user_check(x, ptr, size)                       \</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="pp">    ({                                                       \</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="pp">        long __gu_err = -EFAULT;                             \</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="pp">        unsigned long __gu_val = 0;                          \</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="pp">        const __typeof__(*(ptr)) __user *__gu_addr = (ptr);  \</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="pp">        if (__access_ok((unsigned long)__gu_addr, size)) {   \</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="pp">            __gu_err = 0;                                    \</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="pp">            switch (size) {                                  \</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="pp">              case 1: __get_user_8(__gu_addr); break;        \</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="pp">              case 2: __get_user_16(__gu_addr); break;       \</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="pp">              case 4: __get_user_32(__gu_addr); break;       \</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="pp">              case 8: __get_user_64(__gu_addr); break;       \</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a><span class="pp">              default: __get_user_unknown(); break;          \</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a><span class="pp">            }                                                \</span></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a><span class="pp">        }                                                    \</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a><span class="pp">        (x) = (__force __typeof__(*(ptr))) __gu_val;         \</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a><span class="pp">        __gu_err;                                            \</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a><span class="pp">    })</span></span></code></pre></div>
+<p>A lot of simple code above does two things:</p>
+<ol type="1">
+<li>use <strong>__access_ok()</strong> to check for address to be a userspace address to prevent
+data exfiltration from kernel.</li>
+<li>dispatch across different supported sizes to do the rest of work. Our case is a simple 64-bit read.</li>
+</ol>
+<p>Looking at <strong>__get_user_64()</strong> in more detail:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> __large_struct <span class="op">{</span> <span class="dt">unsigned</span> <span class="dt">long</span> buf<span class="op">[</span><span class="dv">100</span><span class="op">];</span> <span class="op">};</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#define __m(x) (*(struct __large_struct __user *)(x))</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define __get_user_64(addr)                    \</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="pp">    __asm__(&quot;1: ldq %0,%2\n&quot;                   \</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="pp">            &quot;2:\n&quot;                             \</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a><span class="pp">            EXC(1b,2b,%0,%1)                   \</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="pp">           : &quot;=r&quot;(__gu_val), &quot;=r&quot;(__gu_err)    \</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a><span class="pp">           : &quot;m&quot;(__m(addr)), &quot;1&quot;(__gu_err))</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="pp">#define EXC(label,cont,res,err)                \</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a><span class="pp">&quot;.section __ex_table,\&quot;a\&quot;\n&quot;                  \</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a><span class="pp">&quot;.long &quot;#label&quot;-.\n&quot;                           \</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a><span class="pp">&quot;lda &quot;#res&quot;,&quot;#cont&quot;-&quot;#label&quot;(&quot;#err&quot;)\n&quot;        \</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a><span class="pp">&quot;.previous\n&quot;</span></span></code></pre></div>
+<p>A few observations:</p>
+<ul>
+<li>The actual check for address validity is done by CPU: load-8-bytes instruction (<strong>ldq %0,%2</strong>) is executed and MMU handles a page fault</li>
+<li>There is no explicit code to recover from the exception. All auxiliary information it put into <strong>__ex_table</strong> section.</li>
+<li><strong>ldq %0,%2</strong> instruction uses only parameters “0” (<strong>__gu_val</strong>) and “2”(<strong>addr</strong>) but does not use “1”(<strong>__gu_err</strong>) parameter directly.</li>
+<li><strong>__ex_table</strong> uses cool <strong>lda</strong> instruction hack to encode auxiliary data:
+<ul>
+<li><strong>__gu_err</strong> error register</li>
+<li>pointer to next instruction after faulty instrustion: <strong>cont-label</strong> (or <strong>2b-1b</strong>)</li>
+<li>result register</li>
+</ul></li>
+</ul>
+<p>Page fault handling mechanism knows how to get to
+<strong>__ex_table</strong> data where “1”(<strong>__gu_err</strong>) is encoded and is
+able to reach that data to use it later in mysterious
+<strong>fixup_exception()</strong> we saw before.</p>
+<p>In case of <strong>alpha</strong> (and many other targets) <strong>__ex_table</strong>
+collection is defined by <strong>arch/alpha/kernel/vmlinux.lds.S</strong>
+linker script using <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h#n562">EXCEPTION_TABLE() macro</a>:</p>
+<pre class><code>#define EXCEPTION_TABLE(align)                         \
+    . = ALIGN(align);                                  \
+    __ex_table : AT(ADDR(__ex_table) - LOAD_OFFSET) {  \
+        __start___ex_table = .;                        \
+        KEEP(*(__ex_table))                            \
+        __stop___ex_table = .;                         \
+    }
+//...</code></pre>
+<p>Here all <strong>__ex_table</strong> sections are gathered between <strong>__start___ex_table</strong> and <strong>__stop___ex_table</strong> symbols.
+Those are handled by generic <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/extable.c">kernel/extable.c</a> code:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> exception_table_entry <span class="op">*</span>search_exception_tables<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span> addr<span class="op">);</span></span></code></pre></div>
+<p><strong>search_exception_tables()</strong> resolves faut address to relevant <strong>struct exception_table_entry</strong>.</p>
+<p>Let’s look at the definition of <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/extable.h#n25">struct exception_table_entry</a>:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Once again part of __get_user_64() responsible for __ex_table:</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">  #define EXC(label,cont,res,err)                    \</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="co">  &quot;.section __ex_table,\&quot;a\&quot;\n&quot;                      \</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co">      &quot;.long &quot;#label&quot;-.\n&quot;                           \</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="co">      &quot;lda &quot;#res&quot;,&quot;#cont&quot;-&quot;#label&quot;(&quot;#err&quot;)\n&quot;        \</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="co">  &quot;.previous\n&quot;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="co">*/</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> exception_table_entry</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">signed</span> <span class="dt">int</span> insn<span class="op">;</span>                  <span class="co">/* .long #label-. */</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">union</span> exception_fixup <span class="op">{</span></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> unit<span class="op">;</span>                <span class="co">/* lda #res,#cont-#label(#err) */</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>            <span class="dt">signed</span> <span class="dt">int</span> nextinsn <span class="op">:</span> <span class="dv">16</span><span class="op">;</span> <span class="co">/*   #cont-#label part */</span></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>            <span class="dt">unsigned</span> <span class="dt">int</span> errreg <span class="op">:</span> <span class="dv">5</span><span class="op">;</span>  <span class="co">/*   #err part */</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>            <span class="dt">unsigned</span> <span class="dt">int</span> valreg <span class="op">:</span> <span class="dv">5</span><span class="op">;</span>  <span class="co">/*   #res part */</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> bits<span class="op">;</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> fixup<span class="op">;</span></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a><span class="co">/* Returns the new pc */</span></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a><span class="pp">#define fixup_exception(map_reg, _fixup, pc)               \</span></span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a><span class="pp">({                                                         \</span></span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a><span class="pp">    if ((_fixup)-&gt;fixup.bits.valreg != 31)                 \</span></span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a><span class="pp">        map_reg((_fixup)-&gt;fixup.bits.valreg) = 0;          \</span></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a><span class="pp">    if ((_fixup)-&gt;fixup.bits.errreg != 31)                 \</span></span>
+<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a><span class="pp">        map_reg((_fixup)-&gt;fixup.bits.errreg) = -EFAULT;    \</span></span>
+<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a><span class="pp">    (pc) + (_fixup)-&gt;fixup.bits.nextinsn;                  \</span></span>
+<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a><span class="pp">})</span></span></code></pre></div>
+<p>Note how <strong>lda</strong> in-memory instruction format is used to encode
+all details needed by <strong>fixup_exception()</strong>! In case of our
+<strong>sys_io_submit()</strong> case it would be <strong>lda a1, 4(t0)</strong> (<strong>lda r17, 4(r1)</strong>):</p>
+<pre class><code>(gdb) bt
+  #0  0xfffffc00010319d0 in do_page_fault (address=2199023271936, mmcsr=&lt;optimized out&gt;, cause=0, 
+      regs=0xfffffc003f51bdc0) at ../linux-2.6/arch/alpha/mm/fault.c:199
+  #1  0xfffffc0001010eac in entMM () at ../linux-2.6/arch/alpha/kernel/entry.S:222
+(gdb) p *fixup
+    $4 = {insn = -2584576, fixup = {unit = 572588036, bits = {nextinsn = 4, errreg = 1, valreg = 17}}}</code></pre>
+<p>Note how page fault handling also advances <strong>pc</strong> (program counter or instruction pointer)
+<strong>nextinsn=4</strong> bytes forward to skip failed <strong>ldq</strong> instruction.</p>
+<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/mm/fault.c#n84">arch/alpha/mm/fault.c</a>
+does all the heavy-lifting of handling page faults. Here is a
+small snippet that handles our case of faults covered by
+exception handling:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>asmlinkage <span class="dt">void</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>do_page_fault<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span> address<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> mmcsr<span class="op">,</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>              <span class="dt">long</span> cause<span class="op">,</span> <span class="kw">struct</span> pt_regs <span class="op">*</span>regs<span class="op">)</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  no_context<span class="op">:</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Are we prepared to handle this fault as an exception?  */</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">((</span>fixup <span class="op">=</span> search_exception_tables<span class="op">(</span>regs<span class="op">-&gt;</span>pc<span class="op">))</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">long</span> newpc<span class="op">;</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>        newpc <span class="op">=</span> fixup_exception<span class="op">(</span>dpf_reg<span class="op">,</span> fixup<span class="op">,</span> regs<span class="op">-&gt;</span>pc<span class="op">);</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>        regs<span class="op">-&gt;</span>pc <span class="op">=</span> newpc<span class="op">;</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a><span class="co">/* ...</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a><span class="co"> * Registers $9 through $15 are saved in a block just prior to `regs' and</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a><span class="co"> * are saved and restored around the call to allow exception code to</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a><span class="co"> * modify them.</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a><span class="co">/* Macro for exception fixup code to access integer registers.  */</span></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a><span class="pp">#define dpf_reg(r)                                                  \</span></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a><span class="pp">    (((unsigned long *)regs)[(r) &lt;= 8 ? (r) : (r) &lt;= 15 ? (r)-16 :  \</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a><span class="pp">                             (r) &lt;= 18 ? (r)+8 : (r)-10])</span></span></code></pre></div>
+<p><strong>do_page_fault()</strong> also does a few other page-fault related things
+I carefully skipped here:</p>
+<ul>
+<li>page fault accounting</li>
+<li>handling of missing support for “prefetch” instruction</li>
+<li>stack growth</li>
+<li>OOM handling</li>
+<li><strong>SIGSEGV</strong>, <strong>SIGBUS</strong> propagation</li>
+</ul>
+<p>Once <strong>do_page_fault()</strong> gets control it updates <strong>regs</strong> struct
+in memory for faulted task using <strong>dpf_reg()</strong> macro. It looks
+unusual:</p>
+<ul>
+<li>refers to negative offsets sometimes: <strong>(r) &lt;= 15 ? (r)-16</strong> (out of <strong>struct pt_regs</strong>)</li>
+<li>defines not one but a few ranges of registers: 0-8, 9-15, 16-18, 19-…</li>
+</ul>
+<p><strong>struct pt_regs</strong> as is:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> pt_regs <span class="op">{</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r0<span class="op">;</span>  <span class="co">// 0</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r1<span class="op">;</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r2<span class="op">;</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r3<span class="op">;</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r4<span class="op">;</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r5<span class="op">;</span>  <span class="co">// 5</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r6<span class="op">;</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r7<span class="op">;</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r8<span class="op">;</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r19<span class="op">;</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r20<span class="op">;</span> <span class="co">// 10</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r21<span class="op">;</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r22<span class="op">;</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r23<span class="op">;</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r24<span class="op">;</span></span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r25<span class="op">;</span> <span class="co">// 15</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r26<span class="op">;</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r27<span class="op">;</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r28<span class="op">;</span></span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> hae<span class="op">;</span></span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a><span class="co">/* JRP - These are the values provided to a0-a2 by PALcode */</span></span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> trap_a0<span class="op">;</span> <span class="co">// 20</span></span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> trap_a1<span class="op">;</span></span>
+<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> trap_a2<span class="op">;</span></span>
+<span id="cb22-26"><a href="#cb22-26" aria-hidden="true" tabindex="-1"></a><span class="co">/* These are saved by PAL-code: */</span></span>
+<span id="cb22-27"><a href="#cb22-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> ps<span class="op">;</span></span>
+<span id="cb22-28"><a href="#cb22-28" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> pc<span class="op">;</span></span>
+<span id="cb22-29"><a href="#cb22-29" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> gp<span class="op">;</span> <span class="co">// 25</span></span>
+<span id="cb22-30"><a href="#cb22-30" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r16<span class="op">;</span></span>
+<span id="cb22-31"><a href="#cb22-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r17<span class="op">;</span></span>
+<span id="cb22-32"><a href="#cb22-32" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r18<span class="op">;</span></span>
+<span id="cb22-33"><a href="#cb22-33" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p>Now meaning of <strong>dpf_reg()</strong> should be more clear. As <strong>pt_regs</strong>
+keeps only a subset of registers is has to account for gaps and offsets.</p>
+<p>Here I noticed the bug: <strong>r16-r18</strong> range is handled incorrectly by <strong>dpf_reg()</strong>:
+<strong>r16</strong> “address” is <strong>regs</strong>+10 (26-16), not <strong>regs</strong>+8.</p>
+<p>The implementation also means that <strong>dpf_reg()</strong> can’t handle
+<strong>gp</strong>(<strong>r29</strong>) and <strong>sp</strong>(<strong>r30</strong>) registers as value registers.
+That should not normally be a problem as <strong>gcc</strong> never assigns
+those registers for temporary computations and keeps them to
+hold <strong>GOT</strong> pointer and stack pointer at all times. But one
+could write assembly code to do it :)</p>
+<p>If all the above makes no sense to you it’s ok. Check
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/x86/exception-tables.txt">kernel documentation for x86 exception handling</a>
+instead which uses very similar technique.</p>
+<p>To be able to handle all registers we need to bring in <strong>r9-r15</strong>.
+Those are written right before <strong>struct pt_regs</strong>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199">right at entMM</a>
+entry:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>CFI_START_OSF_FRAME entMM</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    SAVE_ALL</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    /* save <span class="op">$</span><span class="bn">9</span> <span class="op">-</span> <span class="op">$</span><span class="bn">15</span> so the inline exception code can manipulate them<span class="op">.</span>  <span class="op">*/</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>    subq <span class="op">$</span>sp<span class="op">,</span> <span class="dv">56</span><span class="op">,</span> <span class="op">$</span>sp</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">9</span><span class="op">,</span> <span class="dv">0</span><span class="op">($</span>sp<span class="op">)</span>   <span class="op">//</span> push <span class="kw">r9</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">10</span><span class="op">,</span> <span class="dv">8</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">11</span><span class="op">,</span> <span class="dv">16</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">12</span><span class="op">,</span> <span class="dv">24</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">13</span><span class="op">,</span> <span class="dv">32</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">14</span><span class="op">,</span> <span class="dv">40</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>    stq <span class="op">$</span><span class="bn">15</span><span class="op">,</span> <span class="dv">48</span><span class="op">($</span>sp<span class="op">)</span> <span class="op">//</span> push <span class="kw">r15</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>    addq <span class="op">$</span>sp<span class="op">,</span> <span class="dv">56</span><span class="op">,</span> <span class="op">$</span><span class="bn">19</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>    /* handle the fault <span class="op">*/</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>    lda <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="bn">0x3fff</span></span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>    bic <span class="op">$</span>sp<span class="op">,</span> <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">$</span><span class="bn">8</span></span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>    jsr <span class="op">$</span><span class="bn">26</span><span class="op">,</span> do_page_fault</span>
+<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>    /* reload the registers after the exception code played<span class="op">.</span>  <span class="op">*/</span></span>
+<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">9</span><span class="op">,</span> <span class="dv">0</span><span class="op">($</span>sp<span class="op">)</span> <span class="op">//</span> pop <span class="kw">r9</span></span>
+<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">10</span><span class="op">,</span> <span class="dv">8</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">11</span><span class="op">,</span> <span class="dv">16</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-21"><a href="#cb23-21" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">12</span><span class="op">,</span> <span class="dv">24</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-22"><a href="#cb23-22" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">13</span><span class="op">,</span> <span class="dv">32</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">14</span><span class="op">,</span> <span class="dv">40</span><span class="op">($</span>sp<span class="op">)</span></span>
+<span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>    ldq <span class="op">$</span><span class="bn">15</span><span class="op">,</span> <span class="dv">48</span><span class="op">($</span>sp<span class="op">)</span> <span class="op">//</span> pop <span class="kw">r15</span></span>
+<span id="cb23-25"><a href="#cb23-25" aria-hidden="true" tabindex="-1"></a>    addq <span class="op">$</span>sp<span class="op">,</span> <span class="dv">56</span><span class="op">,</span> <span class="op">$</span>sp</span>
+<span id="cb23-26"><a href="#cb23-26" aria-hidden="true" tabindex="-1"></a>    /* finish up the syscall as normal<span class="op">.</span>  <span class="op">*/</span></span>
+<span id="cb23-27"><a href="#cb23-27" aria-hidden="true" tabindex="-1"></a>    br ret_from_sys_call</span>
+<span id="cb23-28"><a href="#cb23-28" aria-hidden="true" tabindex="-1"></a>CFI_END_OSF_FRAME entMM</span></code></pre></div>
+<p>Here there are a few subtle things going on:</p>
+<ol type="1">
+<li>at entry <strong>entMM</strong> already has a frame of last 6 values: <strong>ps,pc,gp,r16-r18</strong>.</li>
+<li>then <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n52">SAVE_ALL</a>
+(not pasted bove) stores <strong>r0-r8,r19-r28,hae,trap_a0-trap-a2</strong></li>
+<li>and only then <strong>r9-r15</strong> are stored (note the <strong>subq $sp, 56, $sp</strong> to place them before).</li>
+</ol>
+<p>In <strong>C</strong> land only <strong>2.</strong> and <strong>3.</strong> constitute <strong>struct pt_regs</strong>.
+<strong>1.</strong> happens to be outside and needs negative addressing we saw in <strong>dpf_reg()</strong>.</p>
+<p>As I understand the original idea was to share
+<strong>ret_from_sys_call</strong> part across various kernel entry points:</p>
+<ul>
+<li>system calls: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n434">entSys</a></li>
+<li>arithmetic exceptions: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n190">entArith</a></li>
+<li>external interrupts: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n181">entInt</a></li>
+<li>internal faults (bad opcode, FPU failures, breakpoint traps, ): <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n244">entIF</a></li>
+<li>page faults: entMM</li>
+<li>handling of unaligned access: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n253">entUna</a></li>
+<li>MILO debug break: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n425">entDbg</a></li>
+</ul>
+<p>Of the above only page faults and unaligned faults need
+read/write acceess to every register.</p>
+<p>In practice <strong>entUna</strong> uses different layout and simpler code patching.</p>
+<p>The last step to get <strong>entMM</strong> executed at a fault handler is
+to register it in alpha’s <strong>PALcode</strong> subsystem (Privileged
+Architecture Library code).</p>
+<p>It’s done in <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/traps.c#n976">trap_init()</a>.
+along with other handlers. Simple!</p>
+<p>Or not so simple. What is that <strong>PALcode</strong> thing (<a href="https://en.wikipedia.org/wiki/PALcode">wiki’s link</a>)?
+It looks like a tiny hypervisor that provides service points for CPU
+you can access with <strong>call_pal &lt;number&gt;</strong> instruction.</p>
+<p>It puzzled me a lot of what <strong>call_pal</strong> was supposed to do.
+Should it transfer control somwehre else or is it a normal call?</p>
+<p>Actually given it’s a generic mechanism to do “privileged service calls”
+it can do both. I was not able to quickly find the details on how
+different service calls affect registers and found it simplest
+to navigate through qemu’s <a href="https://repo.or.cz/qemu-palcode.git/blob/HEAD:/pal.S">PAL source</a>.</p>
+<p>AFAIU <strong>PALcode</strong> of real alpha machine is a proprietary
+process-specific blob that could have it’s own quirks.</p>
+<p>Back to out <strong>qemu-palcode</strong> let’s looks at a few examples.</p>
+<p>First is function-like <strong>call_pal PAL_swpipl</strong> used in
+<strong>entMM</strong> and others:</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="fu">CallPal_SwpIpl:</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    mfpr    v0<span class="op">,</span> qemu_ps</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">and</span>     a0<span class="op">,</span> PS_M_IPL<span class="op">,</span> a0</span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">and</span>     v0<span class="op">,</span> PS_M_IPL<span class="op">,</span> v0</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    mtpr    a0<span class="op">,</span> qemu_ps</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    hw_rei</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>ENDFN   CallPal_SwpIpl</span></code></pre></div>
+<p>I know almost nothing about <strong>PAL</strong> but I suspect <strong>mfpr</strong> means
+move-from-physical-register. <strong>hw_rei/hw_ret</strong> is a branch from
+<strong>PAL</strong> service routine back to “unprivileged” user/kernel.</p>
+<p><strong>hw_rei</strong> does normal return from <strong>call_pal</strong>
+to the instruction next to <strong>call_pal</strong>.</p>
+<p>Here <strong>call_pal PAL_rti</strong> is an example of task-switch-like routine:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">CallPal_Rti:</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    mfpr    p6<span class="op">,</span> qemu_exc_addr       <span class="op">//</span> Save exc_addr for machine check</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    ldq     p4<span class="op">,</span> FRM_Q_PS<span class="op">($</span>sp<span class="op">)</span>       <span class="op">//</span> Get the PS</span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    ldq     p5<span class="op">,</span> FRM_Q_PC<span class="op">($</span>sp<span class="op">)</span>       <span class="op">//</span> Get the return PC</span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    ldq     <span class="op">$</span>gp<span class="op">,</span> FRM_Q_GP<span class="op">($</span>sp<span class="op">)</span>      <span class="op">//</span> Get gp</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    ldq     a0<span class="op">,</span> FRM_Q_A0<span class="op">($</span>sp<span class="op">)</span>       <span class="op">//</span> Get a0</span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    ldq     a1<span class="op">,</span> FRM_Q_A1<span class="op">($</span>sp<span class="op">)</span>       <span class="op">//</span> Get a1</span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    ldq     a2<span class="op">,</span> FRM_Q_A2<span class="op">($</span>sp<span class="op">)</span>       <span class="op">//</span> Get a2</span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    lda     <span class="op">$</span>sp<span class="op">,</span> FRM_K_SIZE<span class="op">($</span>sp<span class="op">)</span>    <span class="op">//</span> Pop the stack</span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    andnot  p5<span class="op">,</span> <span class="dv">3</span><span class="op">,</span> p5               <span class="op">//</span> Clean return PC<span class="op">&lt;</span><span class="dv">1</span><span class="op">:</span><span class="dv">0</span><span class="op">&gt;</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    <span class="bu">and</span>     p4<span class="op">,</span> PS_M_CM<span class="op">,</span> p3</span>
+<span id="cb25-15"><a href="#cb25-15" aria-hidden="true" tabindex="-1"></a>    bne     p3<span class="op">,</span> CallPal_Rti_ToUser</span>
+<span id="cb25-16"><a href="#cb25-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-17"><a href="#cb25-17" aria-hidden="true" tabindex="-1"></a>    <span class="bu">and</span>     p4<span class="op">,</span> PS_M_IPL<span class="op">,</span> p4</span>
+<span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>    mtpr    p4<span class="op">,</span> qemu_ps</span>
+<span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>    hw_ret  <span class="op">(</span>p5<span class="op">)</span></span>
+<span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>ENDFN   CallPal_Rti</span></code></pre></div>
+<p>Here target (<strong>p5</strong>, some service only hardware register)
+was passed on stack in <strong>FRM_Q_PC($sp)</strong>.</p>
+<p>That <strong>PAL_rti</strong> managed to confused me a lot as I was
+trying to single-step through it as a normal function.
+I did not notice how I was jumping from page fault
+handling code to timer interrupt handling code.</p>
+<p>But all became clear once I found it’s definition.</p>
+<h1 id="parting-words">Parting words</h1>
+<ul>
+<li><strong>qemu</strong> can emulate <strong>alpha</strong> good enough to debug obscure kernel bugs</li>
+<li><strong>gdb</strong> server is very powerful for debugging unmodified kernel code including
+hardware watchpoints, dumping registers, watching after interrupt handling
+routines</li>
+<li>My initial guesses were all incorrect: it was not a kernel regression,
+not a compiler deficiency and not an <strong>__asm__</strong> constraint annotation bug.</li>
+<li><strong>PALcode</strong> while a nice way to abstract low-level details
+of CPU implementation complicates debugging of operating system. <strong>PALcode</strong>
+also happens to be OS-dependent!</li>
+<li>This was another one-liner fix :)</li>
+<li>The bug has been always present in kernel (for about 20 years?).</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on January  4, 2019 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

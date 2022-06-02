@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: A rust bug</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>A rust bug</h1>
+
+            <p>This is a post that documents a few tips to track down elusive problem
+in a <strong>rust</strong> codebase of medium size: a few crates a few megabytes
+of code each.</p>
+<h1 id="the-exhibit">The exhibit</h1>
+<p>It all started from seemingly minor problem: after an update of <strong>rust</strong>
+from <strong>1.56.1</strong> to <strong>1.57.0</strong> testsuite of <strong>rav1e-0.4.1</strong> project started
+<a href="https://github.com/NixOS/nixpkgs/pull/148358#issuecomment-985934315">failing in <strong>nixpkgs</strong></a></p>
+<pre><code>failures:
+    src/api/config/mod.rs - api::config::Config::new_context (line 232)
+    src/api/context.rs - api::context::Context&lt;T&gt;::new_frame (line 41)
+    src/api/context.rs - api::context::Context&lt;T&gt;::receive_packet (line 197)
+    src/api/context.rs - api::context::Context&lt;T&gt;::receive_packet (line 222)
+    src/api/context.rs - api::context::Context&lt;T&gt;::send_frame (line 75)</code></pre>
+<p>Normally testsuite failures are a better starting point than a bug on
+real application: the inputs are usually trivial, they exercise small
+part of the library, you could run a test under debugger and check the
+place where crash happens and so on.</p>
+<p>Here is how our failing test
+<a href="https://github.com/xiph/rav1e/blob/v0.5.1/src/api/context.rs#L278-L290">looks like</a>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="co">/// # fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     let mut enc = EncoderConfig::default();</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     // So it runs faster.</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     enc.width = 16;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     enc.height = 16;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     let cfg = Config::new().with_encoder_config(enc);</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     let mut ctx: Context&lt;u8&gt; = cfg.new_context()?;</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="co">/// #</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     let frames = vec![ctx.new_frame(); 4].into_iter();</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     encode_frames(&amp;mut ctx, frames);</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">/// #</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="co">/// #     Ok(())</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="co">/// # }</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span></code></pre></div>
+<p>Looks simple. Testing against git checkout of <strong>rav1e</strong> shown the same failure:</p>
+<pre><code>$ cargo test --release
+failures:
+     ...
+     src/api/context.rs - api::context::Context&lt;T&gt;::receive_packet (line 204)
+     src/api/context.rs - api::context::Context&lt;T&gt;::receive_packet (line 229)
+ test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.40s</code></pre>
+<p>Using this data Jörg filed <a href="https://github.com/xiph/rav1e/issues/2851">upstream report</a>
+at which point I thought the failure would be obvious to upstream developers.</p>
+<h1 id="into-the-rabbit-hole">Into the rabbit hole</h1>
+<p>I’m usually wary of filing bugs where it’s not very clear if it’s a fault of
+my environment or a fault of some underlying package way below the affected
+one.</p>
+<p>In this case it looked like a simple <strong>rav1e</strong> bug to my unexperienced eye.</p>
+<p>Unfortunately unspream’s suspiction fell on <strong>NixOS</strong> almost immediately :)
+Luckily others were able to reproduce the same failure with recent enough
+compiler. The failure nature remained to be a complete mystery to others.</p>
+<p>I gave it a try.</p>
+<p>First, this test is a doctest: it’s a part of source’s comment that <strong>doctest</strong>
+tool extracts, compiles and runs. In theory if we do the same extraction
+mechanically and write this code snippet to a text file it will fail the same.
+It did not. Test kept failing only as a part of doctest run.</p>
+<p>This proved to be a bit complicated to debug on release compiler: support for
+collecting intermediate binaries from <strong>doctest</strong> is an unstable feature.</p>
+<p>To avoid dealing with nightly compiler I resorted to patching the test with
+<strong>sleep()</strong> to quickly hook into failure with a debugger in hopes of an obvious
+bug:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/api/context.rs</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/api/context.rs</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -78,8 +78,10 @@ impl&lt;T: Pixel&gt; Context&lt;T&gt; {</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>   ///</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>   /// ```</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>   /// use rav1e::prelude::*;</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  /// use std::{thread, time};</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>   ///</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>   /// # fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="va">+  /// thread::sleep(time::Duration::from_millis(1000 * 30));</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>   /// let cfg = Config::default();</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>   /// let mut ctx: Context&lt;u8&gt; = cfg.new_context().unwrap();</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>   /// let f1 = ctx.new_frame();</span></code></pre></div>
+<p>The result somewhat worked:</p>
+<pre><code>$ RUSTDOCFLAGS='-C debuginfo=2' cargo test --release --doc --verbose 'api::context::Context&lt;T&gt;::send_frame'
+...
+$ gdb -p $pid
+(gdb) continue
+Continuing.
+[New Thread 0x7f4cf799e640 (LWP 503344)]
+[New Thread 0x7f4cf779a640 (LWP 503345)]
+
+Thread 2 &quot;rust_out&quot; received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x7f4cf799e640 (LWP 503344)]
+0x00007f4cf799d9d0 in ?? ()
+(gdb) bt
+#0  0x00007f4cf799d9d0 in ?? ()
+#1  0x00007f4cf799e5f8 in ?? ()
+#2  0x00007f4cf799da80 in ?? ()
+#3  0x000055b1d909d861 in rayon_core::registry::WorkerThread::set_current (thread=0x7f4cf799d600)
+    at /home/slyfox/.cargo/registry/src/github.com-1ecc6299db9ec823/rayon-core-1.9.1/src/registry.rs:636
+#4  rayon_core::registry::main_loop (registry=..., index=0, worker=...)
+    at /home/slyfox/.cargo/registry/src/github.com-1ecc6299db9ec823/rayon-core-1.9.1/src/registry.rs:807
+#5  rayon_core::registry::ThreadBuilder::run (self=...)
+    at /home/slyfox/.cargo/registry/src/github.com-1ecc6299db9ec823/rayon-core-1.9.1/src/registry.rs:55
+#6  0x000055b1d90a41dd in rayon_core::registry::{impl#2}::spawn::{closure#0} ()
+    at /home/slyfox/.cargo/registry/src/github.com-1ecc6299db9ec823/rayon-core-1.9.1/src/registry.rs:100
+#7  std::sys_common::backtrace::__rust_begin_short_backtrace&lt;rayon_core::registry::{impl#2}::spawn::{closure#0}, ()&gt; (f=...)
+    at /build/rustc-1.57.0-src/library/std/src/sys_common/backtrace.rs:123
+#8  0x000055b1d90975dc in std::thread::{impl#0}::spawn_unchecked::{closure#1}::{closure#0}&lt;rayon_core::registry::{impl#2}::spawn::{closure#0}, ()&gt; () at /build/rustc-1.57.0-src/library/std/src/thread/mod.rs:483
+#9  core::panic::unwind_safe::{impl#23}::call_once&lt;(), std::thread::{impl#0}::spawn_unchecked::{closure#1}::{closure#0}&gt; (self=...,
+    _args=&lt;optimized out&gt;) at /build/rustc-1.57.0-src/library/core/src/panic/unwind_safe.rs:271
+#10 0x000055b1d90a11cf in std::panicking::try::do_call&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;std::thread::{impl#0}::spawn_unchecked::{closure#1}::{closure#0}&gt;, ()&gt; (data=&lt;optimized out&gt;) at /build/rustc-1.57.0-src/library/std/src/panicking.rs:403
+#11 std::panicking::try&lt;(), core::panic::unwind_safe::AssertUnwindSafe&lt;std::thread::{impl#0}::spawn_unchecked::{closure#1}::{closure#0}&gt;&gt;
+    (f=&lt;error reading variable: Cannot access memory at address 0x0&gt;) at /build/rustc-1.57.0-src/library/std/src/panicking.rs:367
+#12 0x000055b1d90a42d0 in std::panic::catch_unwind&lt;core::panic::unwind_safe::AssertUnwindSafe&lt;std::thread::{impl#0}::spawn_unchecked::{closure#1}::{closure#0}&gt;, ()&gt; (f=...) at /build/rustc-1.57.0-src/library/std/src/panic.rs:133
+#13 0x000055b1d90960cb in std::thread::{impl#0}::spawn_unchecked::{closure#1}&lt;rayon_core::registry::{impl#2}::spawn::{closure#0}, ()&gt; ()
+    at /build/rustc-1.57.0-src/library/std/src/thread/mod.rs:482
+#14 core::ops::function::FnOnce::call_once&lt;std::thread::{impl#0}::spawn_unchecked::{closure#1}, ()&gt; ()
+    at /build/rustc-1.57.0-src/library/core/src/ops/function.rs:227
+#15 0x000055b1d91d65a5 in std::sys::unix::thread::Thread::new::thread_start ()
+#16 0x00007f4cf83fdd40 in start_thread () from /nix/store/s9qbqh7gzacs7h68b2jfmn9l6q4jwfjz-glibc-2.33-59/lib/libpthread.so.0
+#17 0x00007f4cf81e443f in clone () from /nix/store/s9qbqh7gzacs7h68b2jfmn9l6q4jwfjz-glibc-2.33-59/lib/libc.so.6</code></pre>
+<p>We got a detailed backtrace that gets into the depths of <strong>rayon-core</strong>
+crate (it implements internals of parallel execution of tasks). I had
+no idea what this trace showed me.</p>
+<p>Having looked at the bits above <strong>rav1e</strong> upstream suggested filing a
+bug against <strong>rayon-core</strong>.</p>
+<p>By this time I realized there will be no easy way out and I’ll have to
+build something manageable to understand where the error really happens:
+in <strong>rav1e</strong>, <strong>rayon-core</strong> or somewher else.</p>
+<p>Quick quiz: which component do you think will end up having a bug?</p>
+<h1 id="rust-minimizer-howto">Rust minimizer HOWTO</h1>
+<p>So how does one shring the example? My mechanical trick is to remove
+dead code unrelated to our bug trigger.</p>
+<p><strong>rust</strong> has a useful feature of warning user of unused code.
+Let’s look at this toy example:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cat a.rs</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> g()<span class="op">{}</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> pg()<span class="op">{}</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> main() <span class="op">{}</span></span></code></pre></div>
+<p>Building it:</p>
+<pre><code>$ rustc a.rs
+warning: function is never used: `g`
+ --&gt; a.rs:1:4
+  |
+1 | fn g(){}
+  |    ^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: 1 warning emitted</code></pre>
+<p>In this case <strong>g()</strong> is a clearly unused function: it’s visibility is
+limited to current module. Note that <strong>pg()</strong> is also unused for that
+specific program. It’s considered to be used because it’s explicitly
+exported for all external modules and crates.</p>
+<p>To minimize a test we can safely assume that nothing should be exported
+outside current crate except maybe <strong>main()</strong> function of the test itself.</p>
+<p>Thus I came up with a hack: change all “pub” exports to “pub(crate)” exports
+with a single sed line:</p>
+<pre><code>$ sed -e 's@pub @pub(crate) @g' -i *.rs</code></pre>
+<p>That’s it! The rest comiler will do for us:</p>
+<pre><code>$ rustc a.rs
+warning: function is never used: `g`
+ --&gt; a.rs:1:4
+  |
+1 | fn g(){}
+  |    ^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: function is never used: `pg`
+ --&gt; a.rs:2:15
+  |
+2 | pub(crate) fn pg(){}
+  |               ^^
+
+warning: 2 warnings emitted</code></pre>
+<p>Yay! Now <strong>pg()</strong> is also reported as unused.</p>
+<p>Now we just need to manually delete <strong>pg()</strong> definition from the source code
+and make sure the hypothetical bug still triggers. Would be nice if
+<strong>cargo fix</strong> removed this unused code automatically.</p>
+<p>I have applied this <strong>sed</strong> hack to all of <strong>rav1e</strong> and almost immediately
+got this reproducer:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cat src/lib.rs</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">rayon::iter::</span>IntoParallelIterator<span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">rayon::iter::</span>ParallelIterator<span class="op">;</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Examples</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="co">/// use bug::do_bug;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="co">/// # fn main() {</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="co">/// bug::do_bug()</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="co">/// # }</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> do_bug() <span class="op">{</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">..</span><span class="dv">1</span>)<span class="op">.</span>into_par_iter()<span class="op">.</span>for_each(<span class="op">|</span>_<span class="op">|</span> <span class="op">{}</span>)<span class="op">;</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">..</span><span class="dv">1</span>)<span class="op">.</span>into_par_iter()<span class="op">.</span>for_each(<span class="op">|</span>_<span class="op">|</span> <span class="op">{}</span>)<span class="op">;</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">..</span><span class="dv">1</span>)<span class="op">.</span>into_par_iter()<span class="op">.</span>for_each(<span class="op">|</span>_<span class="op">|</span> <span class="op">{}</span>)<span class="op">;</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Clearly a <strong>rayon</strong> bug, right? There is nothing <strong>rav1e</strong> specific in this code.</p>
+<p>I filed the <a href="https://github.com/rayon-rs/rayon/issues/911">bug report</a>
+being quite confident I got the culprit. Alas once again suspiction fell
+on my <strong>NixOS</strong> environment :)</p>
+<p>I tried <strong>Ubuntu</strong> and got the same <strong>SIGSEGV</strong> there. I felt that I’ll need
+to keep digging if I want this bug get solved. My example still relied on a
+few other crates: <strong>rayon-core</strong>, standard library and something else.</p>
+<p>I applied <strong>pub(crate)</strong> hack to <strong>rayon-core</strong> as well and got this beauty:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cat src/lib.rs</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="pp">thread_local!</span> <span class="op">{</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">static</span> THREAD_LOCAL_GLOBAL<span class="op">:</span> <span class="pp">std::cell::</span>Cell<span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span> <span class="op">=</span> <span class="pp">std::cell::Cell::</span>new(<span class="dv">0</span>)<span class="op">;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>inline<span class="at">(</span>never<span class="at">)]</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_state_func(t<span class="op">:</span> <span class="op">&amp;</span><span class="pp">std::cell::</span>Cell<span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span>) <span class="op">{</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    t<span class="op">.</span>set(<span class="dv">42</span>)<span class="op">;</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>inline<span class="at">(</span>never<span class="at">)]</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> thread_func() <span class="op">{</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    THREAD_LOCAL_GLOBAL<span class="op">.</span>with(set_state_func)<span class="op">;</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Examples</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="co">/// use bug::do_bug;</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a><span class="co">/// # fn main() {</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a><span class="co">/// bug::do_bug()</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a><span class="co">/// # }</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>inline<span class="at">(</span>never<span class="at">)]</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> do_bug() <span class="op">{</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>  <span class="co">// to ease catching the test with gdb</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>  <span class="co">//std::thread::sleep(std::time::Duration::from_secs(10));</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> _ <span class="kw">in</span> <span class="dv">0</span><span class="op">..</span><span class="dv">128</span> <span class="op">{</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>    <span class="pp">std::thread::</span>spawn(thread_func)<span class="op">.</span>join()<span class="op">.</span>unwrap()<span class="op">;</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I used <strong>#[inline(never)]</strong> to make sure we don’t get affected by
+optimizer decisions during reduction. I don’t know if it has any
+effect :)</p>
+<p>Here we spawn 128 no-op threads that set some thread-local global
+variable. There is just nothing to break here! Note that <strong>main()</strong>
+still has to hide out in <strong>doctest</strong> comment to trigger <strong>SIGSEGV</strong>.</p>
+<p>I filed the <a href="https://github.com/rust-lang/rust/issues/92869">bug against <strong>rust</strong></a>.</p>
+<p>In there Josh and Nikita quickly found the code gnerator discrepancy in <strong>llvm</strong>
+and fixed it with <a href="https://reviews.llvm.org/D117489">D117489 patch</a>.</p>
+<p>The bug was so elusive because <strong>rav1e</strong>’s <strong>Cargo.toml</strong> managed to
+hit a few unique properties:</p>
+<ul>
+<li>build uses <strong>debug = true / lto = “thin”</strong> configuration in <strong>[profile.release]</strong></li>
+<li><strong>cargo test --doc --release</strong> does not enable <strong>-O</strong> optimisations for tests
+but does enable <strong>lto = “thin”</strong> (a <strong>cargo test</strong> perhaps?). This matches
+neither debug nor release configuration for proper (non-doctest) tests.</li>
+</ul>
+<h1 id="parting-words">Parting words</h1>
+<p>Test case reduction is a simple and mechanical process for rust crates.</p>
+<ul>
+<li>Simple compiler bugs are a thing for <strong>rust</strong> as well as <strong>C++</strong></li>
+<li><strong>gdb</strong> renders meaningful stack frames for rust crashes.</li>
+<li>“pub” -&gt; “pub(crate)” substitution is surprisingly effective for
+test minimization.</li>
+<li><strong>cargo test --doc --release</strong> should be more consistent with <strong>-O</strong>
+optmisation flags to make error less unique to <strong>rustdoc</strong>.</li>
+<li><strong>cargo fix</strong> does not delete unused functions :)</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on February  9, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

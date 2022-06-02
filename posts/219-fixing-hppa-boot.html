@@ -1,0 +1,421 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: Fixing HPPA boot</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>Fixing HPPA boot</h1>
+
+            <p>It feels like I did not have much chance to fix anything
+complicated on <strong>hppa</strong> machines (aka <strong>PA-RISC</strong>). But
+recently …</p>
+<p>On #gentoo-hppa IRC channel Jeroen Roovers reported a problem:
+after a switch to <strong>gcc-10</strong> and rebuilding/reinstalling
+<strong>sys-boot/palo</strong> package (<strong>PA-RISC</strong> bootloader) the machine
+was not able to boot anymore.</p>
+<p>Reverting to <strong>palo</strong> built with <strong>gcc-9</strong> fixed the boot.
+Is it a <strong>gcc</strong> bug?</p>
+<h1 id="clues">Clues</h1>
+<p>New toolchain versions tend to break bootloaders all the time.
+There are so many ways to do it! Where do we start?
+My standard guesses are:</p>
+<ul>
+<li>code size increase and overflow (bootloaders are often constrained in size).</li>
+<li>new unhandled relocation types from fresh <strong>binutils</strong></li>
+<li>new forms of instructions not supported by early environment (for example
+SIMD CPU extension might need reconfiguration)</li>
+<li><strong>-fPIE</strong> Gentoo’s default</li>
+<li><strong>-fstack-protector</strong> Gentoo’s default</li>
+</ul>
+<p><strong>gcc-10</strong> is <a href="http://trofi.github.io/posts/213-gcc-10-in-gentoo.html">known</a>
+to have quite a few non-trivial code generation changes like
+enabling <strong>-fno-common</strong> defaults and maybe something else.</p>
+<h1 id="first-try">First try</h1>
+<p>Jeroen tested <strong>palo</strong> with <strong>gcc-10 -fcommon</strong>, but it did
+not fix machine boot. Not so simple.</p>
+<p>I had no idea on how <strong>hppa</strong> boots. <strong>palo</strong> itself has a
+great doc explaining how it should work:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/deller/palo.git/tree/README.html">https://git.kernel.org/pub/scm/linux/kernel/git/deller/palo.git/tree/README.html</a></p>
+<p>Tl;DR of the boot process is:</p>
+<ol type="1">
+<li><p>machine starts it’s own firmware</p></li>
+<li><p>firmware enumerates disks and reads first 512 bytes
+block of the boot disk</p></li>
+<li><p>firmware expects first block in the following format
+(<strong>IPL</strong> stands for <strong>I</strong>nitial <strong>P</strong>rogram <strong>L</strong>oader):</p>
+<pre class><code>0x80 0x00: some signature
+... 
+IPL_ADDR:  4 bytes, offset of IPL on disk, must be 2K multiple
+IPL_SIZE:  4 bytes, size of IPL program, must be 2K multiple
+IPL_ENTRY: 4 bytes, entry point offset within IPL, 4-byte aligned
+...</code></pre></li>
+<li><p>firmware reads <strong>IPL</strong> into RAM and transfers control.
+This is where our code starts running.</p></li>
+</ol>
+<p>Simple! Almost like <strong>x86</strong> <strong>BIOS</strong> <strong>MBR</strong> style boot (with one
+extra indirection).</p>
+<p>Simplicity also means that recovering system with broken
+<strong>IPL</strong> written on disk is tedious: you need to boot from good
+media (other disk, CD, netboot) and rewrite it on disk.</p>
+<p>Firmware also logs the boot process and complains when
+something went wrong (<a href="https://bugs.gentoo.org/724264">boot log example</a>).</p>
+<p>Our <strong>IPL</strong> program implementation is <strong>iplboot</strong> file from
+<strong>palo</strong> package. It’s full size is about 50K, which is a
+manageable size to get through disassembly manually if nothing
+else works.</p>
+<h1 id="gcc-hint">gcc hint</h1>
+<p>Jeroen also noticed suspicious <strong>palo</strong> build warning:</p>
+<pre class><code>bootloader.h:71:6: warning: conflicting types for built-in function ‘bzero’;
+    expected ‘void(void *, unsigned int)’ [-Wbuiltin-declaration-mismatch]</code></pre>
+<p><strong>gcc</strong> says that <strong>bzero()</strong> prototype in <strong>palo</strong> code
+is different from the standard prototype. Who knows
+what that means for <strong>gcc</strong>? Could it stop applying
+<strong>bzero()</strong>-related optimizations like inlining on small
+fixed-sized buffers?</p>
+<p>I attempted to check the difference in the generated code.</p>
+<p>To speed things up a bit I moved to <strong>x86_64</strong>
+machine and continued debugging there. Cross-compiling
+<strong>palo</strong> on Gentoo is simple:</p>
+<pre class><code>### build cross-compilers:
+# crossdev hppa2.0-unknown-linux-gnu
+
+### build palo
+$ LANG=C PORTAGE_CONFIGROOT=/usr/hppa2.0-unknown-linux-gnu ebuild palo-2.12-r1.ebuild clean compile
+...
+    In file included from ../lib/gzip.c:25:
+./bootloader.h:71:6: warning: conflicting types for built-in function 'bzero';
+    expected 'void(void *, unsigned int)' [-Wbuiltin-declaration-mismatch]
+   71 | void bzero(char *p, size_t len);
+      |      ^~~~~</code></pre>
+<p>Let’s look at how exactly <strong>iplboot</strong> is built:</p>
+<pre class><code>make -j8 AR=hppa2.0-unknown-linux-gnu-ar CC=hppa2.0-unknown-linux-gnu-gcc \
+    LD=hppa2.0-unknown-linux-gnu-ld -C ipl
+
+make: Entering directory '/tmp/portage/sys-boot/palo-2.12-r1/work/palo-2.12/ipl'
+
+hppa2.0-unknown-linux-gnu-gcc -D__ASSEMBLY__ -I../lib -traditional -c -o crt0.o crt0.S
+
+hppa2.0-unknown-linux-gnu-gcc -DIPL_LOADER -I. -I../lib -I../include \
+    -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks   -c -o byteio.o byteio.c
+...
+hppa2.0-unknown-linux-gnu-ar rv ipl.a byteio.o elf64.o ipl.o offset.o \
+    gzip.o diskpart.o ext2.o lib.o pdc_bootio.o vsprintf.o elf32.o \
+    fileio.o load.o pdc_cons.o pdc_misc.o
+...
+echo &quot;const char bld_info[] = \&quot;http://www.parisc-linux.org - Sat Jul 4 11:44:42 BST 2020\&quot;;&quot; &gt; build.c
+
+hppa2.0-unknown-linux-gnu-gcc -DIPL_LOADER -I. -I../lib -I../include \
+    -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks -c -o build.o build.c
+
+hppa2.0-unknown-linux-gnu-ld -N --section-start .init=0x60000 -e '$START$' \
+    -o iplelf crt0.o ipl.a build.o `hppa2.0-unknown-linux-gnu-gcc -print-libgcc-file-name`
+...
+./palo/mkbootable ipl/iplelf iplboot</code></pre>
+<p>Here we see a few frequently used tricks for boot programs:</p>
+<ul>
+<li>the bootloader is first linked into a static ELF file with <strong>ld</strong> command</li>
+<li><strong>ld</strong> arguments carefully avoid linkage against <strong>-lc</strong> (<strong>libc</strong>)</li>
+<li><strong>ld</strong> arguments pull in <strong>libgcc.a</strong> (via <strong>-print-libgcc-file-name</strong>)</li>
+<li>entry point is set to <strong>$START$</strong> label</li>
+<li><strong>.init</strong> section is pinned to static <strong>0x60000</strong> address</li>
+</ul>
+<p>To explore the difference I patched <strong>palo</strong>’s <strong>bzero</strong> prototype
+to match the standard <strong>libc</strong> definition:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/palo-2.12/ipl/bootloader.h2019-09-05 22:25:39.000000000 +0100</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/palo-2.12/ipl/bootloader.h2020-07-04 12:53:53.706511217 +0100</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -68,7 +68,7 @@</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a> int streq(const char *a, const char *b);</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a> char *strcpy(char *dest, const char *src);</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a> char *strcat(char *dest, const char *src);</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="st">-void bzero(char *p, size_t len);</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="va">+void bzero(void *p, size_t len);</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a> void *memcpy(void *d, const void *s, size_t len);</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a> size_t strlen(const char *s);</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a> size_t strnlen(const char *s, size_t count);</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="kw">--- palo-2.12-r1_orig/work/palo-2.12/ipl/lib.c2019-09-05 22:25:39.000000000 +0100</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ palo-2.12-r1/work/palo-2.12/ipl/lib.c2020-07-04 12:55:18.861477880 +0100</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -202,8 +202,9 @@</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a> return NULL;</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a> }</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="st">-void bzero(char *p, size_t len)</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a><span class="va">+void bzero(void *_p, size_t len)</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a> {</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a><span class="va">+char *p = _p;</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a> /* slow but safe */</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a> while (len--)</span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>     *p++ = 0;</span></code></pre></div>
+<p>And diffed disassembly produced by
+<strong>hppa2.0-unknown-linux-gnu-objdump -d $file.o</strong>:</p>
+<pre class><code>$ diff -u \
+    &lt;(hppa2.0-unknown-linux-gnu-objdump -r -d ./palo-2.12-r1_orig/work/palo-2.12/ipl/ipl.o) \
+    &lt;(hppa2.0-unknown-linux-gnu-objdump -r -d ./palo-2.12-r1/work/palo-2.12/ipl/ipl.o)
+       ...
+       b,l 71c &lt;iplmain+0x80&gt;,rp
+-          R_PARISC_PCREL17F bzero
++          R_PARISC_PCREL17F memset
+       ...</code></pre>
+<p>Here we see that <strong>bzero()</strong> call was changed to <strong>memset()</strong> call.
+Normally this transformation is not harmful. But <strong>memset()</strong> call
+was generated out of nowhere and <strong>gcc</strong> just assumes the function
+definition exists somewhere. Luckily <strong>palo</strong> defines <strong>memset()</strong>
+as well and the transformation is not problematic.</p>
+<h1 id="trying-the-hypothesis">Trying the hypothesis</h1>
+<p>Jeroen tried a similar <strong>bzero()</strong> patch on <strong>hppa</strong> machine
+and confirmed this change does not fix the boot problem.</p>
+<p>Looking at the diff suggested that <strong>gcc</strong> does high-level
+transformations related to builtin functions. As bootloaders usually
+don’t require high performance we can disable all builtins
+with <strong>-fno-builtin</strong> and get more predictable code generation.</p>
+<p>Jeroen added <strong>-fno-builtin</strong> compiler option to <strong>palo</strong> and the
+system booted again! <a href="https://git.kernel.org/pub/scm/linux/kernel/git/deller/palo.git/commit/?id=a9d9c86da54064023633f4b71d57e68ec426d11d">Upstream patch</a>:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/ipl/Makefile</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/ipl/Makefile</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -39,7 +39,7 @@ endif</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a> VPATH=../lib:.</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a> AFLAGS= -I../lib</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="st">-CFLAGS= -DIPL_LOADER -I. -I../lib -I../include -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="va">+CFLAGS= -DIPL_LOADER -I. -I../lib -I../include -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks -fno-builtin</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a> LDFLAGS  = -N --section-start .init=0x60000 -e '$$START$$'</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a> all:iplelf</span></code></pre></div>
+<h1 id="breakage-mechanics">Breakage mechanics</h1>
+<p>I wanted to understand the exact failure mode a bit better. Is
+it a proper fix or a workaround for some underlying problem?
+To get some details I compared disassembly files of default vs
+<strong>-fno-builtin</strong> <strong>palo</strong> builds.</p>
+<p>Most interesting code generation change happened in
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/deller/palo.git/tree/ipl/lib.c?id=a9d9c86da54064023633f4b71d57e68ec426d11d">ipl/lib.c</a>.</p>
+<p>I’ll spare you from the assembly listings and show intermediate
+representation instead. Let’s check what optimizer does
+with <strong>ipl/lib.c</strong> using <strong>-fopt-info</strong> option.</p>
+<p>Default build:</p>
+<pre class><code>$ hppa2.0-unknown-linux-gnu-gcc -DIPL_LOADER -I. -I../lib -I../include -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks  -c -o lib.o lib.c -fopt-info
+In file included from lib.c:8:
+bootloader.h:71:6: warning: conflicting types for built-in function «bzero»; expected «void(void *, unsigned int)» [-Wbuiltin-declaration-mismatch]
+   71 | void bzero(char *p, size_t len);
+      |      ^~~~~
+lib.c:42:12: optimized:  Inlining malloc_aligned/36 into malloc/37.
+lib.c:113:9: optimized:  Inlining strpbrk/42 into strtok/44.
+...
+lib.c:58:6: optimized: Semantic equality hit:release/40-&gt;malloc_init/41
+lib.c:58:6: optimized: Assembler symbol names:release/40-&gt;malloc_init/41
+optimized:  Inlined release/74 into malloc_init/41 which now has time 3.000000 and size 4, net change of -1.
+lib.c:108:12: optimized:  Inlined strspn/75 into strtok/44 which now has time 590.273748 and size 44, net change of +9.
+lib.c:137:8: optimized: Loop 1 distributed: split to 0 loops and 1 library calls.
+lib.c:137:8: optimized: Loop 1 distributed: split to 0 loops and 1 library calls.
+lib.c:208:8: optimized: Loop 1 distributed: split to 0 loops and 1 library calls.</code></pre>
+<p><strong>-fno-builtin</strong> build:</p>
+<pre class><code>$ hppa2.0-unknown-linux-gnu-gcc -DIPL_LOADER -I. -I../lib -I../include -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks -fno-builtin   -c -o lib.o lib.c -fopt-info
+lib.c:42:12: optimized:  Inlining malloc_aligned/36 into malloc/37.
+lib.c:113:9: optimized:  Inlining strpbrk/42 into strtok/44.
+...
+lib.c:58:6: optimized: Semantic equality hit:release/40-&gt;malloc_init/41
+lib.c:58:6: optimized: Assembler symbol names:release/40-&gt;malloc_init/41
+optimized:  Inlined release/73 into malloc_init/41 which now has time 3.000000 and size 4, net change of -1.
+lib.c:108:12: optimized:  Inlined strspn/74 into strtok/44 which now has time 544.436932 and size 44, net change of +9.</code></pre>
+<p>Function inlining is expected and probably not very interesting.
+Let’s check out other two optimizations:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Semantic equality hit:release/40-&gt;malloc_init/41</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> release <span class="op">(</span><span class="dt">void</span> <span class="op">*</span>ptr<span class="op">)</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    __free <span class="op">=</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span> ptr<span class="op">;</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> malloc_init<span class="op">(</span><span class="dt">char</span> <span class="op">*</span>free<span class="op">)</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    __free <span class="op">=</span> free<span class="op">;</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <strong>gcc</strong> caught identical implementation of two functions.</p>
+<p>Now on to the loop distribution optimization:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// lib.c:137:8: optimized: Loop 1 distributed: split to 0 loops and 1 library calls.</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> memset<span class="op">(</span><span class="dt">void</span> <span class="op">*</span> s<span class="op">,</span><span class="dt">int</span> c<span class="op">,</span><span class="dt">size_t</span> count<span class="op">)</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> <span class="op">*</span>xs <span class="op">=</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span> s<span class="op">;</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="op">(</span>count<span class="op">--)</span> <span class="co">/* line 137 */</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>xs<span class="op">++</span> <span class="op">=</span> c<span class="op">;</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> s<span class="op">;</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The exact message <strong>“split to 0 loops and 1 library calls”</strong>
+tells us that the resulting code has no loops and one library
+call.</p>
+<p><em>Quiz time: guess what library call was this loop replaced with? :)</em></p>
+<p>Let’s look at the intermediate compiler state to find out.
+<strong>gcc</strong> has a set of <strong>-fdump-*</strong> options to peek at various
+phases. I never know what I’m looking for and just dump all
+of them:</p>
+<pre class><code>$ hppa2.0-unknown-linux-gnu-gcc -DIPL_LOADER -I. -I../lib -I../include \
+    -O2 -mdisable-fpregs -Wall -fno-delete-null-pointer-checks -c -o lib.o lib.c \
+    -fdump-tree-all-slim -fdump-rtl-all-slim</code></pre>
+<p>The command generates about 350 files with names of the form
+<strong>lib.c.nnn{t,r}.${pass_name}</strong> for all passes. I’ll show two
+most relevant passes for our case.</p>
+<p>Just before loop distribution pass:</p>
+<pre class><code>;; $ cat lib.c.148t.ivcanon
+;; Function memset (memset, funcdef_no=45, decl_uid=796, cgraph_uid=46, symbol_order=46)
+
+__attribute__((nothrow, leaf))
+memset (void * s, int c, size_t count)
+{
+  char * xs;
+  char _4;
+
+  &lt;bb 2&gt; [local count: 118111600]:
+  count_15 = count_6(D) + 4294967295;
+  if (count_6(D) != 0)
+    goto &lt;bb 4&gt;; [89.00%]
+  else
+    goto &lt;bb 7&gt;; [11.00%]
+
+  &lt;bb 7&gt; [local count: 12992276]:
+
+  &lt;bb 3&gt; [local count: 118111600]:
+  return s_5(D);
+
+  &lt;bb 4&gt; [local count: 105119324]:
+  _4 = (char) c_10(D);
+
+  &lt;bb 5&gt; [local count: 955630225]:
+  # xs_16 = PHI &lt;s_5(D)(4), xs_9(6)&gt;
+  # count_19 = PHI &lt;count_15(4), count_8(6)&gt;
+  xs_9 = xs_16 + 1;
+  *xs_16 = _4;
+  count_8 = count_19 + 4294967295;
+  if (count_19 != 0)
+    goto &lt;bb 6&gt;; [89.00%]
+  else
+    goto &lt;bb 8&gt;; [11.00%]
+
+  &lt;bb 8&gt; [local count: 105119324]:
+  goto &lt;bb 3&gt;; [100.00%]
+
+  &lt;bb 6&gt; [local count: 850510901]:
+  goto &lt;bb 5&gt;; [100.00%]
+
+}</code></pre>
+<p>It’s a bit hard to read, but it’s still the same loop in disguise:</p>
+<ul>
+<li>function prologue to check for exit condition early</li>
+<li>increment counter: <strong>xs_9 = xs_16 + 1;</strong></li>
+<li>single memory store iteration: <strong>*xs_16 = _4;</strong></li>
+<li>loop exit condition check: <strong>if (count_19 != 0)</strong></li>
+<li>next iteration: <strong>goto &lt;bb 5&gt;;</strong></li>
+</ul>
+<p>Let’s check what loop distribution pass did to it.</p>
+<p>After:</p>
+<pre class><code>;; $ cat lib.c.149t.ldist
+;; Function memset (memset, funcdef_no=45, decl_uid=796, cgraph_uid=46, symbol_order=46)
+
+__attribute__((nothrow, leaf))
+memset (void * s, int c, size_t count)
+{
+  char * xs;
+  char _4;
+  int _18;
+
+  &lt;bb 2&gt; [local count: 118111600]:
+  count_15 = count_6(D) + 4294967295;
+  if (count_6(D) != 0)
+    goto &lt;bb 4&gt;; [89.00%]
+  else
+    goto &lt;bb 3&gt;; [11.00%]
+
+  &lt;bb 3&gt; [local count: 118111600]:
+  return s_5(D);
+
+  &lt;bb 4&gt; [local count: 105119324]:
+  _4 = (char) c_10(D);
+  _18 = (int) _4;
+  __builtin_memset (s_5(D), _18, count_6(D));
+  goto &lt;bb 3&gt;; [100.00%]
+
+}</code></pre>
+<p>Now it’s just two steps:</p>
+<ul>
+<li>[unchanged] a bit of function prologue to check exit condition early</li>
+<li>[new] all of loop code is transformed to … a <strong>memset()</strong> call!</li>
+</ul>
+<p>In C it would look similar to the following:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> memset<span class="op">(</span><span class="dt">void</span> <span class="op">*</span> s<span class="op">,</span> <span class="dt">int</span> c<span class="op">,</span> <span class="dt">size_t</span> count<span class="op">)</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> <span class="op">*</span>xs <span class="op">=</span> <span class="op">(</span><span class="dt">char</span> <span class="op">*)</span> s<span class="op">;</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span> count<span class="op">)</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> xs<span class="op">;</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> memset<span class="op">(</span>s<span class="op">,</span> c<span class="op">,</span> count<span class="op">);</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>It’s an infinite recursion without a chance to succeed.</p>
+<p>Second loop distribution transformation is also enlightening:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// lib.c:208:8: optimized: Loop 1 distributed: split to 0 loops and 1 library calls.</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> bzero<span class="op">(</span><span class="dt">char</span> <span class="op">*</span>p<span class="op">,</span> <span class="dt">size_t</span> len<span class="op">)</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* slow but safe */</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="op">(</span>len<span class="op">--)</span> <span class="co">/* line 208 */</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>p<span class="op">++</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>was transformed into:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> bzero<span class="op">(</span><span class="dt">char</span> <span class="op">*</span>p<span class="op">,</span> <span class="dt">size_t</span> len<span class="op">)</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span> len<span class="op">)</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    memset<span class="op">(</span>p<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> len<span class="op">);</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The result is similar: a call to <strong>memset()</strong> and infinite
+recursion there.</p>
+<p>Arfrever pointed out that <strong>gcc-10</strong> enabled
+<strong>-ftree-loop-distribute-patterns</strong> option on <strong>-O2</strong> and
+above. While previous version of <strong>gcc</strong> did it on <strong>-O3</strong>
+and above. This change probably exposed this failure mode.</p>
+<h1 id="parting-words">Parting words</h1>
+<ul>
+<li><p>C compiler does many unusual things behind your back and
+relies on runtime libraries to provide basic primitives
+like <strong>memset()</strong>.</p>
+<p>This means <strong>memset()</strong> and friends can’t be naively implemented
+in standard C without tricks on compiler and build system
+side even if we ignore things like aliasing rule changes due to pointer casts.</p></li>
+<li><p><strong>hppa</strong> booting process is very straightforward. This makes
+it somewhat debuggable without access to <strong>hppa</strong> machine :)</p></li>
+<li><p>bootloaders use advanced tricks to reuse standard compiler
+and linker to be able to write most code in C.</p></li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on July  6, 2020 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

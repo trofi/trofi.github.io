@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: Having fun with bash completion</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>Having fun with bash completion</h1>
+
+            <p>I have a hard time navigating through directory structure in some
+projects. I usualy know the leaf directory name exactly, but not
+the intermediate path.</p>
+<p>Some examples are:</p>
+<ul>
+<li>linux.git: <strong>i915</strong> -&gt; <strong>drivers/gpu/drm/i915</strong></li>
+<li>gentoo.git: <strong>xmms2</strong> -&gt; <strong>media-sound/xmms2</strong></li>
+<li>nixpkgs.git: <strong>re2c</strong> -&gt; <strong>pkgs/development/tools/parsing/re2c</strong></li>
+</ul>
+<p>First two I somehow tolerated for a while and was able to get away with
+an equivalent of <strong>cd */xmms2</strong>. But for <strong>nixpkgs</strong> became too much to
+type.</p>
+<p>First, I wrote a one-liner to <strong>cd</strong> right into a subdir if it’s a unique
+directory across all subdirectories:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cdc()</span> <span class="kw">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">[[</span> <span class="ot">-d</span> <span class="va">$1</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>        <span class="bu">cd</span> <span class="st">&quot;</span><span class="va">$1</span><span class="st">&quot;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">fi</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">local</span> <span class="va">candidates</span><span class="op">=</span><span class="va">()</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Be careful to handle directories with whitespace</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="co"># and special characters that could break tokenization</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="va">IFS</span><span class="op">=</span> <span class="bu">read</span> <span class="at">-r</span> <span class="at">-d</span> <span class="st">$'</span><span class="dt">\0</span><span class="st">'</span> <span class="va">d</span><span class="kw">;</span> <span class="cf">do</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">[[</span> <span class="va">$d</span> <span class="ot">==</span> <span class="st">'.'</span> <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="cf">continue</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">candidates</span><span class="op">+=</span><span class="va">(</span><span class="st">&quot;</span><span class="va">${d</span><span class="op">#</span>./<span class="va">}</span><span class="st">&quot;)</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="st">    done &lt; &lt;(find -path &quot;</span><span class="pp">*</span>/<span class="va">$2</span><span class="st">&quot; -type d -print0 2&gt;/dev/null)</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="st">    if [[ </span><span class="va">${</span><span class="op">#</span><span class="va">candidates</span><span class="op">[@]</span><span class="va">}</span><span class="st"> -eq 1 ]]; then</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="st">        cd &quot;</span><span class="va">${candidates</span><span class="op">[@]</span><span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="st">        return</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="st">    fi</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a><span class="st">    echo &quot;</span>ERROR: cdc: <span class="st">'$1'</span> is ambiguous <span class="er">(</span><span class="va">${</span><span class="op">#</span><span class="va">candidates</span><span class="op">[@]</span><span class="va">})</span> <span class="ex">entries.</span> Can<span class="st">'t cd.&quot;</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="st">    return 1</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="st">}</span></span></code></pre></div>
+<p>Example usage session:</p>
+<pre class><code>~ $ cdc re2c
+ERROR: cdc: 're2c' is ambiguous (8) entries. Can't cd.
+~ $ cd portage/gentoo
+~/portage/gentoo $ cdc re2c
+~/portage/gentoo/dev-util/re2c $</code></pre>
+<p>Looks straightforward. Then I thought of hooking up bash completion to
+avoid typing full intermediate directory. And to see interactively what
+these ambiguities are.</p>
+<p>For example, in case of <strong>pkgs/development/python-modules/importlib-metadata</strong> I’d like
+to avoid typing <strong>importlib-metadata</strong> while being able to get to it quicker.</p>
+<p>Apparently, <strong>bash</strong> does not require bash completion to be an exact
+prefix for something and allows for any arbitrary substitution!</p>
+<p>Here is a silly example to get basics of bash completion:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># complete-hia.bash</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co"># $1 - 'hia'</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co"># $2 - the word being completed</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co"># $3 - the word before completion</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="fu">_complete_hia()</span> <span class="kw">{</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="co"># generic completion results:</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="va">COMPREPLY</span><span class="op">=</span><span class="va">(</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        <span class="co"># just generate 5 random entries</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>        <span class="va">$RANDOM</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        <span class="va">$RANDOM</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        <span class="va">$RANDOM</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">$RANDOM</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>        <span class="va">$RANDOM</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        <span class="co"># and a fancy output</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;Hia! Here is your full arg list: '</span><span class="va">$*</span><span class="st">'&quot;</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    <span class="va">)</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="co"># let's do something special on exact match</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">[[</span> <span class="va">$2</span> <span class="ot">==</span> secret <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        <span class="va">COMPREPLY</span><span class="op">=</span><span class="va">(</span> <span class="st">&quot;YOU GOT IT!&quot;</span><span class="va">)</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">fi</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a><span class="bu">complete</span> <span class="at">-F</span> _complete_hia hia</span></code></pre></div>
+<p>Example session:</p>
+<pre class><code>$ source complete-hia.bash
+$ hia a&lt;TAB&gt;
+1476    29762
+14984   31708
+15184   Hia! Here is your full arg list: 'hia a hia'
+$ hia a&lt;TAB&gt;
+22726  3483
+24271  8982
+32492  Hia! Here is your full arg list: 'hia a hia'
+$ hia is it secret&lt;TAB&gt;
+$ hia is it YOU GOT IT!</code></pre>
+<p>There are many minor caveats like automatic prefix expansion
+when all alternatives match (make sure to check <strong>compgen</strong>).</p>
+<p>Let’s try arbitrary directory completion for <strong>cdc</strong> command
+introduced above.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">_cdc()</span> <span class="kw">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="bu">local</span> <span class="va">d</span> <span class="va">candidates</span><span class="op">=</span><span class="va">()</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="va">IFS</span><span class="op">=</span> <span class="bu">read</span> <span class="at">-r</span> <span class="at">-d</span> <span class="st">$'</span><span class="dt">\0</span><span class="st">'</span> <span class="va">d</span><span class="kw">;</span> <span class="cf">do</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">[[</span> <span class="va">$d</span> <span class="ot">==</span> <span class="st">'.'</span> <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="cf">continue</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>        <span class="va">candidates</span><span class="op">+=</span><span class="va">(</span><span class="st">&quot;</span><span class="va">${d</span><span class="op">#</span>./<span class="va">}</span><span class="st">&quot;)</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="st">    done &lt; &lt;(find -path &quot;</span><span class="pp">*</span>/<span class="va">$2</span><span class="st">&quot; -type d -print0 2&gt;/dev/null)</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="st">    COMPREPLY=(</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="st">        # multiple candidates, don't match on prefix. Just dump all.</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="st">        # Also always quote output</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="st">        &quot;</span><span class="va">${candidates</span><span class="op">[@]@</span><span class="va">Q}</span><span class="st">&quot;</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="st">    )</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="st">    if [[ </span><span class="va">${</span><span class="op">#</span><span class="va">candidates</span><span class="op">[@]</span><span class="va">}</span><span class="st"> -gt 1 ]]; then</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="st">        # If there is ambiguity do not mangle original argument</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="st">        COMPREPLY+=( &quot;</span><span class="va">${2}</span><span class="st">&quot; )</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="st">    fi</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="st">complete -F _cdc cdc</span></span></code></pre></div>
+<p>Here is the example session:</p>
+<pre class><code>~ $ cdc *rtlib-*
+'dev/git/nixpkgs/pkgs/development/python-modules/importlib-metadata'
+'dev/git/nixpkgs/pkgs/development/python-modules/importlib-resources'
+*rtlib-*
+~ $ cdc *rtlib-m*&lt;TAB&gt;
+~ $ cdc 'dev/git/nixpkgs/pkgs/development/python-modules/importlib-metadata'
+
+~ $ cdc curseofwar&lt;TAB&gt;
+curseofwar
+'dev/git/nixpkgs/pkgs/games/curseofwar'
+'portage/slyfox-gentoo/games-strategy/curseofwar'</code></pre>
+<p>I made trailing globs to be clunky to use on purpose as I use exact
+match most of the time. One could cook a version with many enhancements
+like <strong>find</strong>’s case-insensitive match or do something smarter around
+completion quoting.</p>
+<p>More info is at <a href="https://www.gnu.org/software/bash/manual/html_node/Programmable-Completion-Builtins.html">Programmable Completion Builtins</a>.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on August 23, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

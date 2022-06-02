@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: masking a package in gentoo overlay</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>masking a package in gentoo overlay</h1>
+
+            <p>It’s a post on how to selectively mask a ebuild in the overlay.
+The running example will be a package <strong>app-misc/foo</strong> using <strong>systemd</strong> (systemd
+is masked in selinux profiles).</p>
+<p>Here is how our ebuild looks like:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Copyright 1999-2017 Gentoo Foundation</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Distributed under the terms of the GNU General Public License v2</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="va">DESCRIPTION</span><span class="op">=</span><span class="st">&quot;An example package with a depend masked in selinux profiles.&quot;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="va">HOMEPAGE</span><span class="op">=</span><span class="st">&quot;https://trofi.github.io/&quot;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="va">KEYWORDS</span><span class="op">=</span><span class="st">&quot;~amd64 ~x86 ~ppc ~ppc64&quot;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="va">LICENSE</span><span class="op">=</span><span class="st">&quot;public-domain&quot;</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="va">SLOT</span><span class="op">=</span><span class="st">&quot;0&quot;</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="co"># systemd is masked on selinux profiles</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="va">DEPEND</span><span class="op">=</span><span class="st">&quot;sys-apps/systemd&quot;</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="va">RDEPEND</span><span class="op">=</span><span class="va">${DEPEND}</span></span></code></pre></div>
+<p>The problem with it is that it’s not usable on selinux profiles due to systemd mask:</p>
+<pre class><code>overlay-selective-mask-in-gentoo/app-misc $ repoman full
+
+RepoMan scours the neighborhood...
+  dependency.bad [fatal]        3
+   app-misc/foo/foo-0.ebuild: DEPEND: ~amd64(hardened/linux/amd64/no-multilib/selinux)
+['sys-apps/systemd']
+   app-misc/foo/foo-0.ebuild: DEPEND: ~amd64(hardened/linux/amd64/selinux)
+['sys-apps/systemd']
+   app-misc/foo/foo-0.ebuild: DEPEND: ~x86(hardened/linux/x86/selinux)
+['sys-apps/systemd']</code></pre>
+<p>Thus our goal is to mask this package on selinux profiles. Unfortunately it
+requires quite a few steps to do it:</p>
+<ol type="1">
+<li><p>Add <strong>profiles/profiles.desc</strong> file and populate it with all profiles we want
+to override.</p>
+<p>Repoman already shows us <strong>3</strong> profiles we need to override.</p>
+<p>We need to create <strong>profiles/profiles.desc</strong> file with the following contents:</p>
+<pre class><code>amd64           hardened/linux/amd64/selinux                            stable
+amd64           hardened/linux/amd64/no-multilib/selinux                stable
+x86             hardened/linux/x86/selinux                              stable</code></pre></li>
+<li><p>Create <strong>package.mask</strong> which we will use for our overrides.</p>
+<p>I’ve added our mask to new <strong>profiles/features/selinux/package.mask</strong> file:</p>
+<pre class><code># Sergei Trofimovich &lt;slyfox@gentoo.org&gt; (24 Jun 2016)
+# requires systemd (masked on selinux)
+app-misc/foo</code></pre></li>
+<li><p>Create profile overrides for each profile.</p>
+<p>Let’s look in detail on <strong>hardened/linux/x86/selinux</strong> profile. It’s override requires
+a single file.</p>
+<p>Let’s create <strong>profiles/hardened/linux/x86/selinux/parent</strong> with the following contents:</p>
+<pre class><code>gentoo:hardened/linux/x86/selinux
+:features/selinux</code></pre>
+<p>Here <strong>gentoo:hardened/linux/x86/selinux</strong> refers to parent profile and <strong>:features/selinux</strong>
+refers to our tiny mixin with single <strong>package.mask</strong>.</p></li>
+<li><p>Enable <strong>portage-2</strong> extension to <strong>metadata/layout.conf</strong>.</p>
+<p>Unfortunately <strong>[repo]:&lt;absolute-path&gt;</strong> is not described in <strong>PMS</strong> and is not portable across
+all Gentoo package managers.</p>
+<p>To enable it for portage we need to add the following in <strong>metadata/layout.conf</strong>:</p>
+<pre class><code>profile-formats = portage-2</code></pre></li>
+</ol>
+<p>Done!</p>
+<p>Now repoman is happy:</p>
+<pre class><code>overlay-selective-mask-in-gentoo/app-misc $ repoman full
+
+RepoMan scours the neighborhood...
+
+Note: use --without-mask to check KEYWORDS on dependencies of masked packages
+Note: use --include-dev (-d) to check dependencies for 'dev' profiles
+
+RepoMan sez: &quot;If everyone were like you, I'd be out of business!&quot;</code></pre>
+<p>Full example repository is available at: <a href="https://github.com/trofi/overlay-selective-mask-in-gentoo">https://github.com/trofi/overlay-selective-mask-in-gentoo</a></p>
+
+<div class="info">
+    Posted on June 24, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: default ssl certificates in gentoo</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>default ssl certificates in gentoo</h1>
+
+            <p>Некоторые программы в <strong>gentoo</strong> (<strong>apache</strong>, <strong>postfix</strong>) требуют наличия
+более-менее правильных <strong>SSL</strong> сертификатов. Ебилды этих пакетов занимаются
+автогенерацей таких сертификатов, которые потом хранятся в <strong>/etc/ssl/${PN}/</strong>.</p>
+<p>Генерируются они один раз и содержат всякую ерунду в информации о владельце сертификата.</p>
+<p>На одной из старых машин у меня истёк срок действия <strong>SSL</strong> сертификата и как следствие
+отвалился <strong>HTTPS</strong>. <strong>emerge -1 apache</strong> не помог. Я решил немного разобраться как
+(пере)генерить сертификаты.</p>
+<!--more-->
+<p>Для начала найдем, кто же и когда генерит эти сертификаты. Берем ебилд <strong>apache</strong>:
+<strong>${PORTDIR}/www-servers/apache/apache-2.2.17.ebuild</strong> -&gt; <strong>inherit apache-2</strong> -&gt;
+<strong>${PORTDIR}/eclass/apache-2.eclass</strong>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inherit</span> ... ssl-cert</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">apache-2_pkg_postinst()</span> <span class="kw">{</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="ex">use</span> ssl <span class="kw">&amp;&amp;</span> <span class="kw">[[</span> <span class="ot">!</span> <span class="ot">-e</span> <span class="st">&quot;</span><span class="va">${ROOT}</span><span class="st">/etc/ssl/apache2/server.pem&quot;</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">SSL_ORGANIZATION</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_ORGANIZATION</span><span class="op">:-</span>Apache HTTP Server<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="ex">install_cert</span> /etc/ssl/apache2/server</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span></code></pre></div>
+<p>Всё просто: если файла <strong>server.pem</strong> нет, то сертификаты генерятся. Итак,
+решение для самых ленивых:</p>
+<blockquote>
+<p>удалить файлы <strong>rm /etc/ssl/apache2/</strong>* и пересобрать <strong>emerge -1 apache</strong>.</p>
+</blockquote>
+<p>Теперь подробнее изучим функцию <strong>install_cert</strong> из <strong>ssl-cert.eclass</strong>.
+Оказывается, мы можем поизменять большинство параметров в <strong>gen_cnf</strong>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># These can be overridden in the ebuild</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_DAYS</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_DAYS</span><span class="op">:-</span>730<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_BITS</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_BITS</span><span class="op">:-</span>1024<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_COUNTRY</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_COUNTRY</span><span class="op">:-</span>US<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_STATE</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_STATE</span><span class="op">:-</span>California<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_LOCALITY</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_LOCALITY</span><span class="op">:-</span>Santa Barbara<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_ORGANIZATION</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_ORGANIZATION</span><span class="op">:-</span>SSL Server<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_UNIT</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_UNIT</span><span class="op">:-</span>For Testing Purposes Only<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_COMMONNAME</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_COMMONNAME</span><span class="op">:-</span>localhost<span class="va">}</span><span class="st">&quot;</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_EMAIL</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_EMAIL</span><span class="op">:-</span>root@localhost<span class="va">}</span><span class="st">&quot;</span></span></code></pre></div>
+<p>Так что можно выставить какие-то из этих переменных прямо в <strong>/etc/make.conf</strong>!
+Ставим <strong>SSL_DAYS</strong> побольше и больше не паримся.</p>
+<p>Чтобы получить чуть большую гибкость для генерации сертификатов напишем микроскрипт:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/bash</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> /etc/make.conf</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co"># эмулируем окружение, создаваемое 'ebuild.sh'</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="va">T</span><span class="op">=</span><span class="kw">`</span><span class="fu">mktemp</span> <span class="at">-d</span><span class="kw">`</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="fu">env</span> <span class="op">&gt;</span> <span class="st">&quot;</span><span class="va">${T}</span><span class="st">/environment&quot;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co"># всё дубово</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="fu">ebegin()</span> <span class="kw">{</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="at">-n</span> <span class="st">&quot;</span><span class="va">$@</span><span class="st"> ...&quot;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="fu">eend()</span> <span class="kw">{</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">[[</span> <span class="va">$@</span> <span class="ot">-eq</span> 0 <span class="kw">]]</span> <span class="kw">&amp;&amp;</span> <span class="bu">echo</span> <span class="st">&quot;OK&quot;</span> <span class="kw">||</span> <span class="bu">echo</span> <span class="st">&quot;FAIL&quot;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="fu">ewarn()</span> <span class="kw">{</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">&quot;WARN: </span><span class="va">$@</span><span class="st">&quot;</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="fu">eerror()</span> <span class="kw">{</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">&quot;ERROR: </span><span class="va">$@</span><span class="st">&quot;</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> <span class="st">&quot;</span><span class="va">$PORTDIR</span><span class="st">/eclass/ssl-cert.eclass&quot;</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="co"># магия!</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="ex">install_cert</span> ./test-certs/server</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="at">-rf</span> <span class="at">--</span> <span class="st">&quot;</span><span class="va">${T}</span><span class="st">&quot;</span></span></code></pre></div>
+<p><strong>“$PORTDIR/eclass/ssl-cert.eclass”</strong> лучше скопировать куда-нибудь
+и немного его подправить. Можно, например, задать:</p>
+<ul>
+<li>более вменяемые источники энтропии (<strong>SSL_RANDOM</strong> в <strong>gen_cnf</strong>)</li>
+<li>умолчальный конфиг <strong>/etc/ssl/openssl.conf</strong></li>
+<li>что-нибудь еще</li>
+</ul>
+
+<div class="info">
+    Posted on May  3, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

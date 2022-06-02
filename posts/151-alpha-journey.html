@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: alpha journey</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>alpha journey</h1>
+
+            <p>Сегодня решил проверить, не починили ли сборку на <strong>ghc</strong> альфе.
+<a href="https://github.com/gentoo-haskell/gentoo-haskell/blob/master/dev-lang/ghc/files/ghc-7.2.1-fix-exotic-unreg-builds.patch">Патч Саймона</a>
+окончательно всё исправил, и теперь у нас есть надежда на <strong>ghc-7.2</strong> с полным
+составом поддерживаемых архитектур.</p>
+<p>На радостях я решил посмотреть, как там жизнь на <strong>alpha</strong> и увидел, что
+демон <strong>nrpe</strong> засирает <strong>dmesg</strong> невыровненным доступом:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> dmesg</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">do_entUnaUser:</span> 2 callbacks suppressed</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">nrpe</span><span class="er">(</span><span class="ex">1185</span><span class="kw">)</span><span class="bu">:</span> unaligned trap at 000002000011ab94: 00000001200401ec 2d 31</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">nrpe</span><span class="er">(</span><span class="ex">1185</span><span class="kw">)</span><span class="bu">:</span> unaligned trap at 000002000011ab94: 00000001200401f4 2d 31</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="ex">nrpe</span><span class="er">(</span><span class="ex">1185</span><span class="kw">)</span><span class="bu">:</span> unaligned trap at 000002000011ab94: 00000001200401fc 2d 31</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="ex">nrpe</span><span class="er">(</span><span class="ex">1185</span><span class="kw">)</span><span class="bu">:</span> unaligned trap at 000002000011ab94: 0000000120040204 2d 31</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="ex">nrpe</span><span class="er">(</span><span class="ex">1185</span><span class="kw">)</span><span class="bu">:</span> unaligned trap at 000002000011ab94: 000000012004020c 2d 31</span></code></pre></div>
+<p>Решил попробовать исправить. <a href="http://www.gentoo.org/proj/en/base/alpha/doc/alpha-porting-guide.xml#doc_chap3">Здесь</a>
+прочитал про хак с включением <strong>SIGBUG</strong> на <strong>unaligned access</strong> через очень странный
+недокументированный и неэкспортируемый <strong>glibc</strong> системный вызов <strong>osf_setsysinfo</strong>.</p>
+<p>Естественно, программа не работала :] Результат - <a href="http://marc.info/?l=linux-alpha&amp;m=131307612327236&amp;w=2">патч в ядро</a>.
+Не знаю, помогает или нет (ядро грузнуть гнегде :]), но найти ошибку заняло минут 20
+таращенья в <strong>git log</strong>.
+<strong>mattst88</strong> подсказал, что для поиска таких штук еще есть <strong>prctl</strong> (и я дописал
+упоминание о нем в док).</p>
+<p>На <strong>arm</strong> я <strong>unaligned access</strong> искал с помощью обычных <strong>breakpoints</strong> в <strong>gdb</strong>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gdb <span class="at">-p</span> <span class="va">$pid</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="cf">break</span> <span class="ex">*</span><span class="er">(</span><span class="ex">0x</span><span class="va">${pc</span><span class="op">-</span>of-faulty-insn<span class="va">}</span><span class="kw">)</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="cf">continue</span></span></code></pre></div>
+<p>Тут это не сработало из-за того, что <strong>nrpe</strong> довольно корявый, постоянно форкающийся,
+снижающий привилегии маложивущий демон. Пришлось немного повозиться, чтобы вычислить,
+что ошибка в <strong>openssl</strong>. Правда, я ее
+еще не до конца отследил.</p>
+<p>Зато нашел баг в <strong>strace</strong>. <a href="http://strace.git.sourceforge.net/git/gitweb.cgi?p=strace/strace;a=commitdiff;h=1a53e34">Патч в апстриме</a>.</p>
+<p><strong>UPDATE:</strong></p>
+<p>Баг таки выловил и их там оказалось даже 2!
+Даже патч послал, но апстрим <a href="http://cvs.openssl.org/chngview?cn=21233">оказался быстрее</a>.</p>
+
+<div class="info">
+    Posted on August 11, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

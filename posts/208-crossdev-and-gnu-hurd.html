@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: crossdev and GNU Hurd</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>crossdev and GNU Hurd</h1>
+
+            <p>Tl;DR: <strong>crossdev</strong> is a tool to generate a cross-compiler for you in <strong>gentoo</strong>
+and with some hacks (see below) you can even cross-compile to <strong>hurd</strong>!</p>
+<p><strong>FOSDEM</strong> 2018 conference happened recently and a lot of cool talks
+tool place there. The full list counts <a href="https://fosdem.org/2018/schedule/events/">689 events</a>!</p>
+<p><a href="https://fosdem.org/2018/schedule/event/microkernel_hurd_pci_arbiter/">Hurd’s PCI arbiter</a>
+was a nice one. I never actually tried <strong>hurd</strong> before and thought to give it a try in a VM.</p>
+<p>Debian already provides full <strong>hurd</strong> installer (<a href="https://www.debian.org/ports/hurd/hurd-install">installation manual</a>)
+and I picked it. Hurd works surprisingly well for a such an understaffed project!
+Installation process is very simple: it’s a typical <strong>debian</strong> CD which asks you
+for a few details about final system (same as for <strong>linux</strong>) and you get your OS booted.</p>
+<p><strong>Hurd</strong> has a ton of <strong>debian</strong> software already built and working
+(like 80% of the whole repo). Even <strong>GHC</strong> is ported there. While at
+it I grabbed all the tiny <strong>GHC</strong> patches related to <strong>hurd</strong> from
+Debian and pushed them upstream:</p>
+<ul>
+<li><a href="http://git.haskell.org/ghc.git/commitdiff/0693b0b0500236a3dec933350a13f1b0e8c1cb54">PIC support</a></li>
+<li><a href="http://git.haskell.org/ghc.git/commitdiff/1522cf05c9c3e9afd3ef9c7f3f419460c41488d9">allow canonical hurd tuple</a></li>
+</ul>
+<p>Now plain <strong>./configure &amp;&amp; make &amp;&amp; make test</strong> just works.</p>
+<p>Hurd supports only 32-bit x86 CPUs and does not support SMP (only one CPU is available).
+That makes building heaviweight stuff (like <strong>GHC</strong>) in a virtual machine a slow process.</p>
+<p>To speed things up a bit I decided to build a cross-compiler from
+<strong>gentoo linux</strong> to <strong>hurd</strong> with the help of <strong>crossdev</strong>. What
+does it take to support bootstrap like that? Let’s see!</p>
+<p>To get the idea of how to cross-compile to another OS let’s check
+how typical <strong>linux</strong> to <strong>linux</strong> case looks like.</p>
+<p>Normally aiming <strong>gcc</strong> at another <strong>linux</strong>-<strong>glibc</strong> target takes the following steps:</p>
+<pre class><code>- install cross-binutils
+- install system headers (kernel headers and glibc headers):
+- install minimal gcc without glibc support (not able to link final executables yet)
+- install complete glibc (gcc will need crt.o files)
+- install full gcc (able to link final binaries for C and C++)</code></pre>
+<p>In <strong>gentoo</strong> <strong>crossdev</strong> does all the above automatically by running
+<strong>emerge</strong> a few times for you. I wrote a more up-to-date <a href="https://gitweb.gentoo.org/proj/crossdev.git/plain/README">crossdev
+README</a> to
+describe a few details of what is happening when you run <strong>crossdev -t &lt;target&gt;</strong>.</p>
+<p><strong>hurd-glibc</strong> is not fundamentally different from <strong>linux-glibc</strong> case.
+Only a few packages need to change their names, namely:</p>
+<pre class><code>- install cross-binutils
+- install gnumach-headers (kernel headers part 1)
+- [NEW] install cross-mig tool (Mach Interface Generator, a flavour of IDL compiler)
+- install hurd-headers and glibc-headers (kernel headers part 2 and libc headers)
+- install minimal gcc without libc support (not able to link final executables yet)
+- install complete libc (gcc will need crt.o files)
+- install full gcc (able to link final binaries for C and C++)</code></pre>
+<p>The only change from <strong>linux</strong> is the <strong>cross-mig</strong> tool. I’ve collected ebuilds needed
+in <a href="https://github.com/trofi/gentoo-hurd">gentoo-hurd overlay</a>.</p>
+<p>Here is how one gets hurd <strong>cross-compiler</strong> with today’s <strong>crossdev-99999999</strong>:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/trofi/gentoo-hurd.git</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="va">HURD_OVERLAY</span><span class="op">=</span><span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span>/gentoo-hurd</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="va">CROSS_OVERLAY</span><span class="op">=</span><span class="va">$(</span><span class="ex">portageq</span> get_repo_path / crossdev<span class="va">)</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="va">TARGET_TUPLE</span><span class="op">=</span>i586-pc-gnu</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="co"># this will fail around glibc, it's ok we'll take on manually from there</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="ex">crossdev</span> <span class="at">--l</span> 9999 <span class="at">-t</span> crossdev <span class="at">-t</span> <span class="va">${TARGET_TUPLE}</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="fu">ln</span> <span class="at">-s</span> <span class="st">&quot;</span><span class="va">${HURD_OVERLAY}</span><span class="st">&quot;</span>/sys-kernel/gnumach <span class="va">${CROSS_OVERLAY}</span>/cross-<span class="va">${TARGET_TUPLE}</span>/</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="fu">ln</span> <span class="at">-s</span> <span class="st">&quot;</span><span class="va">${HURD_OVERLAY}</span><span class="st">&quot;</span>/dev-util/mig <span class="va">${CROSS_OVERLAY}</span>/cross-<span class="va">${TARGET_TUPLE}</span>/</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="fu">ln</span> <span class="at">-s</span> <span class="st">&quot;</span><span class="va">${HURD_OVERLAY}</span><span class="st">&quot;</span>/sys-kernel/hurd <span class="va">${CROSS_OVERLAY}</span>/cross-<span class="va">${TARGET_TUPLE}</span>/</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="ex">emerge</span> <span class="at">-C</span> cross-<span class="va">${TARGET_TUPLE}</span>/linux-headers</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="va">ACCEPT_KEYWORDS</span><span class="op">=</span><span class="st">'**'</span> <span class="va">USE</span><span class="op">=</span>headers-only  <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/gnumach</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="va">ACCEPT_KEYWORDS</span><span class="op">=</span><span class="st">'**'</span> <span class="va">USE</span><span class="op">=</span>headers-only  <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/mig</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="va">ACCEPT_KEYWORDS</span><span class="op">=</span><span class="st">'**'</span> <span class="va">USE</span><span class="op">=</span>headers-only  <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/hurd</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="va">ACCEPT_KEYWORDS</span><span class="op">=</span><span class="st">'**'</span> <span class="va">USE</span><span class="op">=</span>headers-only  <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/glibc</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>                     <span class="va">USE</span><span class="op">=</span><span class="st">&quot;-*&quot;</span>          <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/gcc</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="va">ACCEPT_KEYWORDS</span><span class="op">=</span><span class="st">'**'</span> <span class="va">USE</span><span class="op">=</span>-headers-only <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/glibc</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>                     <span class="va">USE</span><span class="op">=</span><span class="st">&quot;-sanitize&quot;</span>   <span class="ex">emerge</span> <span class="at">-v1</span> cross-<span class="va">${TARGET_TUPLE}</span>/gcc</span></code></pre></div>
+<p>Done!</p>
+<p>A few things to note here:</p>
+<ul>
+<li>gentoo-hurd overlay is used for new <strong>gnumach</strong>, <strong>mig</strong> and <strong>hurd</strong> packages</li>
+<li>symlinks to new packages are created manually (crossdev fix pending, wait on packages to get into ::gentoo)</li>
+<li>uninstall linux-headers as our target is not linux (crossdev fix pending)</li>
+<li>use ACCEPT_KEYWORDS=’**’ for many packages (need to decide on final keywords, maybe x86-hurd)</li>
+<li>all crossdev phases are ran manually</li>
+<li>only glibc git version is working as changes were merged
+upstream <a href="https://sourceware.org/ml/libc-alpha/2018-04/msg00017.html">very recently</a>.</li>
+<li>USE=”sanitize” is disabled in final gcc because it’s broken for hurd</li>
+</ul>
+<p>Now you can go to <strong>/usr/${TARGET_TUPLE}/etc/portage/</strong> and tweak the defaults for <strong>ELIBC</strong>, <strong>KERNEL</strong>
+and other things.</p>
+<p>Basic sanity check for a toolchain:</p>
+<pre class><code>$ i586-pc-gnu-gcc main.c -o main
+$ file main
+main: ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV), dynamically linked, interpreter /lib/ld.so, for GNU/Hurd 0.0.0, with debug_info, not stripped</code></pre>
+<p>Copying to the target <strong>hurd</strong> VM and runnig there also works as expected.</p>
+<p>I use <strong>crossdev -t x86_64-HEAD-linux-gnu</strong> to have <strong>GHC</strong> built against <strong>HEAD</strong> in parallel
+to system’s <strong>GHC</strong>. Let’s use that for more heavyweight test to build a <strong>GHC</strong> cross-compiler to hurd:</p>
+<pre class><code>$ EXTRA_ECONF=--with-ghc=x86_64-HEAD-linux-gnu-ghc emerge -v1 cross-i586-pc-gnu/ghc --quiet-build=n</code></pre>
+<p>This fails as:</p>
+<pre class><code>rts/posix/Signals.c:398:28: error:
+     note: each undeclared identifier is reported only once for each function it appears in
+    |
+398 |         action.sa_flags |= SA_SIGINFO;
+    |                            ^</code></pre>
+<p>Which hints at lack of <strong>SA_SIGINFO</strong> support in upstream <strong>glibc.git</strong>.
+<strong>Debian</strong> as an out-of-tree
+<a href="https://sources.debian.org/patches/glibc/2.27-3/hurd-i386/tg-hurdsig-SA_SIGINFO.diff/">tg-hurdsig-SA_SIGINFO.diff patch</a>
+to provide these defines (as least it’s not our local toolchain breakage).
+The outcome is positive: we have got very far into cross-compiling and
+hit real portability issues. Woohoo!</p>
+<h1 id="final-words">Final words</h1>
+<p>As long as underlying toolchains are not too complicated building cross-compilers in <strong>gentoo</strong> is trivial.
+Next tiny step is to cross-build hurd kernel itself and run it in qemu. Ebuilds in <strong>gentoo-hurd</strong> are not
+yet ready for it but tweaking them should be easy.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on April 14, 2018 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

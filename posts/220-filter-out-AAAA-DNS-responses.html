@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: Filter out AAAA DNS responses</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>Filter out AAAA DNS responses</h1>
+
+            <h1 id="tldr-with-rpz-we-can-hide-aaaa-records-while-preserving-other-records">Tl;DR: with RPZ we can hide AAAA records while preserving other records</h1>
+<p>For those who look up the way to filter out AAAA records
+in their local caching DNS server here is my <strong>unbound</strong>
+snippet for a single <strong>ipv6</strong> address:</p>
+<pre class><code>$ cat /etc/unbound/rpz.home
+$ORIGIN rpz.home.
+;; fails to resolve: https://bugs.gentoo.org/742326
+;; block 2607:fcc0:4:ffff::4/128 -&gt; NODATA (CNAME *.)
+128.4.0.0.0.ffff.4.fcc0.2607.rpz-ip.rpz.home. CNAME *.
+
+$ cat /etc/unbound/unbound.conf
+server:
+    ... usual configuration goes here
+    module-config: &quot;respip validator iterator&quot;
+
+rpz:
+    name: rpz.home.
+    zonefile: /etc/unbound/rpz.home</code></pre>
+<p>Resolver can’t see the <strong>ipv6</strong> address, only <strong>ipv4</strong>:</p>
+<pre class><code>$ dig bugs.gentoo.org AAAA @8.8.8.8
+gannet.gentoo.org.      21599   IN      AAAA    2607:fcc0:4:ffff::4
+$ dig bugs.gentoo.org AAAA | fgrep AAAA
+# nothing
+
+$ dig bugs.gentoo.org A @8.8.8.8
+gannet.gentoo.org.      21599   IN      A       204.187.15.4
+$ dig bugs.gentoo.org A
+gannet.gentoo.org.      20091   IN      A       204.187.15.4</code></pre>
+<p>You can do full subnetworks as well.</p>
+<h1 id="why">Why?</h1>
+<p>The other day I tried to reach <strong>bugs.gentoo.org</strong> programmatically
+over HTTP API and observed traffic blackholing. <strong>wget</strong> was also
+showing hangups:</p>
+<pre class><code>$ wget bugs.gentoo.org
+--2020-09-19 09:24:22--  http://bugs.gentoo.org/
+Resolving bugs.gentoo.org... 2607:fcc0:4:ffff::4, 204.187.15.4
+Connecting to bugs.gentoo.org|2607:fcc0:4:ffff::4|:80...
+# hung up
+^C
+
+$ wget -4 bugs.gentoo.org
+--2020-09-19 09:25:02--  http://bugs.gentoo.org/
+Resolving bugs.gentoo.org... 204.187.15.4
+Connecting to bugs.gentoo.org|204.187.15.4|:80... connected.
+HTTP request sent, awaiting response... 301 Moved Permanently
+...
+2020-09-19 09:25:03 (1.08 MB/s) - 'index.html' saved [13934]</code></pre>
+<p>As a workaround I added <strong>AAAA</strong> response filtering locally as
+specified in <strong>TL;DR</strong> to unblock the scripts.</p>
+
+<div class="info">
+    Posted on November  7, 2020 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: ia64 machine emulation</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>ia64 machine emulation</h1>
+
+            <h1 id="tldr">TL;DR</h1>
+<p>There is a working <strong>ia64</strong> machine simulator: <a href="http://www.gelato.unsw.edu.au/IA64wiki/SkiSimulator">ski</a>.
+It can be used to test linux kernel on any host architecture. Or at least on x86_64 :)</p>
+<p><strong>ski</strong> also supports direct binary translation (in <strong>qemu-user</strong> style) but the simulated kernel is too old.
+Modern glibc requires a few recent system calls to make binary translation work. Adding missing syscalls
+should not be too hard. But I didn’t try yet :)</p>
+<h1 id="the-problem">The problem</h1>
+<p>Roughly a year ago I tweaked <a href="http://trofi.github.io/posts/189-glibc-on-ia64-or-how-relocations-bootstrap.html">gcc code generation</a>
+on <strong>ia64</strong> to handle local symbol references in a slightly more efficient way. All was well: I was able to restore <strong>ghc-7.10.3</strong> on <strong>ia64</strong>.</p>
+<p>But yesterday I got <a href="https://bugs.gentoo.org/601014">a report</a> that my patch breaks linux kernel
+startup on <strong>ia64</strong>. Uh-oh.</p>
+<p>The error did look very generic (not driver-specific):</p>
+<pre class><code>:: Loading from mdadm: raid0: invalid slot number 1 for IMM64
+ raid1: invalid slot number 1 for IMM64
+ async_tx: invalid slot number 1 for IMM64
+ async_tx: invalid slot number 1 for IMM64
+ async_tx: invalid slot number 1 for IMM64
+ raid10: invalid slot number 1 for IMM64
+:: Loading from fs: jbd2: invalid slot number 1 for IMM64
+ jbd2: invalid slot number 1 for IMM64
+ jbd2: invalid slot number 1 for IMM64
+ sunrpc: invalid slot number 1 for IMM64
+ fuse: invalid slot number 1 for IMM64</code></pre>
+<p>Kernel fails to load some modules.</p>
+<p>Last time I looked at <a href="https://lkml.org/lkml/2011/12/14/324">a similar problem</a> in sparc land
+where kernel failed to boot early on <strong>sparc32</strong> if kernel was built with <strong>CFLAGS=-Os</strong>.
+In that case the most complex part was to understand how early relocations were fixed up at boot stage.
+The eventual fix was <a href="https://lkml.org/lkml/2011/12/14/348">trivial</a>.</p>
+<p>Back to <strong>ia64</strong>. I suspected it would be something similar as gcc patch did clearly change
+type of commonly used relocations. In this case these are not early relocations of kernel itself
+but <strong>ELF</strong> relocation processing of kernel modules (<strong>.ko</strong>) when they are loaded.</p>
+<p>Below is the snippet of linux kernel that generates the <strong>invalid slot number 1 for IMM64</strong> error:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// from module.c:</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>apply_imm64 <span class="op">(</span><span class="kw">struct</span> module <span class="op">*</span>mod<span class="op">,</span> <span class="kw">struct</span> insn <span class="op">*</span>insn<span class="op">,</span> <span class="dt">uint64_t</span> val<span class="op">)</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>slot<span class="op">(</span>insn<span class="op">)</span> <span class="op">!=</span> <span class="dv">2</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        printk<span class="op">(</span>KERN_ERR <span class="st">&quot;%s: invalid slot number %d for IMM64</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>           mod<span class="op">-&gt;</span>name<span class="op">,</span> slot<span class="op">(</span>insn<span class="op">));</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    ia64_patch_imm64<span class="op">((</span>u64<span class="op">)</span> insn<span class="op">,</span> val<span class="op">);</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="co">// from patch.c:</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>ia64_patch_imm64 <span class="op">(</span>u64 insn_addr<span class="op">,</span> u64 val<span class="op">)</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* The assembler may generate offset pointing to either slot 1</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="co">       or slot 2 for a long (2-slot) instruction, occupying slots 1</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="co">       and 2.  */</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>      insn_addr <span class="op">&amp;=</span> <span class="op">-</span><span class="dv">16</span><span class="bu">UL</span><span class="op">;</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    ia64_patch<span class="op">(</span>insn_addr <span class="op">+</span> <span class="dv">2</span><span class="op">,</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>       <span class="bn">0x01fffefe000</span><span class="bu">UL</span><span class="op">,</span> <span class="op">(</span>  <span class="op">((</span>val <span class="op">&amp;</span> <span class="bn">0x8000000000000000</span><span class="bu">UL</span><span class="op">)</span> <span class="op">&gt;&gt;</span> <span class="dv">27</span><span class="op">)</span> <span class="co">/* bit 63 -&gt; 36 */</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>         <span class="op">|</span> <span class="op">((</span>val <span class="op">&amp;</span> <span class="bn">0x0000000000200000</span><span class="bu">UL</span><span class="op">)</span> <span class="op">&lt;&lt;</span>  <span class="dv">0</span><span class="op">)</span> <span class="co">/* bit 21 -&gt; 21 */</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>         <span class="op">|</span> <span class="op">((</span>val <span class="op">&amp;</span> <span class="bn">0x00000000001f0000</span><span class="bu">UL</span><span class="op">)</span> <span class="op">&lt;&lt;</span>  <span class="dv">6</span><span class="op">)</span> <span class="co">/* bit 16 -&gt; 22 */</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>         <span class="op">|</span> <span class="op">((</span>val <span class="op">&amp;</span> <span class="bn">0x000000000000ff80</span><span class="bu">UL</span><span class="op">)</span> <span class="op">&lt;&lt;</span> <span class="dv">20</span><span class="op">)</span> <span class="co">/* bit  7 -&gt; 27 */</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>         <span class="op">|</span> <span class="op">((</span>val <span class="op">&amp;</span> <span class="bn">0x000000000000007f</span><span class="bu">UL</span><span class="op">)</span> <span class="op">&lt;&lt;</span> <span class="dv">13</span><span class="op">)</span> <span class="co">/* bit  0 -&gt; 13 */</span><span class="op">));</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    ia64_patch<span class="op">(</span>insn_addr <span class="op">+</span> <span class="dv">1</span><span class="op">,</span> <span class="bn">0x1ffffffffff</span><span class="bu">UL</span><span class="op">,</span> val <span class="op">&gt;&gt;</span> <span class="dv">22</span><span class="op">);</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>apply_imm64</strong> does a straightforward thing: it applies new 64-bit immediate value
+into existing instruction at <strong>insns</strong> address.</p>
+<p>Both modules are worth looking at as a whole:</p>
+<ul>
+<li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/module.c">module.c</a></li>
+<li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/patch.c">patch.c</a></li>
+</ul>
+<p>Comparing to <strong>sparc32</strong> case this looks like a normal relocation handling. Stuffing <strong>imm64</strong> value into 128-bit
+instruction requires quite a bit of bit shift acrobatics :)</p>
+<p><strong>ia64_patch_imm64</strong> comment suggests function can handle <strong>slot=1</strong> and <strong>slot=2</strong> cases while
+<strong>apply_imm64</strong> only accepts <strong>slot=2</strong> case.</p>
+<p>Looking at past history of <strong>patch.c</strong> i found <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9c184a073bfd650cc791956d6ca79725bb682716">this commit</a>.
+It extends support for <strong>slot=1</strong> relocation in a trivial way:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/patch.c</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/patch.c</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -64,22 +64,30 @@ ia64_patch (u64 insn_addr, u64 mask, u64 val)</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a> void</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a> ia64_patch_imm64 (u64 insn_addr, u64 val)</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a> {</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="st">-       ia64_patch(insn_addr,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="va">+       /* The assembler may generate offset pointing to either slot 1</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="va">+          or slot 2 for a long (2-slot) instruction, occupying slots 1</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="va">+          and 2.  */</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="va">+       insn_addr &amp;= -16UL;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="va">+       ia64_patch(insn_addr + 2,</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>                   0x01fffefe000UL, (  ((val &amp; 0x8000000000000000UL) &gt;&gt; 27) /* bit 63 -&gt; 36 */</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>                                     | ((val &amp; 0x0000000000200000UL) &lt;&lt;  0) /* bit 21 -&gt; 21 */</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>                                     | ((val &amp; 0x00000000001f0000UL) &lt;&lt;  6) /* bit 16 -&gt; 22 */</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>                                     | ((val &amp; 0x000000000000ff80UL) &lt;&lt; 20) /* bit  7 -&gt; 27 */</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>                                     | ((val &amp; 0x000000000000007fUL) &lt;&lt; 13) /* bit  0 -&gt; 13 */));</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="st">-       ia64_patch(insn_addr - 1, 0x1ffffffffffUL, val &gt;&gt; 22);</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="va">+       ia64_patch(insn_addr + 1, 0x1ffffffffffUL, val &gt;&gt; 22);</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>The <a href="https://www.sourceware.org/bugzilla/show_bug.cgi?id=1433">bug</a> in commit message explains why the patch was needed.</p>
+<p>What happens there is:</p>
+<p><strong>ia64</strong> has 128-bit 3-tuple (or 3-slot) “instruction bundle” format: <strong>5 bundle tag bits + 3 instructions * 41-bit = 128 bits</strong>.
+41 bit is not enough to hold 64-bit immediate. Some 2-slot instructions allow to encode 64-bit immediate operand (for example <strong>mov r1=imm64</strong>).</p>
+<p>Sometimes linker needs to place a relocation for that <strong>imm64</strong> (say, when <strong>imm64</strong> value is an address). That relocation points to one of the instruction
+slots in instruction bundle as <strong>&lt;bundle_address&gt;+slot_number</strong>. In case of 2-slot instructions both <strong>&lt;bundle_address&gt;+1</strong> and <strong>&lt;bundle_address&gt;+2</strong>
+are valid references to <strong>imm64</strong> value described by relocation. It’s up to assembler which slot number to choose.</p>
+<p>But kernel used to handle only <strong>&lt;bundle_address&gt;+1</strong> case.</p>
+<p>Given that <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9c184a073bfd650cc791956d6ca79725bb682716">the patch</a>
+is in kernel tree since 2005 we can safely lift <strong>slot=1</strong> restriction from <strong>apply_imm64</strong> (and <strong>apply_imm60</strong> while at it):</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/module.c</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/module.c</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -153,7 +153,7 @@ slot (const struct insn *insn)</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a> static int</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a> apply_imm64 (struct module *mod, struct insn *insn, uint64_t val)</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a> {</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="st">-       if (slot(insn) != 2) {</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="va">+       if (slot(insn) != 1 &amp;&amp; slot(insn) != 2) {</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>                printk(KERN_ERR &quot;%s: invalid slot number %d for IMM64\n&quot;,</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>                       mod-&gt;name, slot(insn));</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>                return 0;</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -165,7 +165,7 @@ apply_imm64 (struct module *mod, struct insn *insn, uint64_t val)</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a> static int</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a> apply_imm60 (struct module *mod, struct insn *insn, uint64_t val)</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a> {</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="st">-       if (slot(insn) != 2) {</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="va">+       if (slot(insn) != 1 &amp;&amp; slot(insn) != 2) {</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>                printk(KERN_ERR &quot;%s: invalid slot number %d for IMM60\n&quot;,</span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>                       mod-&gt;name, slot(insn));</span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>                return 0;</span></code></pre></div>
+<p>Sent the same patch <a href="https://lkml.org/lkml/2017/3/19/173">upstream</a>.</p>
+<h1 id="testing-the-patch">Testing the patch</h1>
+<p>That was the theory. But I didn’t have a spare machine to try a potentially bad kernel on. Normally I use <strong>qemu-system</strong>
+emulation like <strong>qemu-system-sparc</strong>. But <strong>ia64</strong> is one of those rare beasts that are not supported by qemu yet. I’ve found a bunch
+of <strong>qemu-ia64</strong> GSOC projects but none of them got to booting anything.</p>
+<p>I did encounter <strong>ski</strong> before but did not manage to start anything in it.</p>
+<p><strong>ski</strong> can do both full system emulation and userland emulation: <a href="http://www.gelato.unsw.edu.au/IA64wiki/SkiSimulator">wiki page</a>.</p>
+<p><strong>ski</strong> is an old piece of software: it requires <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/app-emulation/ski/files">some fixes</a> for
+modern toolchain. But otherwise system emulation just works!</p>
+<p>Userland emulation is not so lucky. It does not know of syscalls
+added for the past 15 years into the linux kernel. Should not be too
+hard to add them. I didn’t try yet :)</p>
+<h1 id="ski-linux-boot-howto">ski linux boot howto</h1>
+<p>So is it hard to boot the kernel?</p>
+<p>Here is a step-by-step instruction to get <strong>ia64</strong> kernel booted:</p>
+<ol type="1">
+<li>Build <strong>ski</strong>: <strong>emerge -1 ski</strong></li>
+<li>Build <strong>ia64</strong> crosscompiler: <strong>crossdev ia64-unknown-linux-gnu</strong></li>
+<li>Build <strong>ia64</strong> kernel:</li>
+</ol>
+<pre class><code>$ make defconfig sim_config
+$ ARCH=ia64 CROSS_COMPILE=ia64-unknown-linux-gnu- make</code></pre>
+<ol start="4" type="1">
+<li>Build (for example) <strong>bash</strong> for <strong>ia64</strong>: <strong>ARCH=ia64 emerge-ia64-unknown-linux-gnu -1 bash</strong></li>
+<li>Prepare disk image (I rsynced my <strong>./root</strong> and <strong>/usr/ia64-unknown-linux-gnu</strong> as-is):</li>
+</ol>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cat make_img.sh</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co"># 1G</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="bu">[</span> <span class="ot">!</span> <span class="ot">-f</span> sdc <span class="bu">]</span><span class="kw">;</span> <span class="cf">then</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="fu">dd</span> of=sdc if=/dev/zero bs=512 count=2097151</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">ls</span> <span class="at">-lh</span> sdc</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="ex">/sbin/mke2fs</span> sdc</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> mount <span class="at">-t</span> ext2 <span class="at">-oloop</span> sdc ./mnt</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> rsync <span class="at">-av</span> ./root/ ./mnt/</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> rsync <span class="at">-av</span> /usr/ia64-unknown-linux-gnu/ ./mnt/</span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> umount ./mnt</span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./make_img.sh</span></code></pre></div>
+<ol start="6" type="1">
+<li>Boot the thing: <strong>bski arch/ia64/hp/sim/boot/bootloader vmlinux root=/dev/sda simscsi=./sd simeth=eth0 init=/bin/bash PATH=/bin rw</strong></li>
+</ol>
+<p>Done!</p>
+<p>I did install a bunch of other tools there to load modules, format a btrfs filesystem and other toys.</p>
+<pre class><code>loading vmlinux...
+starting kernel...
+Linux version 4.11.0-rc2-00360-gbb62600ffd6e (slyfox@sf) (gcc version 5.4.0 (Gentoo 5.4.0-r3 p1.3, pie-0.6.5) ) #9 SMP PREEMPT Sat Mar 18 20:51:03 GMT 2017
+EFI v1.00 by Hewlett-Packard:
+efi:  SALsystab=0x10b9d0 
+warning: unable to switch EFI into virtual mode (status=9223372036854775811)
+No I/O port range found in EFI memory map, falling back to AR.KR0 (0xffffc000000)
+console [simcons0] enabled
+warning: skipping physical page 0
+...
+bash: cannot set terminal process group (-1): Inappropriate ioctl for device
+bash: no job control in this shell
+
+random: crng init done
+I have no name!@(none) / # uname -a
+Linux (none) 4.11.0-rc2-00360-gbb62600ffd6e #9 SMP PREEMPT Sat Mar 18 20:51:03 GMT 2017 ia64 GNU/Linux
+I have no name!@(none) / # cat /proc/cpuinfo 
+processor  : 0
+vendor     : HP Ski Simulator
+arch       : IA-64
+family     : 31
+model      : 0
+model name : McKinley
+revision   : 0
+archrev    : 0
+features   : branchlong, 16-byte atomic ops
+cpu number : 0
+cpu regs   : 4
+cpu MHz    : 2.000
+itc MHz    : 2.000000
+BogoMIPS   : 1.22
+siblings   : 1</code></pre>
+<p>2 MHz is not the fastest box in the world but it runs userspace just fine.</p>
+<p>That’s it!</p>
+<p>So far btrfs seems to work on ia64. Looks like my fix is not that bad after all :)</p>
+<p>Random facts:</p>
+<ul>
+<li><strong>ski</strong> needs minimal tweaking to boot up an <strong>ia64</strong> VM</li>
+<li><strong>ia64</strong> <strong>ISA</strong> in <strong>ski</strong> is complete enough to boot kernel and userspace</li>
+<li><strong>ia64</strong> simulation is very slow. I didn’t risk running <strong>gcc</strong> in a VM.</li>
+<li><strong>strace</strong> did not work in a VM. Don’t know why. I suspect incomplete breakpoint implementation.</li>
+<li><strong>ia64</strong> page size is 16K. It means btrfs filesystem formatted on <strong>ia64</strong> can’t be mounted on <strong>x86_64</strong>.</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on March 19, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

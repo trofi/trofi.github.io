@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: debuigging LTO builds</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>debuigging LTO builds</h1>
+
+            <h1 id="lto">LTO</h1>
+<p>Link-Time Optimizationis a way to unlock many interprocedural
+optimizations across modules (across <strong>.c</strong> files). Normally
+these optimizations applied within a file.</p>
+<p>It is a great opportunity to get smaller and faster programs
+for free: dead code elimination and inliner sees the whole program. And
+it is also an endless pit of bugs you can get yourself into without an easy way to
+debug it: changes in one <strong>.c</strong> file can expose surprising behaviour
+in another <strong>.c</strong> file. That is not very friendly to <strong>printf</strong> debugging
+technique.</p>
+<p>But not all hope is lost! We can get a lot of detail back from the compiler
+if something goes wrong.</p>
+<p>This post will focus on build-time debugging (opposed to run-time debugging).</p>
+<h1 id="simple-example">Simple example</h1>
+<p>Let’s see what we can infer just by looking at how gcc builds a tiny example.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// one-two.c</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  one<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span> <span class="op">}</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  two<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">2</span><span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// three-four.c</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> three<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">3</span><span class="op">;</span> <span class="op">}</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  four<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">4</span><span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main.c</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">int</span>  one<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">int</span> four<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">//</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> one<span class="op">()</span> <span class="op">+</span> four<span class="op">();</span> <span class="op">}</span></span></code></pre></div>
+<p>Here we defined three modules where each has a redundant unused function.
+Let’s see what ends up being in the final binary.</p>
+<pre class><code>$ gcc -O1    -flto -c one-two.c    -o one-two.o
+$ gcc -O1 -fno-lto -c three-four.c -o three-four.o
+$ gcc -O1    -flto -c main.c       -o main.o
+$ gcc        -flto    main.o one-two.o three-four.o -o main
+./main; echo $?
+5</code></pre>
+<p>I built <strong>one-two.c</strong> with <strong>LTO</strong> bytecode and <strong>three-four.c</strong> without <strong>LTO</strong> bytecode.
+Both files are otherwise symmetric.</p>
+<pre class><code>$ objdump -d main
+...
+0000000000001125 &lt;main&gt;:
+    1125: 48 83 ec 08          sub    $0x8,%rsp
+    1129: e8 0e 00 00 00       callq  113c &lt;four&gt;
+    112e: 83 c0 01             add    $0x1,%eax
+    1131: 48 83 c4 08          add    $0x8,%rsp
+    1135: c3                   retq
+
+0000000000001136 &lt;three&gt;:
+    1136: b8 03 00 00 00       mov    $0x3,%eax
+    113b: c3                   retq
+
+000000000000113c &lt;four&gt;:
+    113c: b8 04 00 00 00       mov    $0x4,%eax
+    1141: c3                   retq
+...</code></pre>
+<p>A few things happened here:</p>
+<ol type="1">
+<li><strong>one()</strong> function from <strong>one-two.c</strong> was inlined directly into <strong>main</strong> as <strong>add $0x1,%eax</strong></li>
+<li><strong>two()</strong>’s assembly code was not generated at all</li>
+<li>redundant unused <strong>three()</strong> body was generated</li>
+<li><strong>four()</strong> was not inlined into <strong>main()</strong> and is left as <strong>callq four</strong></li>
+</ol>
+<p>Let’s check how internal representation looks like for LTO objects with <strong>lto-dump</strong>:</p>
+<pre class><code>$ lto-dump -list main.o
+Type   Visibility  Size  Name
+function  default     0  one
+function  default     0  four
+function  default     3  main
+
+$ lto-dump -dump-body=main main.o
+Gimple Body of Function: main
+main ()
+{
+  &lt;bb 2&gt; [local count: 1073741824]:
+  _1 = one ();
+  _2 = four ();
+  _6 = _1 + _2;
+  return _6;
+}
+
+$ lto-dump -dump-body=one one-two.o
+Gimple Body of Function: one
+one ()
+{
+  &lt;bb 2&gt; [local count: 1073741824]:
+  return 1;
+}</code></pre>
+<p>Here we see direct intermediate representation of <strong>main()</strong> function. Both function calls
+are present. Variable assignments like <strong>_6 = _1 + _2;</strong> are very verbose, but also very simple.</p>
+<p>For large programs it’s frequently very hard to say which symbols come from where, where
+they are defined and whether bytecode (<strong>IR</strong>) version is available for LTO. You can peek
+at <strong>resolution</strong> files left by <strong>-save-temps</strong> gcc flag:</p>
+<pre class><code>$ gcc -flto main.o one-two.o three-four.o -o main -save-temps
+$ cat -- *.res
+2
+main.o 3
+191 b0674bfb5d86b316 PREVAILING_DEF main
+194 b0674bfb5d86b316 RESOLVED_EXEC four
+196 b0674bfb5d86b316 RESOLVED_IR one
+one-two.o 2
+190 e8fe3cc27eebcea2 PREVAILING_DEF_IRONLY one
+192 e8fe3cc27eebcea2 PREVAILING_DEF_IRONLY two</code></pre>
+<p>In the output we see:</p>
+<ul>
+<li><strong>RESOLVED_IR</strong> - symbol is referred and is known to have IR somewhere else</li>
+<li><strong>PREVAILING_DEF_IRONLY</strong> - symbol is defined and has <strong>IR</strong> only</li>
+<li><strong>RESOLVED_EXEC</strong> - symbol is referred and is known to have code lying somewhere around</li>
+</ul>
+<p>And so on. Some numbers are count of entries in the lists, some are type numbers.</p>
+<p>Check out <strong>lto-dump</strong>’s source code at <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/lto/lto-dump.c#l61">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/lto/lto-dump.c#l61</a>
+and <strong>man lto-dump</strong>. I think it’s worth documenting more things in the manual.</p>
+<p>There is a minor wart here: the exact name of <strong>.res</strong> file is hard to predict:
+<a href="https://gcc.gnu.org/PR95224">https://gcc.gnu.org/PR95224</a>. I suspect very easy to fix.</p>
+<p>We can also get the call graph of references:</p>
+<pre class><code>$ lto-dump -callgraph *.o
+digraph symtab {
+    &quot;main/0&quot; -&gt; &quot;four/2&quot;
+    &quot;main/0&quot; -&gt; &quot;one/4&quot;
+}
+
+$ lto-dump -callgraph *.o | dot -Tsvg -o cg.svg</code></pre>
+<h1 id="real-world-example">Real world example</h1>
+<p>In <a href="https://bugs.gentoo.org/723370">https://bugs.gentoo.org/723370</a> Andrew reported a mysterious LTO-only
+link failure of gcc itself. It should not happen as gcc is regularily
+tested on LTO build. And yet:</p>
+<pre class><code>ld: gcc-10.1.0/temp/genmatch.NlicMk.ltrans2.ltrans.o:
+  in function `main':
+    &lt;artificial&gt;:(.text.startup+0x94ba):
+      undefined reference to `libintl_dgettext'</code></pre>
+<p>Looks like a simple error of trying to use undefined <strong>libintl_dgettext</strong> symbol.
+The only annoyance is that it’s unclear what actually tries to pull that undefined
+symbol in. <strong>ltrans2.ltrans.o</strong> is a large intermediate object file pulled together
+from many small object files.</p>
+<p>To simpligy the problem we can enable debugging symbols when building gcc.</p>
+<p>Gentoo provides an easy way to do it:</p>
+<pre class><code>$ STAGE1_CFLAGS=&quot;$(portageq envvar CFLAGS) -ggdb3&quot; STAGE1_CXXFLAGS=&quot;$(portageq envvar CXXFLAGS) -ggdb3&quot; emerge -v1 sys-devel/gcc
+...
+..././prev-gcc/xg++ ... -o build/genmatch ... ./../intl/libintl.a
+
+ld: /tmp/genmatch.FJdDDJ.ltrans2.ltrans.o: in function `main':
+  gcc-10.1.0/libcpp/files.c:1439:
+    undefined reference to `libintl_dgettext'</code></pre>
+<p>Now we can see where that reference comes from: <strong>libcpp/files.c:1439</strong>. Rerunning above
+<strong>/xg++</strong> command with appended <strong>-save-temps</strong> generates useful <strong>res</strong> file:</p>
+<pre class><code>$ ..././prev-gcc/xg++ ... -o build/genmatch ... ./../intl/libintl.a -save-temps
+...
+$ cat -- *.res | fgrep libintl_dgettext
+&lt;nothing!&gt;</code></pre>
+<p>No references. How come? Let’s see how that symbol is defined and how it gets called:</p>
+<pre class><code># call site
+$ prev-gcc/lto-dump -list libcpp/files.o  | fgrep dgettext
+function  default     0  *libintl_dgettext
+
+$ prev-gcc/lto-dump -list -demangle libcpp/files.o  | fgrep dgettext
+function  default     0  dgettext
+
+
+# definition site
+$ prev-gcc/lto-dump -list intl/dgettext.o  | fgrep dgettext
+function  default     3  libintl_dgettext
+$ prev-gcc/lto-dump -list -demangle intl/dgettext.o  | fgrep dgettext
+function  default     3  libintl_dgettext</code></pre>
+<p>Here is my interpretation of the above:</p>
+<ol type="1">
+<li>Definition site looks at expected: it’s a nice <strong>libintl_dgettext</strong> symbol.</li>
+<li>Call site is strange: depending on <strong>-demangle</strong> option it completely changes it’s name.</li>
+</ol>
+<p>This means <strong>dgettext</strong>’s prototype is not a typical prototype you would expect:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> <span class="op">*</span>dgettext <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>__domainname<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>__msgid<span class="op">)</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>   __asm__ <span class="op">(</span><span class="st">&quot;libintl_dgettext&quot;</span><span class="op">);</span></span></code></pre></div>
+<p>It’s a gcc extension (TODO: which one?) to emit references to <strong>dgettext</strong> C function
+via <strong>libintl_dgettext</strong> assembly labels.</p>
+<p><strong>gcc</strong>’s linker plugin does not know that <strong>libintl_dgettext</strong> reference exists as
+<strong>LTO</strong> phase is ran before an assempler phase. gcc currently does not nderstand
+effect of the assembly symbol mangling.</p>
+<p>Thus the fix here is either avoid assembly or disable <strong>LTO</strong> for all callers
+of this <strong>__asm__</strong>’y declaration. <a href="https://gcc.gnu.org/PR95194">https://gcc.gnu.org/PR95194</a> suggests a proof-of-concept
+style workaround to avoid <strong>__asm__</strong> symbols in <strong>libintl</strong>.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/intl/libgnuintl.h</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/intl/libgnuintl.h</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -84,25 +84,25 @@ extern &quot;C&quot; {</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    Since Solaris gettext() behaves differently than GNU gettext(), this</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    would be unacceptable.</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    The redirection happens by default through macros in C, so that &amp;gettext</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    is independent of the compilation unit, but through inline functions in</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    C++, in order not to interfere with the name mangling of class fields or</span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>    class methods called 'gettext'.  */</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a> /* The user can define _INTL_REDIRECT_INLINE or _INTL_REDIRECT_MACROS.</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>    If he doesn't, we choose the method.  A third possible method is</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    _INTL_REDIRECT_ASM, supported only by GCC.  */</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a> #if !(defined _INTL_REDIRECT_INLINE || defined _INTL_REDIRECT_MACROS)</span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a><span class="st">-# if __GNUC__ &gt;= 2 &amp;&amp; !defined __APPLE_CC__ &amp;&amp; (defined __STDC__ || defined __cplusplus)</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a><span class="va">+# if __GNUC__ &gt;= 2 &amp;&amp; !defined __APPLE_CC__ &amp;&amp; (defined __STDC__ || defined __cplusplus) &amp;&amp; USE_ASM_ALIASES_THAT_BREAK_LTO</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a> #  define _INTL_REDIRECT_ASM</span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a> # else</span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a> #  ifdef __cplusplus</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a> #   define _INTL_REDIRECT_INLINE</span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a> #  else</span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a> #   define _INTL_REDIRECT_MACROS</span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a> #  endif</span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a> # endif</span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a> /* Auxiliary macros.  */</span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a> #ifdef _INTL_REDIRECT_ASM</span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a> # define _INTL_ASM(cname) __asm__ (_INTL_ASMNAME (__USER_LABEL_PREFIX__, #cname))</span></code></pre></div>
+<h1 id="parting-words">Parting words</h1>
+<p><strong>lto-dump</strong> and <strong>resolution</strong> files make it very easy to debug <strong>LTO</strong> build failures
+and explore <strong>LTO</strong> build process and there are a few useful hints:</p>
+<ul>
+<li><strong>-g</strong> and friends make linker errors more comprehensible of what went wrong</li>
+<li><strong>-save-temps</strong> dumps a lot of precise information where used symbols are located
+(and how they are partitioned when parallel LTO building happens).</li>
+<li>some advanced tricks with <strong>asm</strong> symbols don’t quite work for LTO and sometimes
+require a fallback to C code or non-LTO build.</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on May 19, 2020 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

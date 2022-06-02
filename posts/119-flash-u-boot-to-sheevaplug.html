@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: flash u-boot to sheevaplug</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>flash u-boot to sheevaplug</h1>
+
+            <p>Потиху обновляю софт, который стоит на недавно вдруг появившейся у меня
+<a href="http://en.wikipedia.org/wiki/SheevaPlug">Marvell <strong>sheevaplug</strong></a>.
+Последним в списке глючного старья был форк <strong>u-boot</strong> от Marvell.</p>
+<p>Как оказалось, официально <!--more--> <strong>u-boot</strong>
+<a href="http://www.denx.de/wiki/view/DULG/CanUBootBeConfiguredSuchThatItCanBeStartedInRAM">нифига не поддерживает</a>
+передачу управления с одного <strong>u-boot</strong> на другой. Не хотелось флешить
+заведомо неработающий <strong>u-boot</strong>.
+Но на некоторых бордах это (запись <strong>u-boot</strong> в память и последующий его запуск)
+возможно даже без изменения исходников <strong>u-boot</strong>,
+<a href="http://www.openplug.org/plugwiki/index.php/Setting_Up_OpenOCD_Under_Linux">здесь</a>
+описано как это сделать.</p>
+<p>У меня сразу это дело не получилось, по-этому подробно опишу как это сделал я.</p>
+<ol type="1">
+<li>поставил <strong>USE=“ftdi usb” =dev-embedded/openocd-9999</strong> на мою хост машину,
+с которой проводятся все удалённые действия.</li>
+<li>собрал на <strong>sheevaplug</strong> <strong>u-boot</strong> (<a href="http://www.plugcomputer.org/plugwiki/index.php/Das_U-boot_plug_support">всё должно быть просто</a>)</li>
+<li>присоединился к <strong>sheevaplug</strong> через <strong>minicom</strong> и перезагрузил ее в <strong>u-boot</strong>
+(нужно нажать какую-нибудь клавишу, пока она не начала грузить ядро)</li>
+<li>с хост машины запустил:</li>
+</ol>
+<pre><code># это один терминал. Присоединяемся в sheevaplug по JTAG
+$ sudo openocd -f /usr/share/openocd/scripts/board/sheevaplug.cfg</code></pre>
+<pre><code># другой терминал
+$ nc localhost 4444
+Open On-Chip Debugger
+&gt; halt
+target state: halted
+target halted in ARM state due to debug-request, current mode: Supervisor
+cpsr: 0x400000d3 pc: 0x0060a5d4
+MMU: disabled, D-Cache: disabled, I-Cache: enabled
+&gt; sheevaplug_init
+sheevaplug_init
+Halt timed out, wake up GDB.
+timed out while waiting for target halted
+Command handler execution failed
+in procedure 'wait_halt' called at file &quot;/usr/share/openocd/scripts/board/sheevaplug.cfg&quot;, line 30
+in procedure 'sheevaplug_init'</code></pre>
+<p>Тут <strong>sheevaplug</strong> начинает грузиться и ее надо быро стопить, пока она не загрузила ядро.
+Налицо полная херь (может это баг <strong>openocd</strong>, фиг его знает). По сему я сделал чуть по-другому:</p>
+<pre><code># всё тот же другой терминал (тем временем sheevaplug висит в промпте u-boot)
+$ nc localhost 4444
+Open On-Chip Debugger
+&gt; reset
+reset
+JTAG tap: feroceon.cpu tap/device found: 0x20a023d3 (mfg: 0x1e9, part: 0x0a02, ver: 0x2)
+# ловим промпт u-boot в minicom
+&gt; sheevaplug_init
+sheevaplug_init
+target state: halted
+target halted in ARM state due to debug-request, current mode: Supervisor
+cpsr: 0x000000d3 pc: 0xffff0000
+MMU: disabled, D-Cache: disabled, I-Cache: disabled</code></pre>
+<p><strong>target state: halted</strong> &lt;- ура. После сборки <strong>u-boot</strong> у нас есть несколько файлов:</p>
+<ul>
+<li><strong>u-boot.kwb</strong> - образ <strong>u-boot</strong>, флэшабельный в nand</li>
+<li><strong>u-boot</strong> - <strong>elf</strong>-образ с символами. По нем очень интересно лазить
+дизассемблером и отладчиком. Его мы сейчас и загрузим в наш девайс</li>
+</ul>
+<pre><code># обязательно нужно задавать абсолютный путь,
+# иначе openocd будет вести себя очень неадекватно
+&gt; load_image /home/slyfox/u-boot/u-boot
+load_image /home/slyfox/u-boot/u-boot
+330616 bytes written at address 0x00600000
+downloaded 330616 bytes in 2.880506s (112.087 KiB/s)
+&gt; resume 0x00600000
+resume 0x00600000</code></pre>
+<p>Ловим <strong>sheevaplug</strong> в <strong>minicom</strong> и можем проверить базовую работоспособность:</p>
+<pre><code>Marvell&gt;&gt; version
+U-Boot 2010.03-00176-g42f7128 (Aug 06 2010 - 22:24:34)
+Marvell-Sheevaplug
+# грузим ядро (оно у меня уже в NAND, в принципе его тоже можно записать в память или NAND через JTAG)
+Marvell&gt;&gt; nand read 0x01000000 0x00100000 0x00400000
+
+NAND read: device 0 offset 0x100000, size 0x400000
+ 4194304 bytes read: OK
+
+# параметры ядру
+Marvell&gt;&gt; setenv bootargs console=ttyS0,115200 root=/dev/sda3 rw rootwait
+# boot
+Marvell&gt;&gt; bootm 0x01000000</code></pre>
+<p>То есть вся проблема - словить <strong>sheevaplug</strong> в состоянии <strong>target state: halted</strong>.
+Я этого сразу не просёк и писал <strong>u-boot</strong> пока <strong>sheevaplug</strong> работает. Пока я грузил
+туда образ нового загрузчика оригинальный сканил <strong>NAND</strong> и вылетал со страшными
+ошибками, так как я его затирал находу.</p>
+<ol start="5" type="1">
+<li>флешим сам загрузчик из уже загруженной операционки.</li>
+</ol>
+<pre><code>sh-4.0# cd /boot/
+sh-4.0# ls
+System.map-2.6.35      config-2.6.35.old    vmlinuz-2.6.35
+System.map-2.6.35.old  lost+found           vmlinuz-2.6.35.old
+boot                   u-boot.kwb-20100806
+config-2.6.35          uImage-2.6.35
+
+sh-4.0# cat /proc/mtd 
+dev:    size   erasesize  name
+mtd0: 00100000 00020000 &quot;u-boot&quot;
+mtd1: 00400000 00020000 &quot;uImage&quot;
+mtd2: 1fb00000 00020000 &quot;root&quot;
+
+# mtd0 - наш NAND кусок с u-boot, туда и пишем:
+sh-4.0# flash_eraseall /dev/mtd0; nandwrite -p /dev/mtd0 /boot/u-boot.kwb-20100806
+sh-4.0# /sbin/reboot
+# перезагружаемся и перепроверяем, что всё хорошо</code></pre>
+<p>Мне не хотелось флэшить <strong>u-boot</strong> из него-же самого через <strong>TFTP</strong>, потому что там надо
+было всякие выравнивания высчитывать. Не хотелось ошибиться. Можно было загрузить/записать
+новый образ и с <strong>ext2</strong>/<strong>fat</strong>.</p>
+
+<div class="info">
+    Posted on August  7, 2010 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

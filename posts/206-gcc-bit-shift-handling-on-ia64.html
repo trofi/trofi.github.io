@@ -1,0 +1,745 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: GCC bit shift handling on ia64</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>GCC bit shift handling on ia64</h1>
+
+            <p>Over the past week I’ve spent quite some time poking at toolchain packages
+in Gentoo and fixing fresh batch of bugs. The bugs popped up after recent
+introduction of <strong>gcc</strong> profiles that enable <strong>PIE</strong> (position independent
+executables) and <strong>SSP</strong> (stack smash protected executables) by default in
+Gentoo. One would imagine <strong>SSP</strong> is more invasive as it changes on-stack
+layout of things. But somehow <strong>PIE</strong> yields bugs in every direction you
+throw it at:</p>
+<ul>
+<li>[not really from last week] <strong>i386</strong> static binaries <strong>SIGSEGV</strong> at
+startup: <a href="https://sourceware.org/PR21913">bug</a>
+(TL;DR: calling <strong>vdso</strong>-implemented <strong>SYSENTER</strong> syscall entry point
+needs <strong>TLS</strong> to be already initialised in <strong>glibc</strong>. In this case
+<strong>brk()</strong> syscall was called before <strong>TLS</strong> was initialised.)</li>
+<li><strong>ia64</strong>’s <strong>glibc</strong> miscompiles <strong>librt.so</strong>: <a href="https://bugs.gentoo.org/641216">bug</a>
+(Tl;DR: <strong>pie-by-default</strong> <strong>gcc</strong> tricked <strong>glibc</strong> into believing binutils supports <strong>IFUNC</strong>
+on <strong>ia64</strong>. It does not, exactly as in <a href="https://bugs.gentoo.org/336792#c26">sparc bug</a> 7 years ago.)</li>
+<li><strong>sparc</strong>’s <strong>glibc</strong> produces broken static binaries on <strong>pie-by-default</strong> <strong>gcc</strong>: <a href="https://bugs.gentoo.org/640966">bug</a>.
+(TL;DR: C startup files for <strong>sparc</strong> were <strong>PIC</strong>-unfriendly)</li>
+<li><strong>powerpc</strong>’s <strong>gcc-7.2.0</strong> and older produces broken binaries: <a href="https://sourceware.org/PR22626">bug</a>
+(TL;DR: two bugs: binutils generates relocations to non-existent symbols, <strong>gcc</strong> hardcoded wrong C
+startup files to be used)</li>
+<li><strong>mips64</strong> <strong>gcc</strong> fails to produce <strong>glibc</strong> that <strong>binutils</strong> can link without <strong>assert()</strong> failures (TODO: debug and fix)</li>
+<li><strong>m68k</strong> <strong>glibc</strong> fails to compile (TODO: debug and fix)</li>
+<li><strong>sh4</strong> <strong>gcc</strong> fails to compile by crashing with stack smash detection (TODO: debug and fix)</li>
+<li>more I forgot about</li>
+</ul>
+<p>These are only toolchain bugs, and I did not yet try things on <strong>arm</strong>. I’m sure other
+packages will uncover more interesting corner cases once we fix the toolchain.</p>
+<p>I won’t write about any of the above here but it’s a nice reference point
+if you want to backport something to older toolchains to get <strong>PIE</strong>/<strong>SSP</strong>
+work better. The bugs might be a good reference point on how to debug that
+kind of bugs.</p>
+<p>Today’s story will be about <strong>gcc</strong> code generation bug on <strong>ia64</strong> that has
+nothing to do with <strong>PIE</strong> or <strong>SSP</strong>.</p>
+<h1 id="bug">Bug</h1>
+<p>On <strong>#gentoo-ia64</strong> Jason Duerstock asked if <strong>openssl</strong> fails tests on modern
+<strong>gcc-7.2.0</strong>. It used to pass on <strong>gcc-6.4.0</strong> for him.</p>
+<p>Having successfully dealt with <a href="https://bugs.gentoo.org/641216">IFUNC bug</a>
+recently I was confident things are mostly working in <strong>ia64</strong> land and gave
+it a try.</p>
+<p><strong>openssl</strong> <strong>DES</strong> tests were indeed failing, claiming that encryption/decryption
+roundtrip did not yield original data with errors like:</p>
+<pre class><code>des_ede3_cbc_encrypt decrypt error ...</code></pre>
+<h1 id="what-does-des-test-do">What does DES test do?</h1>
+<p>The test lives at <a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L421">https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L421</a>
+and looks like that (simplified):</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>printf<span class="op">(</span><span class="st">&quot;Doing cbcm</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>DES_set_key_checked<span class="op">(&amp;</span>cbc_key<span class="op">,</span> <span class="op">&amp;</span>ks<span class="op">);</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>DES_set_key_checked<span class="op">(&amp;</span>cbc2_key<span class="op">,</span> <span class="op">&amp;</span>ks2<span class="op">);</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>DES_set_key_checked<span class="op">(&amp;</span>cbc3_key<span class="op">,</span> <span class="op">&amp;</span>ks3<span class="op">);</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>i <span class="op">=</span> strlen<span class="op">((</span><span class="dt">char</span> <span class="op">*)</span>cbc_data<span class="op">)</span> <span class="op">+</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>DES_ede3_cbcm_encrypt<span class="op">(</span>cbc_data<span class="op">,</span> cbc_out<span class="op">,</span> <span class="dv">16</span><span class="bu">L</span><span class="op">,</span> <span class="op">&amp;</span>ks<span class="op">,</span> <span class="op">&amp;</span>ks2<span class="op">,</span> <span class="op">&amp;</span>ks3<span class="op">,</span> <span class="op">&amp;</span>iv3<span class="op">,</span> <span class="op">&amp;</span>iv2<span class="op">,</span> DES_ENCRYPT<span class="op">);</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>DES_ede3_cbcm_encrypt<span class="op">(&amp;</span>cbc_data<span class="op">[</span><span class="dv">16</span><span class="op">],</span> <span class="op">&amp;</span>cbc_out<span class="op">[</span><span class="dv">16</span><span class="op">],</span> i <span class="op">-</span> <span class="dv">16</span><span class="op">,</span> <span class="op">&amp;</span>ks<span class="op">,</span> <span class="op">&amp;</span>ks2<span class="op">,</span> <span class="op">&amp;</span>ks3<span class="op">,</span> <span class="op">&amp;</span>iv3<span class="op">,</span> <span class="op">&amp;</span>iv2<span class="op">,</span> DES_ENCRYPT<span class="op">);</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>DES_ede3_cbcm_encrypt<span class="op">(</span>cbc_out<span class="op">,</span> cbc_in<span class="op">,</span> i<span class="op">,</span> <span class="op">&amp;</span>ks<span class="op">,</span> <span class="op">&amp;</span>ks2<span class="op">,</span> <span class="op">&amp;</span>ks3<span class="op">,</span> <span class="op">&amp;</span>iv3<span class="op">,</span> <span class="op">&amp;</span>iv2<span class="op">,</span> DES_DECRYPT<span class="op">);</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="op">(</span>memcmp<span class="op">(</span>cbc_in<span class="op">,</span> cbc_data<span class="op">,</span> strlen<span class="op">((</span><span class="dt">char</span> <span class="op">*)</span>cbc_data<span class="op">)</span> <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;des_ede3_cbcm_encrypt decrypt error</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Test encrypts a few bytes of data in two takes (1: encrypt 16 bytes, 2: encrypt rest)
+and then decrypts the result in one go. It works on static data. Very straightforward.</p>
+<h1 id="fixing-variables">Fixing variables</h1>
+<p>My first suspect was <strong>gcc</strong> change as <strong>7.2.0</strong> fails, <strong>6.4.0</strong> works and I tried to build <strong>openssl</strong>
+with optimisations completely disabled:</p>
+<pre class><code># CFLAGS=-O1 FEATURES=test emerge -1 =dev-libs/openssl-1.0.2n
+...
+des_ede3_cbc_encrypt decrypt error ...
+
+# CFLAGS=-O0 FEATURES=test emerge -1 =dev-libs/openssl-1.0.2n
+...
+OK!</code></pre>
+<p>Hah! At least <strong>-O0</strong> seems to work. It means it will be easier to cross-check
+which optimisation pass affects code generation and find out if it’s an <strong>openssl</strong>
+bug or something else.</p>
+<h1 id="setting-up-ab-test">Setting up A/B test</h1>
+<p>Debugging cryptographic algorithms like <strong>DES</strong> is very easy from this
+standpoint because they don’t need any external state: no services running,
+no files created, input data is not randmized. They are a pure function of
+input bit stream(s).</p>
+<p>I unpacked single <strong>openssl</strong> source tree and started building it in
+two directories: one with <strong>-O0</strong> optimisations, another with <strong>-O1</strong>:</p>
+<pre class><code>~/openssl/openssl-1.0.2n-O0/
+    `openssl-1.0.2n-.ia64/
+        `crypto/des/destest.c (file-1)
+        ...
+~/openssl/openssl-1.0.2n-O0/
+    `openssl-1.0.2n-.ia64/
+        `crypto/des/destest.c (symlink to file-1)
+        ...</code></pre>
+<p>Then I started sprinking <strong>printf()</strong> statements in <strong>destest.c</strong> and
+other <strong>crypto/des/</strong> files, then ran <strong>destest</strong> and diffed text stdouts
+to find where exactly difference appears first.</p>
+<p>Relatively quickly I nailed it down to the following trace:</p>
+<ul>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L403">first call of DES_ede3_cbcm_encrypt()</a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/ede_cbcm_enc.c#L99">first call of DES_encrypt1()</a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/des_enc.c#L96">first expansion of D_ENCRYPT() macro</a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/des_locl.h#L365">fourth XOR element in D_ENCRYPT() macro</a></li>
+</ul>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">unsigned</span> <span class="dt">int</span> u<span class="op">;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#   define D_ENCRYPT(LL,R,S) {\</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="pp">    LOAD_DATA_tmp(R,S,u,t,E0,E1); \</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="pp">    t=ROTATE(t,4); \</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="pp">    LL^=\</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[0][(u&gt;&gt; 2L)&amp;0x3f]^ \</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[2][(u&gt;&gt;10L)&amp;0x3f]^ \</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[4][(u&gt;&gt;18L)&amp;0x3f]^ \</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[6][(u&gt;&gt;26L)&amp;0x3f]^ \</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[1][(t&gt;&gt; 2L)&amp;0x3f]^ \</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[3][(t&gt;&gt;10L)&amp;0x3f]^ \</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[5][(t&gt;&gt;18L)&amp;0x3f]^ \</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans[7][(t&gt;&gt;26L)&amp;0x3f]; }</span></span></code></pre></div>
+<p>See an error? Me neither.</p>
+<h1 id="minimizing-test">Minimizing test</h1>
+<p><strong>printf()</strong> debugging suggested <strong>DES_SPtrans[6][(u&gt;&gt;26L)&amp;0x3f]</strong> returns
+different data in <strong>-O0</strong> and <strong>-O1</strong> cases. Namely the following expression
+did change:</p>
+<ul>
+<li><strong>-O0</strong>: <strong>(u&gt;&gt;26L)&amp;0x3f</strong> yielded <strong>0x33</strong></li>
+<li><strong>-O1</strong>: <strong>(u&gt;&gt;26L)&amp;0x3f</strong> yielded <strong>0x173</strong></li>
+</ul>
+<p>Note how it’s logically infeasible to get anything more than <strong>0x3f</strong> from
+that expression. And yet here we are with our <strong>0x173</strong> value.</p>
+<p>I spent some time deleting lines one by one from all the macros as long
+as the result kept producing the diff. Removing lines is safe in most of
+<strong>DES</strong> code because all the test does is flipping a few bits and rotating
+them within a single <strong>unsigned int u</strong> local variable.</p>
+<p>After a while I came up with the following minimal reproducer:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">int</span> u32<span class="op">;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>u32 bug <span class="op">(</span>u32 <span class="op">*</span> result<span class="op">)</span> __attribute__<span class="op">((</span>noinline<span class="op">));</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>u32 bug <span class="op">(</span>u32 <span class="op">*</span> result<span class="op">)</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// non-static and volatile to inhibit constant propagation</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> u32 ss <span class="op">=</span> <span class="bn">0xFFFFffff</span><span class="op">;</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> u32 d  <span class="op">=</span> <span class="bn">0xEEEEeeee</span><span class="op">;</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    u32 tt <span class="op">=</span> d <span class="op">&amp;</span> <span class="bn">0x00800000</span><span class="op">;</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    u32 r  <span class="op">=</span> tt <span class="op">&lt;&lt;</span> <span class="dv">8</span><span class="op">;</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">// rotate</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    r <span class="op">=</span> <span class="op">(</span>r <span class="op">&gt;&gt;</span> <span class="dv">31</span><span class="op">)</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>      <span class="op">|</span> <span class="op">(</span>r <span class="op">&lt;&lt;</span>  <span class="dv">1</span><span class="op">);</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>    u32 u <span class="op">=</span> r<span class="op">^</span>ss<span class="op">;</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>    u32 off <span class="op">=</span> u <span class="op">&gt;&gt;</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">// seemingly unrelated but bug-triggering side-effect</span></span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>result <span class="op">=</span> tt<span class="op">;</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> off<span class="op">;</span></span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>    u32 l<span class="op">;</span></span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>    u32 off <span class="op">=</span> bug<span class="op">(&amp;</span>l<span class="op">);</span></span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;off&gt;&gt;: %08x</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> off<span class="op">);</span></span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre class><code>$ gcc -O0 a.c -o a-O0 &amp;&amp; ./a-O0 &gt; o0
+$ gcc -O1 a.c -o a-O1 &amp;&amp; ./a-O1 &gt; o1
+$ diff -U0 o0 o1
+
+-off&gt;&gt;: 7fffffff
++off&gt;&gt;: ffffffff</code></pre>
+<p>The test itself is very straightforward: it does only 32-bit arightmetics
+on <strong>unsigned int r</strong> and prints the result. This is a very fragile test:
+if you try to remove seemingly unrelated code like <strong>*result = tt;</strong> the
+bug will disappear.</p>
+<h1 id="what-gcc-actually-does">What gcc actually does</h1>
+<p>I tried to look at the assembly code. If I could spot an obvious problem I could
+inspect intermediate <strong>gcc</strong> steps to get the idea which pass precisely
+introduces wrong resulting code. Despite being <strong>Itanium</strong> the code
+is not that complicated (added detailed comments):</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>Dump of assembler code for function bug<span class="op">:</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r14</span><span class="op">=</span><span class="kw">r12</span>                 <span class="co">; r12: register holding stack pointer</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; r14 = r12 (new temporary variable)</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r15</span><span class="op">=-</span><span class="dv">1</span>                  <span class="co">; r15=0xFFFFffff ('ss' variable)</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>st4<span class="op">.</span>rel <span class="op">[</span><span class="kw">r14</span><span class="op">]=</span><span class="kw">r15</span><span class="op">,</span><span class="dv">4</span>         <span class="co">; write 'ss' on stack address 'r14 - 4'</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>movl <span class="kw">r15</span><span class="op">=</span><span class="bn">0xffffffffeeeeeeee</span> <span class="co">; r15=0xEEEEeeee ('d' variable)</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>st4<span class="op">.</span>rel <span class="op">[</span><span class="kw">r14</span><span class="op">]=</span><span class="kw">r15</span>           <span class="co">; write 'd' on stack address 'r14'</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>ld4<span class="op">.</span>acq <span class="kw">r15</span><span class="op">=[</span><span class="kw">r14</span><span class="op">]</span>           <span class="co">; and quickly read 'd' back into 'r15' :)</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>movl <span class="kw">r14</span><span class="op">=</span><span class="bn">0x800000</span>           <span class="co">; r14=0x00800000</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="bu">and</span> <span class="kw">r15</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="kw">r15</span>             <span class="co">; u32 tt = d &amp; 0x00800000;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; doing u32 r  = tt &lt;&lt; 8;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>dep<span class="op">.</span>z <span class="kw">r14</span><span class="op">=</span><span class="kw">r15</span><span class="op">,</span><span class="dv">8</span><span class="op">,</span><span class="dv">24</span>          <span class="co">; &quot;deposit&quot; 24 bits from r14 into 15</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; starting at offset 8 and zeroing the rest.</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; Or in pictures (with offsets):</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; r14 = 0xAABBCCDD11223344</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;   r15 = 0x0000000022334400</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>ld4<span class="op">.</span>acq <span class="kw">r8</span><span class="op">=[</span><span class="kw">r12</span><span class="op">]</span>            <span class="co">; read 'ss' into r8</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>st4 <span class="op">[</span>r32<span class="op">]=</span><span class="kw">r15</span>               <span class="co">; *result = tt</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; // rotate</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; r = (r &gt;&gt; 31)</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;   | (r &lt;&lt;  1);</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>mix4<span class="op">.</span>r <span class="kw">r14</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="kw">r14</span>          <span class="co">; This one is tricky: mix duplicates lower32</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; bits into lower and upper 32 bits of 14.</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; Or in pictures:</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;   r14 = 0xAABBCCDDF1223344 -&gt;</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;   r14 = 0xF1223344F1223344</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a><span class="bu">shr</span><span class="op">.</span>u <span class="kw">r14</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="dv">31</span>            <span class="co">; And shift right for 31 bit (with zero padding)</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;   r14 = 0x00000001E2446688</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; Note how '1' is in a position of 33-th bit</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a><span class="bu">xor</span> <span class="kw">r8</span><span class="op">=</span><span class="kw">r8</span><span class="op">,</span><span class="kw">r14</span>               <span class="co">; u32 u = r^ss;</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>extr<span class="op">.</span>u <span class="kw">r8</span><span class="op">=</span><span class="kw">r8</span><span class="op">,</span><span class="dv">1</span><span class="op">,</span><span class="dv">32</span>           <span class="co">; u32 off = u &gt;&gt; 1</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; &quot;extract&quot; 32 bits at offset 1 from r8 and put them to r8</span></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>                            <span class="co">; Or in pictures:</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;     r8 = 0x0000000100000000 -&gt; (note how all lower 32 bits are 0)</span></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;     r8 = 0x0000000080000000</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0         <span class="co">; return r8 as a computation result</span></span></code></pre></div>
+<p>Tl;DR: <strong>extr.u r8=r8,1,32</strong> extracts 32 bits from 64-bit register at offset 1
+from <strong>r8</strong> and puts them into <strong>r8</strong> back. The problem is that for
+<strong>u32 off = u &gt;&gt; 1</strong> to work correctly it should extract only <strong>31</strong> bit,
+not <strong>32</strong>.</p>
+<p>If I patch assembly file to contain <strong>extr.u r8=r8,1,31</strong> the sample will
+work correctly.</p>
+<p>At this point I shared my sample with Jason and filed
+<a href="https://gcc.gnu.org/PR83565">a gcc bug</a> as it was clear that compiler
+does something very unexpected. Jason pulled in James and they produced
+a working gcc patch for me while I was having dinner(!) :)</p>
+<h1 id="gcc-passes">gcc passes</h1>
+<p>What surprised me is the fact that gcc recognised “rotate” pattern and used
+clever <strong>mix4.r</strong>/<strong>shr.u</strong> trick to achieve the bit rotation effect.</p>
+<p>Internally <strong>gcc</strong> has a few frameworks to perform optimisations:</p>
+<ul>
+<li>high-level (relatively) targed independent “tree” optimisations (working on
+<strong>GIMPLE</strong> representation)</li>
+<li>low-level target-specific “register” optimisations (working on <strong>RTL</strong>
+representation)</li>
+</ul>
+<p><strong>GIMPLE</strong> passes run before <strong>RTL</strong> passes. Let’s check
+how many passes are being ran on our small sample by using <strong>-fdump-tree-all</strong>
+and <strong>-fdump-rtl-all</strong>:</p>
+<pre class><code>$ ia64-unknown-linux-gnu-gcc -O1 -fdump-tree-all -fdump-rtl-all -S a.c &amp;&amp; ls -1 | nl
+1   a.c
+2   a.c.001t.tu
+3   a.c.002t.class
+4   a.c.003t.original
+5   a.c.004t.gimple
+6   a.c.006t.omplower
+7   a.c.007t.lower
+8   a.c.010t.eh
+9   a.c.011t.cfg
+10  a.c.012t.ompexp
+11  a.c.019t.fixup_cfg1
+12  a.c.020t.ssa
+13  a.c.022t.nothrow
+14  a.c.027t.fixup_cfg3
+15  a.c.028t.inline_param1
+16  a.c.029t.einline
+17  a.c.030t.early_optimizations
+18  a.c.031t.objsz1
+19  a.c.032t.ccp1
+20  a.c.033t.forwprop1
+21  a.c.034t.ethread
+22  a.c.035t.esra
+23  a.c.036t.ealias
+24  a.c.037t.fre1
+25  a.c.039t.mergephi1
+26  a.c.040t.dse1
+27  a.c.041t.cddce1
+28  a.c.046t.profile_estimate
+29  a.c.047t.local-pure-const1
+30  a.c.049t.release_ssa
+31  a.c.050t.inline_param2
+32  a.c.086t.fixup_cfg4
+33  a.c.091t.ccp2
+34  a.c.094t.backprop
+35  a.c.095t.phiprop
+36  a.c.096t.forwprop2
+37  a.c.097t.objsz2
+38  a.c.098t.alias
+39  a.c.099t.retslot
+40  a.c.100t.fre3
+41  a.c.101t.mergephi2
+42  a.c.105t.dce2
+43  a.c.106t.stdarg
+44  a.c.107t.cdce
+45  a.c.108t.cselim
+46  a.c.109t.copyprop1
+47  a.c.110t.ifcombine
+48  a.c.111t.mergephi3
+49  a.c.112t.phiopt1
+50  a.c.114t.ch2
+51  a.c.115t.cplxlower1
+52  a.c.116t.sra
+53  a.c.118t.dom2
+54  a.c.120t.phicprop1
+55  a.c.121t.dse2
+56  a.c.122t.reassoc1
+57  a.c.123t.dce3
+58  a.c.124t.forwprop3
+59  a.c.125t.phiopt2
+60  a.c.126t.ccp3
+61  a.c.127t.sincos
+62  a.c.129t.laddress
+63  a.c.130t.lim2
+64  a.c.131t.crited1
+65  a.c.134t.sink
+66  a.c.138t.dce4
+67  a.c.139t.fix_loops
+68  a.c.167t.no_loop
+69  a.c.170t.veclower21
+70  a.c.172t.printf-return-value2
+71  a.c.173t.reassoc2
+72  a.c.174t.slsr
+73  a.c.178t.dom3
+74  a.c.182t.phicprop2
+75  a.c.183t.dse3
+76  a.c.184t.cddce3
+77  a.c.185t.forwprop4
+78  a.c.186t.phiopt3
+79  a.c.187t.fab1
+80  a.c.191t.dce7
+81  a.c.192t.crited2
+82  a.c.194t.uncprop1
+83  a.c.195t.local-pure-const2
+84  a.c.226t.nrv
+85  a.c.227t.optimized
+86  a.c.229r.expand
+87  a.c.230r.vregs
+88  a.c.231r.into_cfglayout
+89  a.c.232r.jump
+90  a.c.233r.subreg1
+91  a.c.234r.dfinit
+92  a.c.235r.cse1
+93  a.c.236r.fwprop1
+94  a.c.243r.ce1
+95  a.c.244r.reginfo
+96  a.c.245r.loop2
+97  a.c.246r.loop2_init
+98  a.c.247r.loop2_invariant
+99  a.c.249r.loop2_doloop
+100 a.c.250r.loop2_done
+101 a.c.254r.dse1
+102 a.c.255r.fwprop2
+103 a.c.256r.auto_inc_dec
+104 a.c.257r.init-regs
+105 a.c.259r.combine
+106 a.c.260r.ce2
+107 a.c.262r.outof_cfglayout
+108 a.c.263r.split1
+109 a.c.264r.subreg2
+110 a.c.267r.asmcons
+111 a.c.271r.ira
+112 a.c.272r.reload
+113 a.c.273r.postreload
+114 a.c.275r.split2
+115 a.c.279r.pro_and_epilogue
+116 a.c.280r.dse2
+117 a.c.282r.jump2
+118 a.c.286r.ce3
+119 a.c.288r.cprop_hardreg
+120 a.c.289r.rtl_dce
+121 a.c.290r.bbro
+122 a.c.296r.alignments
+123 a.c.298r.mach
+124 a.c.299r.barriers
+125 a.c.303r.shorten
+126 a.c.304r.nothrow
+127 a.c.306r.final
+128 a.c.307r.dfinish
+129 a.c.308t.statistics
+130 a.s</code></pre>
+<p>128 passes! Quite a few. <strong>t</strong> letter after pass number means “tree” pass,
+<strong>r</strong> is an “rtl” pass. Note how all “tree” passes precede “rtl” ones.</p>
+<p>Latest “tree” pass outputs the following:</p>
+<pre class><code>;; cat a.c.227t.optimized
+;; Function bug (bug, funcdef_no=23, decl_uid=2078, cgraph_uid=23, symbol_order=23)
+
+__attribute__((noinline))
+bug (u32 * result)
+{
+  u32 off;
+  u32 u;
+  u32 r;
+  u32 tt;
+  volatile u32 d;
+  volatile u32 ss;
+  unsigned int d.0_1;
+  unsigned int ss.1_2;
+
+  &lt;bb 2&gt; [100.00%]:
+  ss ={v} 4294967295;
+  d ={v} 4008636142;
+  d.0_1 ={v} d;
+  tt_6 = d.0_1 &amp; 8388608;
+  r_7 = tt_6 &lt;&lt; 8;
+  r_8 = r_7 r&gt;&gt; 31;
+  ss.1_2 ={v} ss;
+  u_9 = ss.1_2 ^ r_8;
+  off_10 = u_9 &gt;&gt; 1;
+  *result_11(D) = tt_6;
+  return off_10;
+
+}
+
+
+
+;; Function main (main, funcdef_no=24, decl_uid=2088, cgraph_uid=24, symbol_order=24) (executed once)
+
+main ()
+{
+  u32 off;
+  u32 l;
+
+  &lt;bb 2&gt; [100.00%]:
+  off_3 = bug (&amp;l);
+  __printf_chk (1, &quot;off&gt;&gt;: %08x\n&quot;, off_3);
+  l ={v} {CLOBBER};
+  return 0;
+
+}</code></pre>
+<p>Code does not differ much from originally written code because I specifically
+tried to write something that won’t trigger any high-level transformations.</p>
+<p><strong>RTL</strong> dumps are even more verbose. I’ll show an incomplete snippet of
+<strong>bug()</strong> function in <strong>a.c.229r.expand</strong> file:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; Full RTL generated for this function:</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>(note <span class="dv">1</span> <span class="dv">0</span> <span class="dv">4</span> NOTE_INSN_DELETED)</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>(note <span class="dv">4</span> <span class="dv">1</span> <span class="dv">2</span> <span class="dv">2</span> [bb <span class="dv">2</span>] NOTE_INSN_BASIC_BLOCK)</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">2</span> <span class="dv">4</span> <span class="dv">3</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/v/f:DI <span class="dv">347</span> [ result ])</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>        (reg:DI <span class="dv">112</span> in0 [ result ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">5</span> -<span class="dv">1</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>(note <span class="dv">3</span> <span class="dv">2</span> <span class="dv">6</span> <span class="dv">2</span> NOTE_INSN_FUNCTION_BEG)</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">6</span> <span class="dv">3</span> <span class="dv">7</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">348</span>)</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>        (const_int -<span class="dv">1</span> [<span class="dv">0xffffffffffffffff</span>])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">7</span> -<span class="dv">1</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">7</span> <span class="dv">6</span> <span class="dv">8</span> <span class="dv">2</span> (<span class="kw">set</span> (mem/v/c:SI (reg/f:DI <span class="dv">335</span> virtual-stack-vars) [<span class="dv">1</span> ss+<span class="dv">0</span> S4 A128])</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>        (reg:SI <span class="dv">348</span>)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">7</span> -<span class="dv">1</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">8</span> <span class="dv">7</span> <span class="dv">9</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">349</span>)</span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>        (reg/f:DI <span class="dv">335</span> virtual-stack-vars)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">8</span> -<span class="dv">1</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">9</span> <span class="dv">8</span> <span class="dv">10</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/f:DI <span class="dv">350</span>)</span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>        (plus:DI (reg/f:DI <span class="dv">335</span> virtual-stack-vars)</span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">4</span> [<span class="dv">0x4</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">8</span> -<span class="dv">1</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">10</span> <span class="dv">9</span> <span class="dv">11</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">351</span>)</span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>        (const_int -<span class="dv">286331154</span> [<span class="dv">0xffffffffeeeeeeee</span>])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">8</span> -<span class="dv">1</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">11</span> <span class="dv">10</span> <span class="dv">12</span> <span class="dv">2</span> (<span class="kw">set</span> (mem/v/c:SI (reg/f:DI <span class="dv">350</span>) [<span class="dv">1</span> d+<span class="dv">0</span> S4 A32])</span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>        (reg:SI <span class="dv">351</span>)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">8</span> -<span class="dv">1</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">12</span> <span class="dv">11</span> <span class="dv">13</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">352</span>)</span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>        (reg/f:DI <span class="dv">335</span> virtual-stack-vars)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">9</span> -<span class="dv">1</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">13</span> <span class="dv">12</span> <span class="dv">14</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/f:DI <span class="dv">353</span>)</span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>        (plus:DI (reg/f:DI <span class="dv">335</span> virtual-stack-vars)</span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">4</span> [<span class="dv">0x4</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">9</span> -<span class="dv">1</span></span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">14</span> <span class="dv">13</span> <span class="dv">15</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">340</span> [ d<span class="fl">.0</span>_1 ])</span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>        (mem/v/c:SI (reg/f:DI <span class="dv">353</span>) [<span class="dv">1</span> d+<span class="dv">0</span> S4 A32])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">9</span> -<span class="dv">1</span></span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">15</span> <span class="dv">14</span> <span class="dv">16</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">355</span>)</span>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>        (const_int <span class="dv">8388608</span> [<span class="dv">0x800000</span>])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">9</span> -<span class="dv">1</span></span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">16</span> <span class="dv">15</span> <span class="dv">17</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">354</span>)</span>
+<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a>        (and:DI (subreg:DI (reg:SI <span class="dv">340</span> [ d<span class="fl">.0</span>_1 ]) <span class="dv">0</span>)</span>
+<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>            (reg:DI <span class="dv">355</span>))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">9</span> -<span class="dv">1</span></span>
+<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">17</span> <span class="dv">16</span> <span class="dv">18</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/v:SI <span class="dv">342</span> [ tt ])</span>
+<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a>        (subreg:SI (reg:DI <span class="dv">354</span>) <span class="dv">0</span>)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">9</span> -<span class="dv">1</span></span>
+<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">18</span> <span class="dv">17</span> <span class="dv">19</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/v:SI <span class="dv">343</span> [ r ])</span>
+<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>        (ashift:SI (reg/v:SI <span class="dv">342</span> [ tt ])</span>
+<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">8</span> [<span class="dv">0x8</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">10</span> -<span class="dv">1</span></span>
+<span id="cb11-52"><a href="#cb11-52" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-53"><a href="#cb11-53" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">19</span> <span class="dv">18</span> <span class="dv">20</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">341</span> [ ss<span class="fl">.1</span>_2 ])</span>
+<span id="cb11-54"><a href="#cb11-54" aria-hidden="true" tabindex="-1"></a>        (mem/v/c:SI (reg/f:DI <span class="dv">335</span> virtual-stack-vars) [<span class="dv">1</span> ss+<span class="dv">0</span> S4 A128])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">16</span> -<span class="dv">1</span></span>
+<span id="cb11-55"><a href="#cb11-55" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-56"><a href="#cb11-56" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">20</span> <span class="dv">19</span> <span class="dv">21</span> <span class="dv">2</span> (<span class="kw">set</span> (mem:SI (reg/v/f:DI <span class="dv">347</span> [ result ]) [<span class="dv">1</span> *result_11(D)+<span class="dv">0</span> S4 A32])</span>
+<span id="cb11-57"><a href="#cb11-57" aria-hidden="true" tabindex="-1"></a>        (reg/v:SI <span class="dv">342</span> [ tt ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">20</span> -<span class="dv">1</span></span>
+<span id="cb11-58"><a href="#cb11-58" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-59"><a href="#cb11-59" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">21</span> <span class="dv">20</span> <span class="dv">22</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">357</span> [ r ])</span>
+<span id="cb11-60"><a href="#cb11-60" aria-hidden="true" tabindex="-1"></a>        (rotate:SI (reg/v:SI <span class="dv">343</span> [ r ])</span>
+<span id="cb11-61"><a href="#cb11-61" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">1</span> [<span class="dv">0x1</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">13</span> -<span class="dv">1</span></span>
+<span id="cb11-62"><a href="#cb11-62" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-63"><a href="#cb11-63" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">22</span> <span class="dv">21</span> <span class="dv">23</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">358</span>)</span>
+<span id="cb11-64"><a href="#cb11-64" aria-hidden="true" tabindex="-1"></a>        (xor:DI (subreg:DI (reg:SI <span class="dv">357</span> [ r ]) <span class="dv">0</span>)</span>
+<span id="cb11-65"><a href="#cb11-65" aria-hidden="true" tabindex="-1"></a>            (subreg:DI (reg:SI <span class="dv">341</span> [ ss<span class="fl">.1</span>_2 ]) <span class="dv">0</span>))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">16</span> -<span class="dv">1</span></span>
+<span id="cb11-66"><a href="#cb11-66" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-67"><a href="#cb11-67" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">23</span> <span class="dv">22</span> <span class="dv">24</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">359</span>)</span>
+<span id="cb11-68"><a href="#cb11-68" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (reg:DI <span class="dv">358</span>)</span>
+<span id="cb11-69"><a href="#cb11-69" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">31</span> [<span class="dv">0x1f</span>])</span>
+<span id="cb11-70"><a href="#cb11-70" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">1</span> [<span class="dv">0x1</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">17</span> -<span class="dv">1</span></span>
+<span id="cb11-71"><a href="#cb11-71" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-72"><a href="#cb11-72" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">24</span> <span class="dv">23</span> <span class="dv">25</span> <span class="dv">2</span> (<span class="kw">set</span> (subreg:DI (reg:SI <span class="dv">356</span> [ off ]) <span class="dv">0</span>)</span>
+<span id="cb11-73"><a href="#cb11-73" aria-hidden="true" tabindex="-1"></a>        (reg:DI <span class="dv">359</span>)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">17</span> -<span class="dv">1</span></span>
+<span id="cb11-74"><a href="#cb11-74" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-75"><a href="#cb11-75" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">25</span> <span class="dv">24</span> <span class="dv">29</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/v:SI <span class="dv">346</span> [ &lt;retval&gt; ])</span>
+<span id="cb11-76"><a href="#cb11-76" aria-hidden="true" tabindex="-1"></a>        (reg:SI <span class="dv">356</span> [ off ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">21</span> -<span class="dv">1</span></span>
+<span id="cb11-77"><a href="#cb11-77" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-78"><a href="#cb11-78" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">29</span> <span class="dv">25</span> <span class="dv">30</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/i:SI <span class="dv">8</span> r8)</span>
+<span id="cb11-79"><a href="#cb11-79" aria-hidden="true" tabindex="-1"></a>        (reg/v:SI <span class="dv">346</span> [ &lt;retval&gt; ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> -<span class="dv">1</span></span>
+<span id="cb11-80"><a href="#cb11-80" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb11-81"><a href="#cb11-81" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">30</span> <span class="dv">29</span> <span class="dv">0</span> <span class="dv">2</span> (use (reg/i:SI <span class="dv">8</span> r8)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> -<span class="dv">1</span></span>
+<span id="cb11-82"><a href="#cb11-82" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
+<p>The above is <strong>RTL</strong> representation of our <strong>bug()</strong> function.
+S-expressions look like machine instructions but not quite.</p>
+<p>For example the following snippet (single S-expression) introduces new virtual register <strong>351</strong>
+which should receive literal value of “0xeeeeeeee”. <strong>SI</strong> means <strong>SImode</strong>, or 32-bit
+signed integer:</p>
+<p>More on modes is <a href="https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html">here</a>.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">10</span> <span class="dv">9</span> <span class="dv">11</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">351</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>        (const_int -<span class="dv">286331154</span> [<span class="dv">0xffffffffeeeeeeee</span>])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">8</span> -<span class="dv">1</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
+<p>Or just <strong>r351 = 0xeeeeeeee</strong> :) Note it also mentions source file line numbers.
+Useful when mapping <strong>RTL</strong> logs back to source files (and I guess <strong>gcc</strong> uses the
+same to emit <strong>dwarf</strong> debugging sections).</p>
+<p>Another example of <strong>RTL</strong> instruction:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">22</span> <span class="dv">21</span> <span class="dv">23</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">358</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>        (xor:DI (subreg:DI (reg:SI <span class="dv">357</span> [ r ]) <span class="dv">0</span>)</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>            (subreg:DI (reg:SI <span class="dv">341</span> [ ss<span class="fl">.1</span>_2 ]) <span class="dv">0</span>))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">16</span> -<span class="dv">1</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
+<p>Here we see an <strong>RTL</strong> equivalent of <strong>u_9 = ss.1_2 ^ r_8;</strong> code (<strong>GIMPLE</strong>).
+There is more subtlety here: <strong>xor</strong> itself operates on 64-bit integers (<strong>DI</strong>)
+that contain 32-bit values in lower 32-bits (subregs) which I don’t really
+understand.</p>
+<p>Upstream <a href="https://gcc.gnu.org/PR83565">bug</a> attempts to decide which
+assumption is violated in generic <strong>RTL</strong> optimisation pass (or backend
+implementation). At the time of writing this post a few candidate patches
+were posted to address the bug.</p>
+<h1 id="gcc-rtl-optimisations">gcc RTL optimisations</h1>
+<p>I was interested in the optimisation that converted <strong>extr.u r8=r8,1,31</strong> (valid)
+to <strong>extr.u r8=r8,1,32</strong> (invalid).</p>
+<p>It’s <strong>GIMPLE</strong> representation is:</p>
+<pre class><code>// ...
+off_10 = u_9 &gt;&gt; 1;
+*result_11(D) = tt_6;
+return off_10;</code></pre>
+<p>Let’s try to find <strong>RTL</strong> representation of this construct in the very first
+<strong>RTL</strong> dump (<strong>a.c.229r.expand</strong> file):</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">23</span> <span class="dv">22</span> <span class="dv">24</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">359</span>)</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (reg:DI <span class="dv">358</span>)</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">31</span> [<span class="dv">0x1f</span>])</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">1</span> [<span class="dv">0x1</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">17</span> -<span class="dv">1</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="co">;; ...</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">24</span> <span class="dv">23</span> <span class="dv">25</span> <span class="dv">2</span> (<span class="kw">set</span> (subreg:DI (reg:SI <span class="dv">356</span> [ off ]) <span class="dv">0</span>)</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>        (reg:DI <span class="dv">359</span>)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">17</span> -<span class="dv">1</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">25</span> <span class="dv">24</span> <span class="dv">29</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/v:SI <span class="dv">346</span> [ &lt;retval&gt; ])</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        (reg:SI <span class="dv">356</span> [ off ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">21</span> -<span class="dv">1</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">29</span> <span class="dv">25</span> <span class="dv">30</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/i:SI <span class="dv">8</span> r8)</span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>        (reg/v:SI <span class="dv">346</span> [ &lt;retval&gt; ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> -<span class="dv">1</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">30</span> <span class="dv">29</span> <span class="dv">0</span> <span class="dv">2</span> (use (reg/i:SI <span class="dv">8</span> r8)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> -<span class="dv">1</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
+<p>Or in a slightly more concise form:</p>
+<pre class><code>reg359 = zero_extract(reg358, offset=1, length=31)
+reg356 = (u32)reg359;
+reg346 = (u32)reg356;
+reg8   = (u32)reg346;</code></pre>
+<p>Very straightforward (and still correct). <strong>zero_extract</strong>
+is some <strong>RTL</strong> virtual operation that will have to be expressed
+as real instruction at some point.</p>
+<p>In the absence of other optimisations it’s done with the following rule
+(at <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/ia64/ia64.md;h=b7cd52ba366ba3d63e98479df5f4be44ffd17ca6;hb=HEAD#l1381">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/ia64/ia64.md;h=b7cd52ba366ba3d63e98479df5f4be44ffd17ca6;hb=HEAD#l1381</a>)</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>(define_insn <span class="st">&quot;extzv&quot;</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  [(<span class="kw">set</span> (match_operand:DI <span class="dv">0</span> <span class="st">&quot;gr_register_operand&quot;</span> <span class="st">&quot;=r&quot;</span>)</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (match_operand:DI <span class="dv">1</span> <span class="st">&quot;gr_register_operand&quot;</span> <span class="st">&quot;r&quot;</span>)</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>                         (match_operand:DI <span class="dv">2</span> <span class="st">&quot;extr_len_operand&quot;</span> <span class="st">&quot;n&quot;</span>)</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>                         (match_operand:DI <span class="dv">3</span> <span class="st">&quot;shift_count_operand&quot;</span> <span class="st">&quot;M&quot;</span>)))]</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;&quot;</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;extr.u %0 = %1, %3, %2&quot;</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  [(set_attr <span class="st">&quot;itanium_class&quot;</span> <span class="st">&quot;ishf&quot;</span>)])</span></code></pre></div>
+<p>In unoptimised case we see all the intermediate assignments
+are stored at <strong>r14</strong> address and loaded back.</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; gcc -O0 a.c</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>extr<span class="op">.</span>u <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">31</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>st4 <span class="op">[</span><span class="kw">r14</span><span class="op">]</span> <span class="op">=</span> <span class="kw">r15</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r14</span> <span class="op">=</span> r2</span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>ld8 <span class="kw">r14</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>adds r16 <span class="op">=</span> <span class="op">-</span><span class="dv">32</span><span class="op">,</span> r2</span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>ld4 <span class="kw">r15</span> <span class="op">=</span> <span class="op">[</span>r16<span class="op">]</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>st4 <span class="op">[</span><span class="kw">r14</span><span class="op">]</span> <span class="op">=</span> <span class="kw">r15</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>adds <span class="kw">r14</span> <span class="op">=</span> <span class="op">-</span><span class="dv">20</span><span class="op">,</span> r2</span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>ld4 <span class="kw">r14</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r14</span></span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>.<span class="pp">restore</span> <span class="kw">sp</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r12</span> <span class="op">=</span> r2</span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
+<p>To get rid of all the needless operations <strong>RTL</strong> applies extensive list
+of optimisations. Each <strong>RTL</strong> dump contains summary of the pass effect
+on the file. Let’s look at the <strong>a.c.232r.jump</strong>:</p>
+<pre class><code>Deleted 2 trivially dead insns
+3 basic blocks, 2 edges.</code></pre>
+<p>Around <strong>a.c.257r.init-regs</strong> pass our <strong>RTL</strong> representation shrinks into
+the following:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">23</span> <span class="dv">22</span> <span class="dv">24</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">359</span>)</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (reg:DI <span class="dv">358</span>)</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">31</span> [<span class="dv">0x1f</span>])</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">1</span> [<span class="dv">0x1</span>]))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">17</span> <span class="dv">159</span> {extzv}</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>     (expr_list:REG_DEAD (reg:DI <span class="dv">358</span>)</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">nil</span>)))</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">24</span> <span class="dv">23</span> <span class="dv">29</span> <span class="dv">2</span> (<span class="kw">set</span> (subreg:DI (reg:SI <span class="dv">356</span> [ off ]) <span class="dv">0</span>)</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>        (reg:DI <span class="dv">359</span>)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">17</span> <span class="dv">6</span> {movdi_internal}</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>     (expr_list:REG_DEAD (reg:DI <span class="dv">359</span>)</span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">nil</span>)))</span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">29</span> <span class="dv">24</span> <span class="dv">30</span> <span class="dv">2</span> (<span class="kw">set</span> (reg/i:SI <span class="dv">8</span> r8)</span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>        (reg:SI <span class="dv">356</span> [ off ])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> <span class="dv">5</span> {movsi_internal}</span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>     (expr_list:REG_DEAD (reg:SI <span class="dv">356</span> [ off ])</span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">nil</span>)))</span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">30</span> <span class="dv">29</span> <span class="dv">0</span> <span class="dv">2</span> (use (reg/i:SI <span class="dv">8</span> r8)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> -<span class="dv">1</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
+<p>Or in a slightly more concise form:</p>
+<pre class><code>reg359 = zero_extract(reg358, offset=1, length=31)
+reg356 = (u32)reg359;
+reg8   = (u32)reg356;</code></pre>
+<p>Note how <strong>reg346 = (u32)reg356;</strong> already gone away.</p>
+<p>The most magic happened in a single <strong>a.c.259r.combine</strong> pass.
+Here is it’s report:</p>
+<pre class><code>;; Function bug (bug, funcdef_no=23, decl_uid=2078, cgraph_uid=23, symbol_order=23)
+
+starting the processing of deferred insns
+ending the processing of deferred insns
+df_analyze called
+insn_cost 2: 4
+insn_cost 6: 4
+insn_cost 32: 4
+insn_cost 7: 4
+insn_cost 10: 4
+insn_cost 11: 4
+insn_cost 14: 4
+insn_cost 15: 4
+insn_cost 16: 4
+insn_cost 18: 4
+insn_cost 19: 4
+insn_cost 20: 4
+insn_cost 21: 4
+insn_cost 22: 4
+insn_cost 23: 4
+insn_cost 24: 4
+insn_cost 29: 4
+insn_cost 30: 0
+allowing combination of insns 2 and 20
+original costs 4 + 4 = 8
+replacement cost 4
+deferring deletion of insn with uid = 2.
+modifying insn i3    20: [in0:DI]=r354:DI#0
+      REG_DEAD in0:DI
+      REG_DEAD r354:DI
+deferring rescan insn with uid = 20.
+allowing combination of insns 23 and 24
+original costs 4 + 4 = 8
+replacement cost 4
+deferring deletion of insn with uid = 23.
+modifying insn i3    24: r356:SI#0=r358:DI 0&gt;&gt;0x1
+  REG_DEAD r358:DI
+deferring rescan insn with uid = 24.
+allowing combination of insns 24 and 29
+original costs 4 + 4 = 8
+replacement cost 4
+deferring deletion of insn with uid = 24.
+modifying insn i3    29: r8:DI=zero_extract(r358:DI,0x20,0x1)
+      REG_DEAD r358:DI
+deferring rescan insn with uid = 29.
+starting the processing of deferred insns
+rescanning insn with uid = 20.
+rescanning insn with uid = 29.
+ending the processing of deferred insns</code></pre>
+<p>The essential output relevant to our instruction is:</p>
+<pre class><code>allowing combination of insns 23 and 24
+allowing combination of insns 24 and 29</code></pre>
+<p>This combines three instructions:</p>
+<pre class><code>reg359 = zero_extract(reg358, offset=1, length=31)
+reg356 = (u32)reg359;
+reg8   = (u32)reg356;</code></pre>
+<p>Into one:</p>
+<pre class><code>reg8 = zero_extract(reg358, offset=1, length=32)</code></pre>
+<p>The problem is in combiner that decided higher bit is zero anyway (false
+assumption) and applied <strong>zero_extract</strong> to full 32-bits. Why exactly it
+decided 32 upper bits are zero (they are not) is not clear to me :)
+It happens somewhere in <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/combine.c;h=31e6a4f68254fab551300252688a52d8c3dcaaa4;hb=HEAD#l2628">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/combine.c;h=31e6a4f68254fab551300252688a52d8c3dcaaa4;hb=HEAD#l2628</a>
+where some <strong>if()</strong> statements take about a page. Hopefully <strong>gcc</strong> <strong>RTL</strong>
+and <strong>ia64</strong> maintainers will help and guide us here.</p>
+<h1 id="parting-words">Parting words</h1>
+<ul>
+<li>Having good robust tests in packages is always great as it helps gaining
+confidence package is not completely broken on new target platforms (or toolchain versions).</li>
+<li><strong>printf()</strong> is still good enough tool to trace compiler bugs :)</li>
+<li><strong>-fdump-tree-all</strong> and <strong>-fdump-rtl-all</strong> are useful <strong>gcc</strong> flags to get
+the idea why optimisations fire (or don’t).</li>
+<li><strong>gcc</strong> performs very unobvious optimisations!</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December 23, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: an unsafeInterleaveIO example</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>an unsafeInterleaveIO example</h1>
+
+            <p>Этот пост будет про <a href="http://www.haskell.org/ghc/docs/latest/html/libraries/base/System-IO-Unsafe.html#v:unsafeInterleaveIO">unsafeInterleaveIO</a>.</p>
+<p>Часто хочется работать с <strong>IO</strong> данными, будто они являются ленивыми.
+Как <strong>hGetContents</strong> (или <strong>readFile</strong>), которая возвращает ленивую строку-содержание файла:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">do</span> by_line <span class="ot">&lt;-</span> <span class="fu">lines</span> <span class="ot">`fmap`</span> <span class="fu">readFile</span> <span class="st">&quot;/some/log/file&quot;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>   <span class="co">-- дальше работает с by_line как с обычным ленивым списком</span></span></code></pre></div>
+<p>По мере необходимости при использваонии новых строк они считываются с диска,
+а чтобы файл закрылся - надо обработать все данные (с этим надо аккуратно).</p>
+<p>Попробуем построить похожую функцию, которая получает данные из <strong>IO</strong> по мере использования.</p>
+<!--more-->
+<p>Примером у нас будет ленивое дерево файловой системы. Будем получать и тут же выводить
+имена файлов в каталогах полностью не получив всё дерево.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">module</span> <span class="dt">Main</span> (main) <span class="kw">where</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.Monad</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Prelude</span> <span class="kw">as</span> <span class="dt">E</span> <span class="co">-- exceptions only</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">System.IO.Unsafe</span> (unsafeInterleaveIO)</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">System.Directory</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">System.FilePath</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">System.Posix.Files</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Text.Printf</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Node</span> <span class="ot">=</span> <span class="dt">File</span> <span class="dt">String</span> <span class="co">-- file_name</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>          <span class="op">|</span> <span class="dt">Dir</span>  <span class="dt">String</span> [<span class="dt">Node</span>] <span class="co">-- dir_name children</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="ot">show_tree ::</span> (<span class="dt">String</span>, <span class="dt">Int</span>) <span class="ot">-&gt;</span> <span class="dt">Node</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> ()</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>show_tree (prefix, depth) tree <span class="ot">=</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">case</span> tree <span class="kw">of</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>      <span class="dt">File</span> n   <span class="ot">-&gt;</span> printf <span class="st">&quot;%s%s\n&quot;</span> prefix n</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>      <span class="dt">Dir</span>  n c <span class="ot">-&gt;</span> <span class="kw">do</span> printf <span class="st">&quot;%s%s/ {children=%u}\n&quot;</span> prefix n (<span class="fu">length</span> c)</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>                     <span class="kw">if</span> depth <span class="op">&gt;</span> <span class="dv">1</span> <span class="kw">then</span> forM_ c <span class="op">$</span> show_tree (<span class="st">&quot;    &quot;</span> <span class="op">++</span> prefix, depth <span class="op">-</span> <span class="dv">1</span>)</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>                                  <span class="kw">else</span> <span class="fu">putStrLn</span> <span class="op">$</span> <span class="st">&quot;    &quot;</span> <span class="op">++</span> prefix <span class="op">++</span> <span class="st">&quot;{ ... }&quot;</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="ot">nothrow ::</span> <span class="dt">IO</span> a <span class="ot">-&gt;</span> <span class="dt">IO</span> ()</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>nothrow action <span class="ot">=</span> E.catch (action <span class="op">&gt;&gt;</span> <span class="fu">return</span> ()) <span class="op">$</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>                     \xc <span class="ot">-&gt;</span> <span class="fu">putStrLn</span> <span class="op">$</span> <span class="st">&quot;ERROR: I caught an XC: &quot;</span> <span class="op">++</span> <span class="fu">show</span> xc</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="ot">main ::</span> <span class="dt">IO</span> ()</span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">do</span> <span class="fu">putStrLn</span> <span class="st">&quot;1. Strict tree:&quot;</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>       nothrow <span class="op">$</span> strictTree <span class="st">&quot;/etc&quot;</span> <span class="op">&gt;&gt;=</span> show_tree (<span class="st">&quot;  &quot;</span>, <span class="dv">2</span>)</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>       <span class="fu">putStrLn</span> <span class="st">&quot;2.*** Lazy tree:&quot;</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>       nothrow <span class="op">$</span> lazyTree   <span class="st">&quot;/etc&quot;</span> <span class="op">&gt;&gt;=</span> show_tree (<span class="st">&quot;  &quot;</span>, <span class="dv">2</span>)</span></code></pre></div>
+<p>Ничего особенного кроме того, что реализации <strong>strictTree/lazyTree</strong> пока нет.
+Я ее специально оттянул отдельно, чтобы не так страшно было.</p>
+<p>Берем список каталогов <strong>/etc/</strong> и распечанываем первые 2 уровня.
+- <strong>strictTree</strong> получает весь список
+- <strong>lazyTree</strong> получает данные по мере их вывода в <strong>show_tree</strong></p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- ======================= --</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- Implementation details:</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- modes for 'getTree'.</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">EvalStrategy</span> <span class="ot">=</span> <span class="dt">Lazy</span> <span class="op">|</span> <span class="dt">Strict</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="ot">lazyTree ::</span> <span class="dt">FilePath</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Node</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>lazyTree <span class="ot">=</span> getTree <span class="dt">Lazy</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="ot">strictTree ::</span> <span class="dt">FilePath</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Node</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>strictTree <span class="ot">=</span> getTree <span class="dt">Strict</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="ot">eval_thunk ::</span> <span class="dt">EvalStrategy</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> a <span class="ot">-&gt;</span> <span class="dt">IO</span> a</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>eval_thunk <span class="dt">Strict</span> <span class="ot">=</span> <span class="fu">id</span> <span class="co">-- don't delay computatin (nothing special)</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>eval_thunk <span class="dt">Lazy</span>   <span class="ot">=</span> unsafeInterleaveIO <span class="co">-- postpone up to evaluation</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="ot">getTree ::</span> <span class="dt">EvalStrategy</span> <span class="ot">-&gt;</span> <span class="dt">FilePath</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Node</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>getTree eval_mode path <span class="ot">=</span> eval_thunk eval_mode <span class="op">$</span> <span class="co">-- here comes the magic!</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>                                                <span class="co">-- 'eval' or 'postpone'?</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">do</span> s <span class="ot">&lt;-</span> getFileStatus path</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>       <span class="kw">let</span> basename <span class="ot">=</span> takeBaseName path</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>       <span class="kw">case</span> (isDirectory s) <span class="kw">of</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>           <span class="dt">False</span> <span class="ot">-&gt;</span> <span class="fu">return</span> <span class="op">$</span> <span class="dt">File</span> basename</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>           <span class="dt">True</span> <span class="ot">-&gt;</span> getDirectoryContents path <span class="op">&gt;&gt;=</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>                       <span class="fu">mapM</span> ( getTree eval_mode</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>                            <span class="op">.</span> (path <span class="op">&lt;/&gt;</span>))</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>                            <span class="op">.</span> <span class="fu">filter</span> (<span class="ot">`notElem`</span> [<span class="st">&quot;.&quot;</span>, <span class="st">&quot;..&quot;</span>]</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>                            ) <span class="op">&gt;&gt;=</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>                                \children <span class="ot">-&gt;</span> <span class="fu">return</span> <span class="op">$</span> <span class="dt">Dir</span> basename children</span></code></pre></div>
+<p><strong>lazyTree</strong> и <strong>strictTree</strong> имеют одну реализацию!
+Вся фишка в <strong>eval_thunk</strong>: она и делает всю магию - откладывает вычисление до реального использования.
+С этим нужно быть осторожным, так как в программе порядок выполнения операций <strong>IO</strong> теперь не так очевиден.</p>
+<p>Проверим, как оно работает:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> runhaskell uili.hs</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">1.</span> Strict tree:</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">ERROR:</span> I caught an XC: /etc/cron.weekly: getDirectoryContents: permission denied <span class="er">(</span><span class="ex">Permission</span> denied<span class="kw">)</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">2.***</span> Lazy tree:</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="ex">etc/</span> {children=229}</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>      <span class="ex">gimp/</span> {children=1}</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>      <span class="fu">crontab</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>      <span class="ex">genkernel</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>      <span class="ex">proftpd/</span> {children=3}</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>      <span class="ex">modules/</span> {children=3}</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>      <span class="ex">mke2fs</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>      <span class="fu">lynx</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>      <span class="ex">ld.so.conf/</span> {children=1}</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>      <span class="ex">kvm/</span> {children=2}</span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>      <span class="ex">lisp-config</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>      <span class="ex">dhcpcd</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>      <span class="ex">dmtab</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>      <span class="ex">openmpi/</span> {children=3}</span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>      <span class="ex">bonobo-activation/</span> {children=1}</span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>      <span class="ex">locale</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>      <span class="ex">screenrc</span></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>      <span class="ex">ulogd</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>      <span class="ex">slsh</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>      <span class="ex">adobe/</span> {children=1}</span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>      <span class="ex">minicom/</span> {children=1}</span>
+<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>      <span class="ex">unixODBC/</span> {children=3}</span>
+<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-37"><a href="#cb4-37" aria-hidden="true" tabindex="-1"></a>      <span class="ex">paludis/</span> {children=12}</span>
+<span id="cb4-38"><a href="#cb4-38" aria-hidden="true" tabindex="-1"></a>          <span class="kw">{</span> <span class="ex">...</span> }</span>
+<span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>      <span class="ex">services</span></span>
+<span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a><span class="ex">ERROR:</span> I caught an XC: /etc/cron.weekly: getDirectoryContents: permission denied <span class="er">(</span><span class="ex">Permission</span> denied<span class="kw">)</span></span></code></pre></div>
+<ul>
+<li><strong>strictTree</strong> не вернула вообще ничего и завершилась исключением,</li>
+<li><strong>lazyTree</strong> распечатала всё до первого проблемного каталога.
+Если проверить <strong>strace</strong>, мы увидим, что на файлы в каталогах, помеченных как ‘{ … }’
+<strong>stat</strong> не вызывался.</li>
+</ul>
+<p>Такие пироги :]</p>
+
+<div class="info">
+    Posted on August 10, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

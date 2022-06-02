@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: turbo boost emerge --sync and cvs up on gentoo-x86</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>turbo boost emerge --sync and cvs up on gentoo-x86</h1>
+
+            <p>As I wrote <a href="http://hackie.blog.tut.by/2012/03/10/seekwatcher/">before</a>
+<strong>portage</strong> operations are seek-bound and better handled by small loop device.</p>
+<p>I had some problems creating such <strong>btrfs</strong> loop device, due to nonworking
+<strong>nocow</strong> loop devices, but now I have the solution!</p>
+<!--more-->
+<p>The recipe:</p>
+<ol type="1">
+<li><p>[for btrfs host FS] Make sure you have at least
+<a href="https://bugs.gentoo.org/show_bug.cgi?id=420925">&gt;=sys-fs/e2fsprogs-1.42.6</a>
+which has <strong>chattr</strong>/<strong>lsattr</strong> with <strong>nocow</strong> support.</p></li>
+<li><p><strong>[for btrfs host FS]</strong>
+Mark a directory with loop device as nocow:</p>
+<pre><code>$ mkdir -p /subvolumes/nocow-images/
+$ chattr +C /subvolumes/nocow-images/
+$ sudo lsattr -ld /subvolumes/nocow-images/
+/subvolumes/nocow-images/    No_COW</code></pre></li>
+<li><p>Build small btrfs loop device:</p>
+<pre><code>dd if=/dev/zero of=&quot;$image&quot; bs=1M count=1K
+mkfs.btrfs           \
+ -d single -m single \
+ -L &quot;$label&quot;         \
+ -l 32k -n 32k       \
+ &quot;$image&quot;</code></pre></li>
+<li><p><strong>[for btrfs host FS]</strong>
+Make sure created file is nocow:</p>
+<pre><code>$ lsattr -l /subvolumes/nocow-images/gentoo-32k.img
+/subvolumes/nocow-images/gentoo-32k.img No_COW
+$ /usr/sbin/filefrag /subvolumes/nocow-images/gentoo-32k.img
+/subvolumes/nocow-images/gentoo-32k.img: 1 extent found</code></pre></li>
+<li><p>And mount it:</p>
+<pre><code>/subvolumes/nocow-images/gentoo-32k.img         /gentoo-32k     btrfs           loop,nodatasum,noatime,nodiratime    0       0</code></pre></li>
+<li><p>Amend <strong>/etc/portage/make.conf</strong> like that:</p>
+<pre><code>PORTDIR=/gentoo-32k/portage</code></pre>
+<p>and so on.</p></li>
+<li><p>Have fun!</p></li>
+</ol>
+<p>Some notes:</p>
+<ul>
+<li>Larger leaf sizes allow better inlining of small files
+and speeding up read pattern</li>
+<li>Smaller loop device allow faster reading-out the whole
+loop file in RAM reducing all the I/O.</li>
+<li>Disabling datasums and atimes for loop contents we leave
+only raw data there.</li>
+</ul>
+<p>Some numbers:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> time emerge <span class="at">--sync</span> <span class="co"># 72 seconds</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span>    1m12.111s</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="ex">user</span>    0m1.706s</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="ex">sys</span>     0m1.819s</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="ex">gentoo-x86</span> $ time cvs up <span class="co"># ~4 minutes</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span>    4m35.208s</span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="ex">user</span>    0m3.656s</span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="ex">sys</span>     0m14.226s</span></code></pre></div>
+
+<div class="info">
+    Posted on November 17, 2012 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: glibc on sparc</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>glibc on sparc</h1>
+
+            <p>Давно ничего не писал. Недавно решил дополнить таблицу бинарников
+для <strong>ghc-6.12.3</strong>. <a href="../2010/07/19/gentoo-haskell-progress/">Здесь (табличка внизу)</a>
+не хватало <strong>ppc</strong> и <strong>sparc</strong>.</p>
+<p>С <strong>ppc</strong> всё было весело и без моего участия. Joseph быстро собрал
+бинарник и даже убедился, что <strong>libffi</strong> сломан и <a href="http://darcs.haskell.org/cgi-bin/darcsweb.cgi?r=ghc;a=darcs_commitdiff;h=20100829192859-6895e-84474e68af43427fc0acf1a241d81fdc3fc6a496.gz">там</a>,
+а mounty собрал и убедился, что патч помогает. Спасибо им!</p>
+<p>Со <strong>sparc</strong> проблем особых почти не возникло. Почти!</p>
+<p>Я выпросил доступ к одной из niagara. У этого монстра 32 процессора
+и 32 гига ОЗУ.</p>
+<pre><code>$ cat /proc/cpuinfo
+cpu             : UltraSparc T1 (Niagara)
+fpu             : UltraSparc T1 integrated FPU
+pmu             : niagara
+prom            : OBP 4.25.0 2006/11/07 23:24
+type            : sun4v
+ncpus probed    : 32
+ncpus active    : 32
+D$ parity tl1   : 0
+I$ parity tl1   : 0
+Cpu0ClkTck      : 0000000047868c00
+Cpu1ClkTck      : 0000000047868c00
+Cpu2ClkTck      : 0000000047868c00
+Cpu3ClkTck      : 0000000047868c00
+.. (еще 28 таких строк)
+Cpu30ClkTck     : 0000000047868c00
+Cpu31ClkTck     : 0000000047868c00
+MMU Type        : Hypervisor (sun4v)
+State:
+CPU0:           online
+CPU1:           online
+CPU2:           online
+CPU3:           online
+... (ну вы поняли :])
+CPU30:          online
+CPU31:          online</code></pre>
+<p>Так выглядит <strong>htop</strong>:</p>
+<p><a href="http://attachments-blog.tut.by/2368/files/2010/09/2010-09-25-07-29-11.png"><img src="http://attachments-blog.tut.by/2368/files/2010/09/2010-09-25-07-29-11.png" width="300"></a></p>
+<p>Частота одного процессора:</p>
+<pre><code>Calibrating delay using timer specific routine.. 2415.04 BogoMIPS (lpj=1207520)</code></pre>
+<p>У меня на amd64 буке почти столько же. Значит под 1.6GHz.
+<strong>make</strong> там запускается с параметром <strong>-j33</strong> (33 параллельных процесса сборки).
+32 гигогерцовых головы - это много, но гадкая система сборки <strong>ghc</strong> не тестировалась
+на числе голов больше, чем 8 и оказалась сломанной на <strong>niagara</strong> (починено в <strong>ghc</strong>-HEAD).
+В итоге я собирал <strong>ghc</strong>-6.12.3 400 минут вместо 12.5 (шучу, там не настолько всё параллельно,
+но близко к тому).</p>
+<p>Это не оказалось проблемой и всё собралось с первого раза (ну почти, старый бинарник <strong>ghc</strong>
+требовал <strong>gcc</strong> версии 4.1; <strong>ghc</strong>-6.10+ больше не полагается на кодогенерацию <strong>gcc</strong> и генерит код сам.
+<strong>ghc</strong>-6.12.3 способен собрать себя за 240 минут на том же железе).</p>
+<p>После этого я решил побаловаться на <strong>niagara</strong> и попробовал обновить мир до ~sparc с <strong>FEATURES=test</strong>,
+которые запускает тесты(нде они есть). <strong>Openssl</strong>, например, проверяет, что все ее криптоалгоритмы генерят нужные данные.
+Все дела происходят в <strong>chroot</strong>, так что ни одна production система не пострадала. Тут же полезли
+страшные вещи: некоторые тесты стали зависать в самых неожиданных местах (например, тесты <strong>gdb</strong>),
+хотя должны были завершиться по таймауту в 300 секунд (взможно, это баг в <strong>ptrace</strong>).</p>
+<p>Я решил не заморачиваться и просто попробовал обновить систему - без включенных <strong>FEATURES=test</strong>. И хрен там -
+не собрался <strong>glibc</strong>-2.12.1: <a href="https://bugs.gentoo.org/show_bug.cgi?id=336792">репорт</a>. Казалось бы - делов
+то, наверное, сломал компилятор или еще что-то. Попросил других <strong>sparc</strong>’овцев проверить - та же картина:
+<strong>glibc</strong>-2.11.2 работает, а <strong>glibc</strong>-2.12.1 - нет (падает всё на том-же <strong>rpcgen</strong>).</p>
+<p>Быстро баг никто не пофиксил и я решил немного поисследовать, как там жизнь на <strong>sparc</strong>’е. Сам <strong>rpcgen</strong> - это
+простая программа, которая парсит <strong>SUN RPC</strong> спек файлы и генерит <strong>RPC</strong> заглушки на <strong>C</strong> (прога изменялась в
+2005 году). Она используется для сборки всяких юзерспейсных <strong>NFS</strong> серверов, клиентов и прочих штук, которые
+регистрируют свою процедуры в службе <strong>portmapper</strong> (та, которую все вырезают, когда ставят <strong>debian</strong> ;]).</p>
+<p>Как видно в баге я начал подозревать всё и вся, но потом вырисовалась ужасная картина:
+на <strong>sparc</strong> <a href="https://bugs.gentoo.org/show_bug.cgi?id=336792#c13">сломана функция memcpy!</a>
+Функция просто копирует байты из одной области памяти в другую. Области не должны пересекаться - всё просто.
+<strong>memcpy</strong> - одна из функций, которая серьезно менялась для <strong>sparc</strong> между релизами <strong>glibc</strong>.</p>
+<p>Казалось бы - чего проще скопировать 36 байт (выровненных по какой надо границе, все дела) со стека в динамическую память.
+А вот хер там. <strong>sparc</strong> - <em>big endian</em> железяка, не поддерживающая невыровненный доступ к памяти:</p>
+<pre><code>$ cat align_test.c
+#include &lt;stdio.h&gt;
+
+int main() {
+    char buf[] = { 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9 };
+    printf (&quot;+0: %08X\n&quot;, *(int *)(buf + 0));
+    printf (&quot;+1: %08X\n&quot;, *(int *)(buf + 1));
+    printf (&quot;+2: %08X\n&quot;, *(int *)(buf + 2));
+    printf (&quot;+3: %08X\n&quot;, *(int *)(buf + 3));
+    printf (&quot;+4: %08X\n&quot;, *(int *)(buf + 4));
+    return 0;
+}
+$ ./a
++0: 01020304
+Bus error</code></pre>
+<p>По сему функция <strong>memcpy</strong> должна быть сложнее, чем на <strong>amd64</strong> (а значит сделать там ошибку легче).</p>
+<p>Посмотрим на исходники:</p>
+<ul>
+<li><a href="http://git.kernel.org/?p=linux/kernel/git/torvalds/linux-2.6.git;a=blob;f=arch/x86/lib/memcpy_32.c;h=5415a9d06f53b75c4a993b0bbe96508502691142;hb=cb9cae0395d70fc4539f6904c11d3a14c0001006">i386</a>:
+всё гениальное - просто. Практически одна инструкция: <em>rep movsb</em> (ну и флаг направления наращивания регистров смещения соблюден)</li>
+<li><a href="http://git.kernel.org/?p=linux/kernel/git/torvalds/linux-2.6.git;a=blob;f=arch/x86/lib/memcpy_64.S;h=bcbcd1e0f7d57fe4b3972adc24785dc6837386f6;hb=cb9cae0395d70fc4539f6904c11d3a14c0001006">amd64</a>:
+чуть грустнее, но базовая операция такая-же плюс копирование больших выровненных блоков делается параллельно (регистров много - можно веселиться)</li>
+<li><a href="http://git.kernel.org/?p=linux/kernel/git/torvalds/linux-2.6.git;a=blob;f=arch/sparc/lib/NG2memcpy.S;h=0aed75653b5001cf142e6567627eea89c3968d0e;hb=cb9cae0395d70fc4539f6904c11d3a14c0001006">sparc</a>:
+и судя по всему в ядре оно работает, а в <strong>glibc</strong> похожая портянка - нет :]</li>
+</ul>
+<p>Надо курить доки. Всяких ссылок и спеков навалом. Немного <a href="http://www.sics.se/~psm/sparcstack.html">ABI</a> для чайников типа меня.</p>
+<p>Сначала мне было непонятно, почему одна голова <strong>sparc</strong> работает в разы медленнее, чем мой <strong>core2</strong> примерно
+той же частоты (сильно чувствуется на <strong>./configure</strong>). Теперь понемногу проясняется: <strong>sparc</strong> требует сравнительно
+дофига ассемблерного кода для вызова <strong>C</strong> функции (и вынужден сохранять регистровые фреймы в память, когда делает системные вызовы).</p>
+
+<div class="info">
+    Posted on September 25, 2010 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: profiling your boot</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>profiling your boot</h1>
+
+            <p>Как-то недавно выпиливая очередной патч для <strong>btrfs</strong> я наткнулся на
+<a href="http://www.mail-archive.com/linux-btrfs@vger.kernel.org/msg16042.html">сообщение одного сэра</a>
+о проблеме, которую я только-только <a href="http://www.mail-archive.com/linux-btrfs@vger.kernel.org/msg16045.html">пофиксил</a> :]</p>
+<p>Меня заинтересовала его картинка и я решил запилить себе такую-же.
+Это оказалось не только красиво, но и познавательно:</p>
+<!--more-->
+<p>Как всегда, всё просто как грабли:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">emerge</span> app-benchmarks/bootchart2</span></code></pre></div>
+<p>Для более детальной статистики <strong>emerge</strong> попросит включить в ядре
+всякие счётчики, трейсеры и проберы для более детальной инфы.
+В первый раз можно не париться.</p>
+<p>Для <strong>grub</strong> добавляюм строку с <strong>init=/sbin/bootchartd</strong>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">title</span> Gentoo Linux</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="ex">root</span> <span class="er">(</span><span class="ex">hd0,0</span><span class="kw">)</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="ex">kernel</span> /boot/vmlinuz root=/dev/sda2 init=/sbin/bootchartd</span></code></pre></div>
+<p>Для <strong>grub2</strong>:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">menuentry</span> <span class="st">'Gentoo Linux'</span> {</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="ex">insmod</span> part_msdos</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="ex">insmod</span> ext2</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">set</span> root=<span class="st">'hd0,msdos1'</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="ex">linux</span> /boot/vmlinuz root=/dev/sda2 init=/sbin/bootchartd</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="er">}</span></span></code></pre></div>
+<p>Перезагружаемся и получаем лог загрузки в <strong>/var/log/bootchart.tgz</strong>.</p>
+<p>Вся статистика собирается в <strong>tmpfs</strong> и сбрасывается по завершению
+указанного процесса в <strong>/etc/bootchartd.conf</strong>:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The processes we have to wait for</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="va">EXIT_PROC</span><span class="op">=</span><span class="st">&quot;agetty mgetty mingetty&quot;</span></span></code></pre></div>
+<p>Можно что-нибудь более высокоуровневое впилить, если хочется посмотреть на загрузку <strong>KDE</strong>/<strong>GNOME</strong> частей.</p>
+<p>После загрузки можно сгенерить красивый график. Мы сгенерим аж 2 из них:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> pybootchartgui <span class="kw">&amp;&amp;</span> <span class="fu">mv</span> bootchart.png bootchart-default.png</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> pybootchartgui <span class="at">--show-all</span> <span class="kw">&amp;&amp;</span> <span class="fu">mv</span> bootchart.png bootchart-all.png</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> pybootchartgui <span class="at">-i</span> <span class="co"># а тут можно руками потыкать в gui приложении</span></span></code></pre></div>
+<p>Это результат для моей системы (<strong>Осторожно</strong>! <strong>они здоровенные</strong>):</p>
+<ul>
+<li><a href="http://slyfox.ath.cx:8081/i/bootchart-default.png">Обычный вывод</a> (800KB)</li>
+<li><a href="http://slyfox.ath.cx:8081/i/bootchart-all.png">Детальный вывод</a> (1.2MB)</li>
+</ul>
+<p>По картинкам хорошо видно, что:</p>
+<ul>
+<li>юзерспейс получает управление на <strong>6-й</strong> секунде.</li>
+<li>больше всего ввода-вывода кушает процесс <strong>systemd-udev</strong>, запущенный на <strong>12-й</strong> секунде (грузит модуля, пробит железо, пинает usb_modeswitch и прочее)</li>
+<li>первые <strong>agetty</strong>/<strong>login</strong> стартанули на <strong>47-й</strong> секунде. Это и есть время загрузки.</li>
+<li><strong>alsactl</strong> вытворяет очень много ввода-вывода (скорее всего просто первая грузит кучу левых либ, с которыми она слинкована)</li>
+<li>удаление всяких временных файлов занимает аж <strong>4</strong> секунды (у меня всегда помойка в <strong>/tmp</strong>)</li>
+<li>в детальном выводе видны даже аргументы, с которыми запускается каждая программа при загрузке (крайне познавательно!)</li>
+</ul>
+<p>Have fun! :]</p>
+
+<div class="info">
+    Posted on July  8, 2012 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

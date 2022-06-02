@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: gcc's -Wmissing-format-attribute option</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc's -Wmissing-format-attribute option</h1>
+
+            <p>Начну сразу с примера. Игрушечний пример выглядит так:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode Cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* a1.c */</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">int</span> verbosity <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">void</span> v_log <span class="op">(</span><span class="dt">int</span> minimal_verbosity<span class="op">,</span> <span class="at">const</span> <span class="dt">char</span> <span class="op">*</span>fmt<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> ap<span class="op">;</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* should we output it? */</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>minimal_verbosity <span class="op">&gt;</span> verbosity<span class="op">)</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* real work */</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>ap<span class="op">,</span> fmt<span class="op">);</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    vfprintf<span class="op">(</span>stderr<span class="op">,</span> fmt<span class="op">,</span> ap<span class="op">);</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>ap<span class="op">);</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* parse something */</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    verbosity <span class="op">=</span> <span class="dv">5</span><span class="op">;</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* */</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    v_log <span class="op">(</span><span class="dv">3</span><span class="op">,</span> <span class="st">&quot;About to exit from </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Типичная программа. Чтобы найти ошибку - нужно хорошенько присматриваться
+с форматной строке, а хочется автоматизировать поиск таких тривиальных ошибок.</p>
+<p>С давних пор <strong>gcc</strong> позволяет объявить функцию, как
+<strong>printf()</strong>-подобную:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode Cpp"><code class="sourceCode cpp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* a2.c */</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">int</span> verbosity <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">void</span> v_log <span class="op">(</span><span class="dt">int</span> minimal_verbosity<span class="op">,</span> <span class="at">const</span> <span class="dt">char</span> <span class="op">*</span>fmt<span class="op">,</span> <span class="op">...)</span> <span class="ex">__attribute__ ((format (printf, 2, 3)))</span><span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> <span class="dt">void</span> v_log <span class="op">(</span><span class="dt">int</span> minimal_verbosity<span class="op">,</span> <span class="at">const</span> <span class="dt">char</span> <span class="op">*</span>fmt<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> ap<span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* should we output it? */</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>minimal_verbosity <span class="op">&gt;</span> verbosity<span class="op">)</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* real work */</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>ap<span class="op">,</span> fmt<span class="op">);</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>    vfprintf<span class="op">(</span>stderr<span class="op">,</span> fmt<span class="op">,</span> ap<span class="op">);</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>ap<span class="op">);</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* parse something */</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    verbosity <span class="op">=</span> <span class="dv">5</span><span class="op">;</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* */</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    v_log <span class="op">(</span><span class="dv">3</span><span class="op">,</span> <span class="st">&quot;About to exit from </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc a2.c <span class="at">-Wall</span> <span class="at">-o</span> a</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">a2.c:</span> В функции «main»:</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="ex">a2.c:19:9:</span> предупреждение: format «%s» expects a matching «char <span class="pp">*</span>» argument [-Wformat]</span></code></pre></div>
+<p>Споймал! Но руками выискивать функции с <strong>ellipsis</strong> (<strong>(…)</strong>)
+тоже не хочется.</p>
+<p>Сегодня с утра одним глазом смотрел, как собирается <strong>gcc</strong>
+(ну а что еще гентушнегу делать?) и заметил неведомую
+для себя опцию <strong>-Wmissing-format-attribute</strong>.</p>
+<p>Она, собственно, подсказывает куда надо всунуть форматные атрибуты:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc a1.c <span class="at">-Wall</span> <span class="at">-Wmissing-format-attribute</span> <span class="at">-o</span> a</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">a1.c:</span> В функции «v_log»:</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">a1.c:11:9:</span> предупреждение: этой функции, вероятно, можно задать атрибут форматирования gnu_printf [-Wmissing-format-attribute]</span></code></pre></div>
+<p>Я подумал, что неплохо бы всунуть в сборку всех наших проектов
+этот чудоключ и попробовать их пособирать.</p>
+<p>Нашел много интересных ошибок в реальном коде :]</p>
+<p>Утечка форматной строки из пользовательского кода (похожих ошибок много):</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode Diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -57,9 +60,9 @@ public:</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>        static void ThrowError(void *ud, const SQChar *s) {</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>                SQCompiler *c = (SQCompiler *)ud;</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="st">-               c-&gt;Error(s);</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="va">+               c-&gt;Error(&quot;%s&quot;, s);</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="st">-       void Error(const SQChar *s, ...)</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="va">+       void Error(const SQChar *s, ...) GCCISM(__attribute__ ((format (printf, 2, 3))))</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>        {</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>                static SQChar temp[256];</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>                va_list vl;</span></code></pre></div>
+<p>Просто мусор в обработчике ошибки (похожих ошибок много).
+Бедный пользователь не узнал бы, почему у него случается <strong>SIGSEGV</strong>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode Diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -926,7 +931,7 @@ void check_cgp( void ) {</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>             pthread_t thread;</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>             if( pthread_create( &amp;thread, &amp;thread_attr, &amp;cgp_check_thread, cgpfile ) )</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="st">-                mexit( EXIT_FAILURE, &quot;pthread_create(): %s&quot;, errno );</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="va">+                mexit( EXIT_FAILURE, &quot;pthread_create(): %s&quot;, strerror(errno) );</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>         }</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>         else if( !strcmp( command, &quot;QUIT&quot; ) ) {</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>             cgp_response( NULL, &quot;QUITTING&quot; );</span></code></pre></div>
+
+<div class="info">
+    Posted on March 12, 2013 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

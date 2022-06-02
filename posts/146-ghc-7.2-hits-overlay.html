@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: ghc 7.2 hits overlay!</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>ghc 7.2 hits overlay!</h1>
+
+            <p>Пару дней назад <strong>MrFenix</strong> спросил как бы это ему написать новый ебилд для <strong>ghc</strong>.
+Я ему что-то начал невнятно объяснять и решил, что проще добавить ебилд самому
+и по горячим следам писануть микродок. Собственно <a href="https://github.com/gentoo-haskell/gentoo-haskell/blob/master/projects/doc/HOWTO-bump-ghc.rst">результат</a>.</p>
+<p>Но обычно при обновлении мажорной версии <strong>ghc</strong> проблемы приносит не сам компилятор, а либы
+которые он с собой тянет. В нашем случае обновились <strong>Cabal</strong> до <strong>1.12</strong>, <strong>integer-gmp</strong> до
+<strong>0.3</strong> и <strong>base</strong> до <strong>4.4</strong>. Остальное - мелочи. И теперь пакеты <strong>haskell98</strong> и <strong>base</strong>
+мешать нельзя.</p>
+<!--more-->
+<p>Как бы там ни было, приличное число пакеров разваливается и надо их понемногу фиксить.
+В этом нам помогает <strong>ebuild</strong>. Он нам помогает разбить установку пакета в систему на фазы
+и редактировать пакет на ходу.</p>
+<p>Рассмотрим пример исправления такого пакета: <strong>data-inttrie</strong>.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">[1</span> of 1] Compiling Main             <span class="er">(</span> <span class="ex">/tmp/portage/dev-haskell/data-inttrie-0.0.4/work/data-inttrie-0.0.4/Setup.hs,</span> /tmp/portage/dev-haskell/data-inttrie-0.0.4/work/data-inttrie-0.0.4/Setup.o <span class="kw">)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Linking</span> setup ...</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Configuring</span> data-inttrie-0.0.4...</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">setup:</span> At least the following dependencies are missing:</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">base</span> <span class="op">&gt;</span>=3 <span class="kw">&amp;&amp;</span> <span class="op">&lt;</span>=4.4</span></code></pre></div>
+<p>Заходим в каталог с ебилдом и запускаем <strong>ebuild data-inttrie-0.0.4.ebuild clean prepare</strong>.
+Эта команда удаляет старый мусор, распаковывает исходник и накладывает патчи (если есть).</p>
+<p>Теперь мы можем создать внутри репозиторий <strong>git</strong>, чтобы не париться созданием патчей позже.
+Для этого у меня есть суперскипт <strong>gitify</strong>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat ~/bin/gitify</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh -e</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> init</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> add .</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> commit <span class="at">-a</span> <span class="at">-s</span> <span class="at">-m</span> <span class="st">&quot;initial </span><span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span><span class="st">&quot;</span></span></code></pre></div>
+<p>переходим в <strong>…work/data-inttrie-0.0.4/</strong> и запускаем <strong>gitify</strong>.
+Теперь запускаем <strong>ebuild path/to/data-inttrie-0.0.4.ebuild compile</strong> и ловим ошибку сборки:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">[st@st]</span> ~/portage/gentoo-haskell/dev-haskell/data-inttrie:ebuild ~/portage/gentoo-haskell/dev-haskell/data-inttrie/data-inttrie-0.0.4.ebuild compile</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> Existing <span class="va">${T}</span><span class="ex">/environment</span> for <span class="st">'data-inttrie-0.0.4'</span> will be sourced.</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> Run <span class="st">'clean'</span> to start with a fresh environment.</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> It <span class="ex">appears</span> that <span class="st">'data-inttrie-0.0.4'</span> is already setup<span class="kw">;</span> <span class="ex">skipping.</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> Remove <span class="st">'/tmp/portage/dev-haskell/data-inttrie-0.0.4/.setuped'</span> to force setup.</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> Checking <span class="ex">data-inttrie-0.0.4.tar.gz</span><span class="st">'s mtime...</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="st">&gt;&gt;&gt; WORKDIR is up-to-date, keeping...</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="st">&gt;&gt;&gt; It appears that '</span><span class="ex">data-inttrie-0.0.4</span><span class="st">' is already prepared; skipping.</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="st">&gt;&gt;&gt; Remove '</span><span class="ex">/tmp/portage/dev-haskell/data-inttrie-0.0.4/.prepared</span><span class="st">' to force prepare.</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="st">&gt;&gt;&gt; Configuring source in /tmp/portage/dev-haskell/data-inttrie-0.0.4/work/data-inttrie-0.0.4 ...</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="st"> * Using cabal-1.11.1.20110721.</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="st"> [1 of 1] Compiling Main             ( /tmp/portage/dev-haskell/data-inttrie-0.0.4/work/data-inttrie-0.0.4/Setup.hs, /tmp/portage/dev-haskell/data-inttrie-0.0.4/work/data-inttrie-0.0.4/Setup.o )</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="st"> Linking setup ...</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="st"> Configuring data-inttrie-0.0.4...</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="st"> setup: At least the following dependencies are missing:</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="st"> base &gt;=3 &amp;&amp; &lt;=4.4</span></span></code></pre></div>
+<p>Видно, что исходник не перераспаковывался заново. Можно фиксить и прбовать собирать и тестировать
+всё прямо на месте. Когда результат будет готов, <strong>git diff</strong> выдаст нам готовый патч.</p>
+<p>Чтобы каждый раз не париться созданием <strong>git</strong> репозитория вкатим такую штуку в <strong>/etc/portage/bashrc</strong>.
+Ради нее я пост и начал писать:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat /etc/portage/bashrc</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">post_src_prepare()</span> <span class="kw">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">pushd</span> <span class="st">&quot;</span><span class="va">${S}</span><span class="st">&quot;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="bu">[</span> <span class="ot">!</span> <span class="ot">-d</span> .git <span class="bu">]</span><span class="kw">;</span> <span class="cf">then</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>            <span class="fu">git</span> init .</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>            <span class="fu">git</span> config user.name <span class="st">&quot;Sergei Trofimovich&quot;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>            <span class="fu">git</span> config user.email <span class="st">&quot;slyfox@gentoo.org&quot;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>            <span class="fu">git</span> add .</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>            <span class="fu">git</span> commit <span class="at">-s</span> <span class="at">-m</span> <span class="st">&quot;inital </span><span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span><span class="st">&quot;</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">fi</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="bu">popd</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></code></pre></div>
+<p><strong>post_src_prepare</strong> вызывается <strong>emerge</strong> сразу после фазы <strong>src_prepare</strong> (в этой фазе обычно завершается
+работа с самим исходником: всё патчится и автогенерится).</p>
+<p>Теперь вернемся к <strong>data-inttrie</strong>: <strong>base &gt;=3 &amp;&amp; &lt;=4.4</strong> исправляем <strong>base &gt;=3 &amp;&amp; &lt;4.5</strong> (отношение <strong>&lt;=</strong> практически всегда неправильное).</p>
+<p>Запускаем <strong>ebuild path/to/data-inttrie-0.0.4.ebuild compile test</strong> и убеждаемся, что пакет собирается и его тесты
+работают (если есть).</p>
+<ul>
+<li>генерим патч: <strong>git diff &gt; data-inttrie-0.0.4-ghc-7.2.patch</strong></li>
+<li>добавляем <a href="https://github.com/gentoo-haskell/gentoo-haskell/commit/c6a06ae227ffffc732fec8f6733575723fd6e1fc">в оверлей</a></li>
+<li>дурим голову аффтору, чтобы он принял наш патч в апстрим</li>
+</ul>
+<p>Готово! :]</p>
+
+<div class="info">
+    Posted on July 23, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

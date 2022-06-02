@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: Endianness of a single byte: big or little?</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>Endianness of a single byte: big or little?</h1>
+
+            <h1 id="bug">Bug</h1>
+<p>Rolf Eike Beer noticed two test failures while testing <strong>radvd</strong> package (<strong>IPv6</strong> route advertiser
+daemon and more) on <strong>sparc</strong>. Both tests failed likely due to endianness issue:</p>
+<pre class><code>test/send.c:317:F:build:test_add_ra_option_lowpanco:0:
+  Assertion '0 == memcmp(expected, sb.buffer, sizeof(expected))'
+    failed: 0 == 0, memcmp(expected, sb.buffer, sizeof(expected)) == 1
+test/send.c:342:F:build:test_add_ra_option_abro:0:
+  Assertion '0 == memcmp(expected, sb.buffer, sizeof(expected))'
+    failed: 0 == 0, memcmp(expected, sb.buffer, sizeof(expected)) == 1</code></pre>
+<p>I’ve confirmed the same failure on <strong>powerpc</strong>.</p>
+<p>Eike noted that it’s unusual because sparc is a big-endian architecture and network byteorder
+is also big-endian (thus no need to flip bytes). Something very specific must have lurked in <strong>radvd</strong>
+code to break endianness in this case. Curiously all the <strong>radvd</strong> tests were working fine on <strong>amd64</strong>.</p>
+<p>Two functions failed to produce expected results:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>START_TEST<span class="op">(</span>test_add_ra_option_lowpanco<span class="op">)</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>        ck_assert_ptr_ne<span class="op">(</span><span class="dv">0</span><span class="op">,</span> iface<span class="op">);</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> safe_buffer sb <span class="op">=</span> SAFE_BUFFER_INIT<span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        add_ra_option_lowpanco<span class="op">(&amp;</span>sb<span class="op">,</span> iface<span class="op">-&gt;</span>AdvLowpanCoList<span class="op">);</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">char</span> expected<span class="op">[]</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>            <span class="bn">0x22</span><span class="op">,</span> <span class="bn">0x03</span><span class="op">,</span> <span class="bn">0x32</span><span class="op">,</span> <span class="bn">0x48</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0xe8</span><span class="op">,</span> <span class="bn">0x03</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>            <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        ck_assert_int_eq<span class="op">(</span>sb<span class="op">.</span>used<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>expected<span class="op">));</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>        ck_assert_int_eq<span class="op">(</span><span class="dv">0</span><span class="op">,</span> memcmp<span class="op">(</span>expected<span class="op">,</span> sb<span class="op">.</span>buffer<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>expected<span class="op">)));</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>        safe_buffer_free<span class="op">(&amp;</span>sb<span class="op">);</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>END_TEST</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>START_TEST<span class="op">(</span>test_add_ra_option_abro<span class="op">)</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>        ck_assert_ptr_ne<span class="op">(</span><span class="dv">0</span><span class="op">,</span> iface<span class="op">);</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> safe_buffer sb <span class="op">=</span> SAFE_BUFFER_INIT<span class="op">;</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>        add_ra_option_abro<span class="op">(&amp;</span>sb<span class="op">,</span> iface<span class="op">-&gt;</span>AdvAbroList<span class="op">);</span></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">char</span> expected<span class="op">[]</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>            <span class="bn">0x23</span><span class="op">,</span> <span class="bn">0x03</span><span class="op">,</span> <span class="bn">0x0a</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x02</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x02</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0xfe</span><span class="op">,</span> <span class="bn">0x80</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>            <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0xa2</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x01</span><span class="op">,</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>        ck_assert_int_eq<span class="op">(</span>sb<span class="op">.</span>used<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>expected<span class="op">));</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>        ck_assert_int_eq<span class="op">(</span><span class="dv">0</span><span class="op">,</span> memcmp<span class="op">(</span>expected<span class="op">,</span> sb<span class="op">.</span>buffer<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>expected<span class="op">)));</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>        safe_buffer_free<span class="op">(&amp;</span>sb<span class="op">);</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>END_TEST</span></code></pre></div>
+<p>Both tests are straightforward: they verify <strong>6LoWPAN</strong> and <strong>ABRO</strong> extension handling
+(both are related to route announcement for Low Power devices). Does not look complicated.</p>
+<p>I looked at <strong>add_ra_option_lowpanco()</strong> implementation and noticed at least one bug of
+missing endianness conversion:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// radvd.h</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nd_opt_abro <span class="op">{</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_abro_type<span class="op">;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_abro_len<span class="op">;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint16_t</span> nd_opt_abro_ver_low<span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint16_t</span> nd_opt_abro_ver_high<span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint16_t</span> nd_opt_abro_valid_lifetime<span class="op">;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> in6_addr nd_opt_abro_6lbr_address<span class="op">;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="co">// send.c</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> add_ra_option_mipv6_home_agent_info<span class="op">(</span><span class="kw">struct</span> safe_buffer <span class="op">*</span>sb<span class="op">,</span> <span class="kw">struct</span> mipv6 <span class="dt">const</span> <span class="op">*</span>mipv6<span class="op">)</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> HomeAgentInfo ha_info<span class="op">;</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        memset<span class="op">(&amp;</span>ha_info<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>ha_info<span class="op">));</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        ha_info<span class="op">.</span>type <span class="op">=</span> ND_OPT_HOME_AGENT_INFO<span class="op">;</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        ha_info<span class="op">.</span>length <span class="op">=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        ha_info<span class="op">.</span>flags_reserved <span class="op">=</span> <span class="op">(</span>mipv6<span class="op">-&gt;</span>AdvMobRtrSupportFlag<span class="op">)</span> <span class="op">?</span> ND_OPT_HAI_FLAG_SUPPORT_MR <span class="op">:</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>        ha_info<span class="op">.</span>preference <span class="op">=</span> htons<span class="op">(</span>mipv6<span class="op">-&gt;</span>HomeAgentPreference<span class="op">);</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        ha_info<span class="op">.</span>lifetime <span class="op">=</span> htons<span class="op">(</span>mipv6<span class="op">-&gt;</span>HomeAgentLifetime<span class="op">);</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        safe_buffer_append<span class="op">(</span>sb<span class="op">,</span> <span class="op">&amp;</span>ha_info<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>ha_info<span class="op">));</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> add_ra_option_abro<span class="op">(</span><span class="kw">struct</span> safe_buffer <span class="op">*</span>sb<span class="op">,</span> <span class="kw">struct</span> AdvAbro <span class="dt">const</span> <span class="op">*</span>abroo<span class="op">)</span></span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> nd_opt_abro abro<span class="op">;</span></span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>        memset<span class="op">(&amp;</span>abro<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>abro<span class="op">));</span></span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>        abro<span class="op">.</span>nd_opt_abro_type <span class="op">=</span> ND_OPT_ABRO<span class="op">;</span></span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>        abro<span class="op">.</span>nd_opt_abro_len <span class="op">=</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>        abro<span class="op">.</span>nd_opt_abro_ver_low <span class="op">=</span> abroo<span class="op">-&gt;</span>Version<span class="op">[</span><span class="dv">1</span><span class="op">];</span></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>        abro<span class="op">.</span>nd_opt_abro_ver_high <span class="op">=</span> abroo<span class="op">-&gt;</span>Version<span class="op">[</span><span class="dv">0</span><span class="op">];</span></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>        abro<span class="op">.</span>nd_opt_abro_valid_lifetime <span class="op">=</span> abroo<span class="op">-&gt;</span>ValidLifeTime<span class="op">;</span></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>        abro<span class="op">.</span>nd_opt_abro_6lbr_address <span class="op">=</span> abroo<span class="op">-&gt;</span>LBRaddress<span class="op">;</span></span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>        safe_buffer_append<span class="op">(</span>sb<span class="op">,</span> <span class="op">&amp;</span>abro<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>abro<span class="op">));</span></span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Note how <strong>add_ra_option_mipv6_home_agent_info()</strong> carefully flips bytes with <strong>htons()</strong>
+for all <strong>uint16_t</strong> fields but <strong>add_ra_option_abro()</strong> does not.</p>
+<p>It means the <strong>ABRO</strong> does not really work on little-endian (aka most) systems in <strong>radvd</strong>
+and test checks for the wrong thing. I added missing <strong>htons()</strong> calls and fixed <strong>expected[]</strong>
+output in tests by manually flipping two bytes in a few locations.</p>
+<h1 id="plot-twist">Plot twist</h1>
+<p>The effect was slightly unexpected: I fixed only <strong>ABRO</strong> test, but not <strong>6LoWPAN</strong>.
+It’s where things became interesting. Let’s look at <strong>add_ra_option_lowpanco()</strong> implementation:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// radvd.h</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nd_opt_6co <span class="op">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_type<span class="op">;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_len<span class="op">;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_context_len<span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_res <span class="op">:</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_c <span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_cid <span class="op">:</span> <span class="dv">4</span><span class="op">;</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint16_t</span> nd_opt_6co_reserved<span class="op">;</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint16_t</span> nd_opt_6co_valid_lifetime<span class="op">;</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> in6_addr nd_opt_6co_con_prefix<span class="op">;</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="co">// send.c</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> add_ra_option_lowpanco<span class="op">(</span><span class="kw">struct</span> safe_buffer <span class="op">*</span>sb<span class="op">,</span> <span class="kw">struct</span> AdvLowpanCo <span class="dt">const</span> <span class="op">*</span>lowpanco<span class="op">)</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> nd_opt_6co co<span class="op">;</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>        memset<span class="op">(&amp;</span>co<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>co<span class="op">));</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_type <span class="op">=</span> ND_OPT_6CO<span class="op">;</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_len <span class="op">=</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_context_len <span class="op">=</span> lowpanco<span class="op">-&gt;</span>ContextLength<span class="op">;</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_c <span class="op">=</span> lowpanco<span class="op">-&gt;</span>ContextCompressionFlag<span class="op">;</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_cid <span class="op">=</span> lowpanco<span class="op">-&gt;</span>AdvContextID<span class="op">;</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_valid_lifetime <span class="op">=</span> lowpanco<span class="op">-&gt;</span>AdvLifeTime<span class="op">;</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>        co<span class="op">.</span>nd_opt_6co_con_prefix <span class="op">=</span> lowpanco<span class="op">-&gt;</span>AdvContextPrefix<span class="op">;</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>        safe_buffer_append<span class="op">(</span>sb<span class="op">,</span> <span class="op">&amp;</span>co<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>co<span class="op">));</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The test still failed to match one single byte: the one that spans 3 bitfields: <strong>nd_opt_6co_res</strong>, <strong>nd_opt_6co_c</strong>, <strong>nd_opt_6co_cid</strong>.
+But why? Does endianness really matter within byte? Apparently gcc happens to group
+those 3 fields in different orders on <strong>x86_64</strong> and <strong>powerpc</strong>!</p>
+<p>Let’s looks at a smaller example:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdint.h&gt;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint8_t</span> a <span class="op">:</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint8_t</span> b <span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint8_t</span> c <span class="op">:</span> <span class="dv">4</span><span class="op">;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> s v <span class="op">=</span> <span class="op">{</span> <span class="bn">0x00</span><span class="op">,</span> <span class="bn">0x1</span><span class="op">,</span> <span class="bn">0xF</span><span class="op">,</span> <span class="op">};</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;v = %#02x</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">*(</span><span class="dt">uint8_t</span><span class="op">*)&amp;</span>v<span class="op">);</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Output difference:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> x86_64-pc-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">v</span> = 0xf8</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="co"># (0xF &lt;&lt; 5) | (0x1 &lt;&lt; 4) | 0x00</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> powerpc-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="ex">v</span> = 0x1f</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co"># (0x0 &lt;&lt; 5) | (0x1 &lt;&lt; 4) | 0xF</span></span></code></pre></div>
+<p>C standard does not specify layout of bitfields and it’s a great illustration
+of how things break :)</p>
+<p>An interesting observation: the bitfield order on <strong>powerpc</strong> happens to be
+the desired order (as <strong>6LoWPAN</strong> <strong>RFC</strong> defines it).</p>
+<p>It means <strong>radvd</strong> code indeed happened to generate correct bitstream on big-endian
+platforms (as Eike predicted) but did not work on little-endian systems. Unfortunately
+golden <strong>expected[]</strong> output was generated on little-endian system.</p>
+<p>Thus the 3 fixes:</p>
+<ul>
+<li>use <strong>uint8_t</strong> instead of bitfield (and tweak the golden byte): <a href="https://github.com/reubenhwk/radvd/pull/78/commits/25f627b3ae878cab1c5362ba70947e1bf8a250c4">https://github.com/reubenhwk/radvd/pull/78/commits/25f627b3ae878cab1c5362ba70947e1bf8a250c4</a></li>
+<li>regenerate golden output on big-endian system: <a href="https://github.com/reubenhwk/radvd/pull/78/commits/6b6f81e2979a3cd266e2fce84044485300460767">https://github.com/reubenhwk/radvd/pull/78/commits/6b6f81e2979a3cd266e2fce84044485300460767</a></li>
+<li>fix missing <strong>uint16_t</strong> handling: <a href="https://github.com/reubenhwk/radvd/pull/78/commits/dac7758152188aed9bef140ca2132271e77dfa74">https://github.com/reubenhwk/radvd/pull/78/commits/dac7758152188aed9bef140ca2132271e77dfa74</a></li>
+</ul>
+<p>That’s it :)</p>
+
+<div class="info">
+    Posted on November 18, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,754 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: nixpkgs bootstrap intro</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>nixpkgs bootstrap intro</h1>
+
+            <p>This post is an informal walk through bootstrap setup of <strong>nixpkgs</strong>.
+It’s quite long and has many facets we look at here. If you don’t
+understand some bits of it don’t worry: it’s both a complicated topic
+and I did a bad job at explaining it.</p>
+<p>Initially I tried to cram everything into a single post and got
+largest post ever. Once I realized it became unreadable I moved out
+details on <strong>glibc</strong> into a separate <a href="../posts/239-hacking-on-glibc.html">hacking-on-glibc post</a>.
+Now this post is “only” on par with other larges posts /o\.</p>
+<p>Good luck :)</p>
+<h1 id="intro">Intro</h1>
+<p><strong>nixpkgs</strong> is a package repository for <strong>NixOS</strong> linux distribution.
+<strong>nixpkgs</strong> can also be used outside <strong>NixOS</strong> on other <strong>linux</strong> (and
+non-<strong>linux</strong>!) distributions.</p>
+<p>Each <strong>nixpkgs</strong> package is built in a container environment where
+build process sees only explicitly specified dependencies (via mount
+namespace). That way we get more deterministic (and ideally fully
+reproducible) build environment and result when ran on another machine.</p>
+<p>Such a setup makes it trivial to notice missing required dependencies.
+I frequently write a <strong>nixpkgs</strong> recipe for a package before trying
+to package it on another distributions :)</p>
+<p>Precise dependencies sound great in theory, but how does such a system
+deal with circular dependencies and bootstrap dependencies? For example
+<strong>gcc</strong> depends on some C compiler presence. How do they get satisfied?</p>
+<h1 id="bootstrap-binaries">Bootstrap binaries</h1>
+<p><strong>nixpkgs</strong> solves it by providing a set of pre-built seed binaries
+called <strong>bootstrap-files</strong> (or <strong>bootstrapTools</strong>). These binaries were
+at some previous point built on an already working <strong>nixpkgs</strong> system.
+One can also build them manually.</p>
+<p>Seed binaries don’t change until someone decides to refresh them.
+Specifically they don’t get rebuil on each <strong>nixpkgs</strong> commit. In theory
+<strong>bootstrap-files</strong> could be left untouched forever at least for existing
+target systems. In practice bugs do occasinally happen in <strong>bootstrap-files</strong>
+and we need to fix them. It’s also useful to have some up-to-date
+baseline when building other fresh packages: building <strong>gcc-11</strong>
+with <strong>gcc-8</strong> (seed binary) is a lot simpler than building <strong>gcc-11</strong>
+with <strong>gcc-3</strong>.</p>
+<p>To get the idea what it takes to bet a set of bootstrap files let’s build
+fresh set of them ourselves. We’ll use default definition in
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/make-bootstrap-tools.nix">make-bootstrap-tools.nix</a>:</p>
+<pre class="shell"><code>$ nix build -f ./pkgs/stdenv/linux/make-bootstrap-tools.nix bootstrapFiles</code></pre>
+<p>We can even cross-compile bootstrap files for a differen (potentially not yet
+supported) target:</p>
+<pre class="shell"><code>$ nix build -f ./pkgs/stdenv/linux/make-bootstrap-tools.nix bootstrapFiles --argstr crossSystem powerpc64le-linux</code></pre>
+<p>Is it big? Inspecting the final result:</p>
+<pre class="shell"><code>$ readlink result
+/nix/store/3xq6in2gn3z3cvjjf51fyn53bg3k4nh6-bootstrap-tools.tar.xz
+
+$ LANG=C ls -lh /nix/store/3xq6in2gn3z3cvjjf51fyn53bg3k4nh6-bootstrap-tools.tar.xz
+-r--r--r-- 2 root root 21M Jan  1  1970 /nix/store/3xq6in2gn3z3cvjjf51fyn53bg3k4nh6-bootstrap-tools.tar.xz</code></pre>
+<p>Archive size is 21MB. This size is smaller than compressed <strong>nixpkgs</strong>
+tree (~26MB today). Let’s peek at things that hide inside:</p>
+<pre class="shell"><code>$ tar --list -f /nix/store/3xq6in2gn3z3cvjjf51fyn53bg3k4nh6-bootstrap-tools.tar.xz
+./bin/
+./bin/[
+./bin/ar
+...
+./bin/yes
+./include/
+./include/c++/
+./include/c++/10.3.0/
+./include/c++/10.3.0/algorithm
+...
+./include-glibc/
+./include-glibc/a.out.h
+./include-glibc/aio.h
+...
+./include-glibc/xen/privcmd.h
+./lib/
+./lib/crt1.o
+./lib/crti.o
+./lib/crtn.o
+./lib/gcc/
+./lib/gcc/x86_64-unknown-linux-gnu/
+./lib/gcc/x86_64-unknown-linux-gnu/10.3.0/
+...
+./lib/gcc/x86_64-unknown-linux-gnu/10.3.0/libgcov.a
+./lib/ld-2.33.so
+./lib/ld-linux-x86-64.so.2
+./lib/libbfd-2.35.2.so
+./lib/libbfd.la
+...
+./lib/libz.so.1.2.11
+./libexec/
+./libexec/gcc/
+./libexec/gcc/x86_64-unknown-linux-gnu/
+./libexec/gcc/x86_64-unknown-linux-gnu/10.3.0/
+./libexec/gcc/x86_64-unknown-linux-gnu/10.3.0/cc1
+...</code></pre>
+<p>The contents (once again) are defined by
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/make-bootstrap-tools.nix" class="uri">https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/make-bootstrap-tools.nix</a>.
+It tells ut that the following packages are present in the final tarball:</p>
+<ul>
+<li><strong>busybox</strong> (statically linked against <strong>musl</strong>)</li>
+<li><strong>glibc</strong></li>
+<li><strong>gcc</strong> (this package and below are dynamically linked against <strong>glibc</strong>)</li>
+<li><strong>binutils</strong></li>
+<li><strong>coreutils</strong></li>
+<li><strong>tar</strong></li>
+<li><strong>bash</strong></li>
+<li><strong>findutils</strong></li>
+<li><strong>diffutils</strong></li>
+<li><strong>sed</strong></li>
+<li><strong>grep</strong></li>
+<li><strong>awk</strong></li>
+<li><strong>gzip</strong></li>
+<li><strong>bzip</strong></li>
+<li><strong>patch</strong></li>
+<li><strong>patchelf</strong></li>
+<li><strong>gmp</strong></li>
+<li><strong>mpfr</strong></li>
+<li><strong>mpc</strong></li>
+<li><strong>zlib</strong></li>
+<li><strong>isl</strong></li>
+<li><strong>libelf</strong></li>
+</ul>
+<p>Just 21 package! Most are very cross-compiler friendly. Some of packages
+have reduced functionality not needed for simplest build requirements:</p>
+<pre><code>  coreutilsMinimal = coreutils.override (args: { aclSupport = false; attrSupport = false; /*...*/ })
+  tarMinimal = gnutar.override { acl = null; };
+  busyboxMinimal = busybox.override { useMusl = true; enableStatic = true; /*...*/ }
+  bootGCC = gcc.cc.override { enableLTO = false; };
+  bootBinutils = binutils.bintools.override { withAllTargets = false; gold = false; enableShared = false; /*...*/ }</code></pre>
+<p>The tarball generaion process is literally copying build files to make
+self-contained archive:</p>
+<pre><code>  build = stdenv.mkDerivation {
+    name = &quot;stdenv-bootstrap-tools&quot;;
+
+    buildCommand = ''
+        set -x
+        mkdir -p $out/bin $out/lib $out/libexec
+
+        # Copy what we need of Glibc.
+        cp -d ${libc.out}/lib/ld*.so* $out/lib
+        cp -d ${libc.out}/lib/libc*.so* $out/lib
+        # ...
+        cp -d ${coreutilsMinimal.out}/bin/* $out/bin
+        (cd $out/bin &amp;&amp; rm vdir dir sha*sum pinky factor pathchk runcon shuf who whoami shred users)
+        cp ${bash.out}/bin/bash $out/bin
+        cp ${findutils.out}/bin/find $out/bin
+        cp ${findutils.out}/bin/xargs $out/bin
+        cp -d ${diffutils.out}/bin/* $out/bin
+        # ...
+        nuke-refs $out/bin/*
+        nuke-refs $out/lib/*
+        # ...
+    '';
+    //...</code></pre>
+<p>Once these bootstrap binaries are built they are referred explicitly
+as a <strong>fetchurl{}</strong> “source” tarball input:
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/bootstrap-files/i686.nix" class="uri">https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/bootstrap-files/i686.nix</a></p>
+<p>There is a caveat: we can’t run these binaries as is if we just unpack the tarball.
+I’ll try anyway:</p>
+<pre class="shell"><code>$ mkdir /tmp/b
+$ cd /tmp/b
+$ tar xf /nix/store/3xq6in2gn3z3cvjjf51fyn53bg3k4nh6-bootstrap-tools.tar.xz
+$ ls bin/bash
+bin/bash
+$ unshare --user --map-root-user chroot . /bin/bash
+chroot: failed to run command ‘/bin/bash’: No such file or directory</code></pre>
+<p>It happens because binaries intentionally hardcode invalid absolute paths to dynamic linker:</p>
+<pre class="shell"><code>$ lddtree bin/bash
+bash =&gt; bin/bash (interpreter =&gt; /nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-glibc-2.33-108/lib/ld-linux-x86-64.so.2)
+    libdl.so.2 =&gt; not found
+    libc.so.6 =&gt; not found</code></pre>
+<p>These invalid paths are meant to be relocated at install time: <strong>patchelf</strong>
+binary patching tool is used for that in
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/bootstrap-tools/scripts/unpack-bootstrap-tools.sh" class="uri">https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/bootstrap-tools/scripts/unpack-bootstrap-tools.sh</a></p>
+<p>Note that <strong>patchelf</strong> is also a dynamically linked binary. How can we run it against
+broken interpreter? You might have already noticed it in <strong>unpack-bootstrap-tools.sh</strong> above:
+dynamic loader is called by absolute path and it’s search paths are overridden
+by <strong>LD_LIBRARY_PATH</strong> variable.</p>
+<p>Trying running <strong>bash</strong> using the same trick:</p>
+<pre class="shell"><code>$ PS1='foo&gt; ' unshare --user --map-root-user chroot . /lib/ld-linux-x86-64.so.2 --library-path /lib /bin/bash
+
+foo&gt; echo /*
+/bin /include /include-glibc /lib /libexec
+
+foo&gt; ls /
+bash: ls: command not found
+foo&gt; LD_LIBRARY_PATH=/lib /lib/ld-linux-x86-64.so.2 /bin/ls
+bin  include  include-glibc  lib  libexec</code></pre>
+<p>Seems to work :)</p>
+<p>I used <strong>--library-path /lib</strong> to step aside the complications of mixing
+<strong>LD_LIBRARY_PATH</strong> value for host’s <strong>chroot</strong> command. But once in a chroot
+<strong>LD_LIBRARY_PATH=/lib</strong> does the trick as well.</p>
+<p>Another way to make <strong>chroot</strong> to Just Work without <strong>LD_LIBRARY_PATH=</strong>
+is to fake relocation with this funny symlink:</p>
+<pre class="shell"><code>$ ln -s ../../../lib nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-glibc-2.33-108/lib
+$ unshare --user --map-root-user chroot . /bin/bash
+$ export PATH=/bin PS1='minimal&gt; '
+minimal&gt; ls /
+bin  include  include-glibc  lib  libexec  nix
+minimal&gt;  gcc --version
+gcc (GCC) 10.3.0
+
+minimal&gt; echo 'int main(){}' &gt; a.c
+minimal&gt; gcc a.c -o a
+minimal&gt; ./a
+bash: ./a: No such file or directory</code></pre>
+<p>Now we are able to run <strong>gcc</strong> (and also <strong>bash</strong>).</p>
+<p>The environment is able to compile simple executables. Why do compiled binaries
+still fail to run? That is is an exercise for the reader :)
+Hint: it can be hacked with yet another symlink. Try to find which one.
+<a href="../posts/239-hacking-on-glibc.html">hacking-on-glibc post</a> also provides another way of solving it.</p>
+<h1 id="stdenv">stdenv</h1>
+<p>So how do we bootstrap fresh <strong>nixpkgs</strong> out of outdated <strong>gcc</strong> and
+<strong>glibc</strong> from <strong>bootstrap-tools</strong>?</p>
+<p>To provide minimal build environment for most packages <strong>nixpkgs</strong> has a
+special package: <strong>stdenv</strong>. Let’s inspect it’s contents:</p>
+<pre><code>$ nix-shell --pure -p stdenv
+
+[nix-shell]$ echo $PATH | tr ':' $'\n' | ~/bin/unnix
+/&lt;&lt;NIX&gt;&gt;/bash-interactive-5.1-p12/bin
+/&lt;&lt;NIX&gt;&gt;/patchelf-0.14.3/bin
+/&lt;&lt;NIX&gt;&gt;/gcc-wrapper-10.3.0/bin
+/&lt;&lt;NIX&gt;&gt;/gcc-10.3.0/bin
+/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-bin/bin
+/&lt;&lt;NIX&gt;&gt;/coreutils-9.0/bin
+/&lt;&lt;NIX&gt;&gt;/binutils-wrapper-2.35.2/bin
+/&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin
+/&lt;&lt;NIX&gt;&gt;/coreutils-9.0/bin
+/&lt;&lt;NIX&gt;&gt;/findutils-4.8.0/bin
+/&lt;&lt;NIX&gt;&gt;/diffutils-3.8/bin
+/&lt;&lt;NIX&gt;&gt;/gnused-4.8/bin
+/&lt;&lt;NIX&gt;&gt;/gnugrep-3.7/bin
+/&lt;&lt;NIX&gt;&gt;/gawk-5.1.1/bin
+/&lt;&lt;NIX&gt;&gt;/gnutar-1.34/bin
+/&lt;&lt;NIX&gt;&gt;/gzip-1.11/bin
+/&lt;&lt;NIX&gt;&gt;/bzip2-1.0.6.0.2-bin/bin
+/&lt;&lt;NIX&gt;&gt;/gnumake-4.3/bin
+/&lt;&lt;NIX&gt;&gt;/bash-5.1-p12/bin
+/&lt;&lt;NIX&gt;&gt;/patch-2.7.6/bin
+/&lt;&lt;NIX&gt;&gt;/xz-5.2.5-bin/bin</code></pre>
+<p>The list of binaries is suspiciously close to our <strong>bootstrap-tools</strong>
+tarball. That is not a coincidence: if it’s good enough for most packages
+it should be enough for <strong>gcc</strong>.</p>
+<p>In theory we could just use <strong>bootstrap-tools</strong> to define <strong>stdenv</strong>
+and use it to build things like <strong>xorg</strong>. However such a scheme would
+complicate updating <strong>gcc</strong> (and all other <strong>stdenv</strong> packages):
+(once again) bootstrap archive does not get updated frequently.
+We would need to refresh bootstrap tarballs routinely just to get
+a <strong>gcc</strong> update.</p>
+<p>To solve an update problem <strong>nixpkgs</strong> uses a level of indirection:
+first <strong>nixpkgs</strong> defines <strong>bootstrap-stdenv</strong> as <strong>bootstrap-tools</strong>
+and then builds <strong>stdenv</strong> out of <strong>bootstrap-stdenv</strong>. The rest of
+<strong>nixpkgs</strong> uses only <strong>stdenv</strong> and avoids <strong>bootstrap-stdenv</strong>.</p>
+<p>Thus our example <strong>xorg</strong> chain of build-time dependencies is:
+<strong>bootstrap-tools</strong> -&gt; <strong>bootstrap-stdenv</strong> -&gt; <strong>stdenv</strong> -&gt; <strong>xorg</strong>.</p>
+<p>Simple, eh?</p>
+<p>Let’s look at a <strong>stdenv.mkDerivation</strong> function normally used to define
+packages. We define a one-liner <strong>foo</strong> package that prints contents
+of it’s build environment at build time:</p>
+<pre class="shell"><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; stdenv.mkDerivation { name = &quot;foo&quot;; unpackPhase = &quot;echo $CC; $CC -v; exit 1&quot;; }' -L
+
+foo&gt; unpacking sources
+foo&gt; gcc
+foo&gt; Using built-in specs.
+foo&gt; COLLECT_GCC=/nix/store/2dv93bbc06c7zg866qid73j3r36zz3jx-gcc-10.3.0/bin/gcc
+foo&gt; COLLECT_LTO_WRAPPER=/nix/store/2dv93bbc06c7zg866qid73j3r36zz3jx-gcc-10.3.0/libexec/gcc/x86_64-unknown-linux-gnu/10.3.0/lto-wrapper
+foo&gt; Target: x86_64-unknown-linux-gnu
+foo&gt; Configured with:
+foo&gt; Thread model: posix
+foo&gt; Supported LTO compression algorithms: zlib
+foo&gt; gcc version 10.3.0 (GCC)
+...</code></pre>
+<p>As a small detour there are also other popular <strong>stdenv</strong>s, like an
+<strong>LLVM</strong>-based one:</p>
+<pre class="shell"><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; pkgsLLVM.stdenv.mkDerivation { name = &quot;foo&quot;; unpackPhase = &quot;echo $CC; $CC -v; exit 1&quot;; }' -L
+
+foo-x86_64-unknown-linux-gnu&gt; unpacking sources
+foo-x86_64-unknown-linux-gnu&gt; x86_64-unknown-linux-gnu-clang
+foo-x86_64-unknown-linux-gnu&gt; clang version 11.1.0
+foo-x86_64-unknown-linux-gnu&gt; Target: x86_64-unknown-linux-gnu
+foo-x86_64-unknown-linux-gnu&gt; Thread model: posix
+foo-x86_64-unknown-linux-gnu&gt; InstalledDir: /nix/store/y61l0kbqfchdk39i319ycrfblc6zz3s8-clang-11.1.0/bin
+...</code></pre>
+<p><strong>nixpkgs</strong> provides many toolchains via various
+<strong>stdenv</strong>s. To name a few (assuming <strong>x86_64-linux</strong> system):</p>
+<ul>
+<li><strong>stdenv</strong>: <strong>gcc</strong> and <strong>glibc</strong></li>
+<li><strong>pkgsLLVM.stdenv</strong>: <strong>clang</strong> and <strong>glibc</strong></li>
+<li><strong>pkgsMusl.stdenv</strong>: <strong>gcc</strong> and <strong>musl</strong></li>
+<li><strong>pkgsi686Linux.stdenv</strong>: <strong>gcc</strong> and <strong>glibc</strong> for 32-bit ABI on x86_64 (<strong>CFLAGS=-m32</strong>)</li>
+<li><strong>pkgsCross.ppc64.stdenv</strong>: <strong>gcc</strong> and <strong>glibc</strong> cross-compiler to <strong>powerpc64-unknown-linux-gnu</strong> target</li>
+<li>… and many many more</li>
+</ul>
+<p>Finding out how those interact to one another (which <strong>stdenv</strong> is
+defined in terms of which) is an exercise for the reader :)</p>
+<h1 id="stdenv-tower">stdenv tower</h1>
+<p>So how exactly do we ascend from not-quite-working <strong>bootstrapTools</strong> to
+<strong>stdenv</strong>? What is hiding behind the arrow in
+“<strong>bootstrap-stdenv</strong> -&gt; <strong>stdenv</strong>” part above?</p>
+<p>The precise answer is hidden in
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/default.nix">stdenv.nix</a>.</p>
+<p>The main take away from there is that there are multiple stages of
+<strong>stdenv</strong>:</p>
+<p><strong>bootstrap-stdenv</strong> -&gt; <strong>?</strong> -&gt; <strong>??</strong> -&gt; <strong>???</strong> -&gt; <strong>…</strong> -&gt; <strong>stdenv</strong>.</p>
+<p>Instead of trying to figure out what each stage does exactly out of definition
+above let’s debug it and see what we can find out.</p>
+<p>Let’s inject a <strong>prev</strong> attribute to each intermediate instance of
+<strong>stdenv</strong> and walk along that chain. Here is the full local patch:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/generic/default.nix</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/generic/default.nix</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -54,0 +55,3 @@ argsStdenv@{ name ? &quot;stdenv&quot;, preHook ? &quot;&quot;, initialPath</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="va">+, # debug reference to previous stdenv</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="va">+  prev ? {}</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -145,0 +149,2 @@ let</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="va">+      inherit prev;</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/linux/default.nix</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/linux/default.nix</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -106,0 +107,2 @@ let</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="va">+        prev = prevStage.stdenv;</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -437,0 +440,2 @@ in</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a><span class="va">+      prev = prevStage.stdenv;</span></span></code></pre></div>
+<p>I left out almost all of patch context on purpose. It’s not very
+readable as a diff. Now we can access all <strong>stdenv</strong> iterations via
+<strong>stdenv.prev</strong>.</p>
+<p>First, let’s find out how many hops are there from bootstrap to final <strong>stdenv</strong>:</p>
+<pre class="shell"><code>nixpkgs $ nix repl .
+nix-repl&gt; stdenv
+«derivation /nix/store/s6l15yfxq567as8wdw7cfvy6c3p9wscw-stdenv-linux.drv»
+nix-repl&gt; stdenv.prev
+«derivation /nix/store/q3dsgi310i9r5b1pgdym2fnvlxbkxls2-bootstrap-stage4-stdenv-linux.drv»
+nix-repl&gt; stdenv.prev.prev
+«derivation /nix/store/b5hwd6s4b2xq2l6nidhklypn69vhlfap-bootstrap-stage3-stdenv-linux.drv»
+nix-repl&gt; stdenv.prev.prev.prev
+«derivation /nix/store/bkbn1y2593jqclaq2kjcx5iambylsafq-bootstrap-stage2-stdenv-linux.drv»
+nix-repl&gt; stdenv.prev.prev.prev.prev
+«derivation /nix/store/1wklspdwi7c03jrqjbh2f6ymmpqshcif-bootstrap-stage1-stdenv-linux.drv»
+nix-repl&gt; stdenv.prev.prev.prev.prev.prev
+«derivation /nix/store/bvkp4zp1kidp9wfk2f46yyy73y3n38mx-bootstrap-stage0-stdenv-linux.drv»
+nix-repl&gt; stdenv.prev.prev.prev.prev.prev.prev
+error: attribute 'stdenv' missing</code></pre>
+<p>5(!) intermediate steps! Let’s check out
+compiler version of the intial one and the one right after:</p>
+<pre class="shell"><code>$ nix build --impure --expr 'with import ./. {}; stdenv.prev.prev.prev.prev.prev.mkDerivation { name = &quot;foo&quot;; unpackPhase = &quot;$CC --version; exit 1&quot;; }' -L
+foo&gt; unpacking sources
+foo&gt; /nix/store/hbppa2cjx9929jrv796fpni2m06j3fzw-bootstrap-stage0-stdenv-linux/setup: line 1358: --version: command not found</code></pre>
+<p>The very first (or zeroth) bootstrap stdenv does not even provide basic
+“$CC” variable. It’s not really a usable stdenv just yet. We can also guess
+it from it’s empty definition:</p>
+<pre><code>  ({}: {
+    __raw = true;
+
+    gcc-unwrapped = null;
+    binutils = null;
+    coreutils = null;
+    gnugrep = null;
+  })</code></pre>
+<p>It’s only a default case that will gradually grow a piece on each step.
+Let’s look at the next one:</p>
+<pre><code>$ nix build --impure --expr 'with import ./. {}; stdenv.prev.prev.prev.prev.mkDerivation { name = &quot;foo&quot;; unpackPhase = &quot;$CC --version; exit 1&quot;; }' -L
+
+foo&gt; unpacking sources
+foo&gt; gcc (GCC) 8.3.0
+...</code></pre>
+<p>The next <strong>stdenv</strong> provides build environment based on <strong>gcc-8.3.0</strong>
+(which is way older than default <strong>nixpkgs</strong> <strong>gcc-10.3.0</strong> version).</p>
+<p>Now we have a tool to check what is the actual difference between all
+these <strong>stdenv</strong> iterations! I usually use <strong>NIX_DEBUG=1</strong> variable to
+look at what <strong>nixpkgs</strong> injects in the search paths and default
+options of <strong>gcc</strong>:</p>
+<pre class="shell"><code>nix build --impure --expr 'with import ./. {}; stdenv.prev.prev.prev.prev.mkDerivation { name = &quot;foo&quot;; unpackPhase = &quot;NIX_DEBUG=1 $CC --version; exit 1&quot;; }' -L
+
+foo&gt; unpacking sources
+foo&gt; HARDENING: disabled flags: pie
+foo&gt; HARDENING: Is active (not completely disabled with &quot;all&quot; flag)
+foo&gt; HARDENING: enabling fortify
+foo&gt; HARDENING: enabling stackprotector
+foo&gt; HARDENING: enabling strictoverflow
+foo&gt; HARDENING: enabling format
+foo&gt; HARDENING: enabling pic
+foo&gt; extra flags before to /nix/store/i3ibpx67yncp4w4mpkf5pwvjjsd0aqln-bootstrap-tools/bin/gcc:
+foo&gt;   -O2
+foo&gt;   -D_FORTIFY_SOURCE=2
+foo&gt;   -fstack-protector-strong
+foo&gt;   --param
+foo&gt;   ssp-buffer-size=4
+foo&gt;   -fno-strict-overflow
+foo&gt;   -Wformat
+foo&gt;   -Wformat-security
+foo&gt;   -Werror=format-security
+foo&gt;   -fPIC
+foo&gt; original flags to /nix/store/i3ibpx67yncp4w4mpkf5pwvjjsd0aqln-bootstrap-tools/bin/gcc:
+foo&gt;   --version
+foo&gt; extra flags after to /nix/store/i3ibpx67yncp4w4mpkf5pwvjjsd0aqln-bootstrap-tools/bin/gcc:
+foo&gt;   -B/nix/store/39k40hf9z4wr5wac5xbnznza1ym2f8kz-bootstrap-stage0-glibc-bootstrap/lib/
+foo&gt;   -idirafter
+foo&gt;   /nix/store/39k40hf9z4wr5wac5xbnznza1ym2f8kz-bootstrap-stage0-glibc-bootstrap/include
+foo&gt;   -idirafter
+foo&gt;   /nix/store/i3ibpx67yncp4w4mpkf5pwvjjsd0aqln-bootstrap-tools/lib/gcc/x86_64-unknown-linux-gnu/8.3.0/include-fixed
+foo&gt;   -B/nix/store/i3ibpx67yncp4w4mpkf5pwvjjsd0aqln-bootstrap-tools/lib
+foo&gt;   -B/nix/store/8wmhf2pbmx0vbs60yk6x9w5lm0zrqjlz-bootstrap-stage1-gcc-wrapper-/bin/
+foo&gt;   -frandom-seed=dhfkc7mzra
+foo&gt; gcc (GCC) 8.3.0
+foo&gt; Copyright (C) 2018 Free Software Foundation, Inc.
+foo&gt; This is free software; see the source for copying conditions.  There is NO
+foo&gt; warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.</code></pre>
+<p>Here the important parts are the paths specified with <strong>-L</strong> flag (library lookup
+paths) and by <strong>-B</strong> flag (objects and tools for compiler itself). Both should be
+familiar by now from “hello world” dissection section at <a href="../posts/239-hacking-on-glibc.html">hacking-on-glibc post</a>.</p>
+<p>Also note that <strong>nixpkgs</strong> builds files with default <strong>-O2</strong> optimization level
+until specified otherwise (also note a few warning options on top enabled by default).</p>
+<p>Let’s check out our final <strong>stdenv</strong>:</p>
+<pre class="shell"><code>$ nix build --impure --expr 'with import ./. {}; stdenv.mkDerivation { name = &quot;foo&quot;; unpackPhase = &quot;NIX_DEBUG=1 $CC --version; exit 1&quot;; }' -L
+
+foo&gt; unpacking sources
+foo&gt; HARDENING: disabled flags: pie
+foo&gt; HARDENING: Is active (not completely disabled with &quot;all&quot; flag)
+foo&gt; HARDENING: enabling pic
+foo&gt; HARDENING: enabling format
+foo&gt; HARDENING: enabling stackprotector
+foo&gt; HARDENING: enabling fortify
+foo&gt; HARDENING: enabling strictoverflow
+foo&gt; extra flags before to /nix/store/j5pl47x8yplyfpbbgvcrzjwbm08n9rvi-gcc-12.0.0/bin/gcc:
+foo&gt;   -fPIC
+foo&gt;   -Wformat
+foo&gt;   -Wformat-security
+foo&gt;   -Werror=format-security
+foo&gt;   -fstack-protector-strong
+foo&gt;   --param
+foo&gt;   ssp-buffer-size=4
+foo&gt;   -O2
+foo&gt;   -D_FORTIFY_SOURCE=2
+foo&gt;   -fno-strict-overflow
+foo&gt; original flags to /nix/store/j5pl47x8yplyfpbbgvcrzjwbm08n9rvi-gcc-12.0.0/bin/gcc:
+foo&gt;   --version
+foo&gt; extra flags after to /nix/store/j5pl47x8yplyfpbbgvcrzjwbm08n9rvi-gcc-12.0.0/bin/gcc:
+foo&gt;   -B/nix/store/km6a4zxn29liy6l2xq441p2yap1ka1j4-glibc-2.35/lib/
+foo&gt;   -idirafter
+foo&gt;   /nix/store/6xn0firi6hlz6x161drdj0p0jzcrrfla-glibc-2.35-dev/include
+foo&gt;   -idirafter
+foo&gt;   /nix/store/j5pl47x8yplyfpbbgvcrzjwbm08n9rvi-gcc-12.0.0/lib/gcc/x86_64-unknown-linux-gnu/12.0.1/include-fixed
+foo&gt;   -B/nix/store/fi0acb9a2fscg7afnwjmglj55rqwj8kj-gcc-12.0.0-lib/lib
+foo&gt;   -B/nix/store/v9s3sv5c4rr9r067qw66c1iq5i0ffsvc-gcc-wrapper-12.0.0/bin/
+foo&gt;   -frandom-seed=rw1fgisg1r
+foo&gt; gcc (GCC) 12.0.1 20220213 (experimental)
+foo&gt; Copyright (C) 2022 Free Software Foundation, Inc.
+foo&gt; This is free software; see the source for copying conditions.  There is NO
+foo&gt; warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.</code></pre>
+<p>Note how all the <strong>-B</strong> and <strong>-L</strong> paths flipped from bootstrap variants
+of the package (like <strong>-B/nix/store/39k40hf9z4wr5wac5xbnznza1ym2f8kz-bootstrap-stage0-glibc-bootstrap/lib/</strong>)
+to nice final package names (like <strong>-B/nix/store/km6a4zxn29liy6l2xq441p2yap1ka1j4-glibc-2.35/lib/</strong>).</p>
+<p>Such a long <strong>stdenv</strong> tower reaches it’s main goal: <strong>bootstrap-tools</strong>
+must not be used in final <strong>stdenv</strong> directly or as runtime depends.
+<strong>stdenv</strong> must only be defined by source packages from <strong>nixpkgs</strong>.</p>
+<p>Ideally changing <strong>bootstrap-tools</strong> archive should not affect contents of
+final <strong>stdenv</strong> at all. In practice it happens only when <strong>content-addressed</strong>
+mode is enabled: <a href="https://nixos.wiki/wiki/Ca-derivations" class="uri">https://nixos.wiki/wiki/Ca-derivations</a>.</p>
+<p>To achieve independence from bootstrap binaries <strong>nixpkgs</strong> gradually
+substitutes parts of <strong>bootstrap-stdenv</strong> from <strong>bootstrap-tools</strong> to
+packages defined by <strong>nixpkgs</strong> expressions:</p>
+<ul>
+<li><strong>dummy</strong>: provide dummy empty base case. Nothing works here</li>
+<li><strong>stage0</strong>: provides runnable prebuilt <strong>bootstrap-tools</strong> in <strong>PATH</strong> as <strong>gcc</strong>, <strong>binutils</strong>, <strong>coreutils</strong>, <strong>grep</strong>. From now on we can compile simple tools.</li>
+<li><strong>stage1</strong>: build <strong>binutils</strong> and <strong>perl</strong> (using <strong>stage0</strong>’s <strong>gcc</strong>, <strong>glibc</strong>, <strong>coreutils</strong>)</li>
+<li><strong>stage2</strong>: build <strong>glibc</strong> (and it’s library depends) (using <strong>stage1</strong>’s <strong>binutils</strong> and <strong>stage0</strong>’s <strong>gcc</strong>, <strong>coreutils</strong>), relink <strong>binutils</strong> against new <strong>glibc</strong>.</li>
+<li><strong>stage3</strong>: build <strong>gmp</strong>/<strong>mpfr</strong> to prepare <strong>gcc</strong> rebuild (using <strong>stage2</strong>’s <strong>glibc</strong>, <strong>stage1</strong>’s <strong>binutils</strong>, <strong>stage0</strong>’s <strong>gcc</strong>, <strong>coreutils</strong>)</li>
+<li><strong>stage4</strong>: build <strong>gcc</strong> itself (using <strong>stage3</strong>’s <strong>gmp</strong>/<strong>mpfr</strong>, <strong>stage2</strong>’s <strong>glibc</strong>, <strong>stage1</strong>’s <strong>binutils</strong>, <strong>stage0</strong>’s <strong>gcc</strong>, <strong>coreutils</strong>)</li>
+<li><strong>final</strong>: build <strong>binutils</strong>, <strong>coreutils</strong> and everything else (using <strong>stage3</strong>’s <strong>gcc</strong>, <strong>stage2</strong>’s glibc, <strong>stage1</strong>’s binutils, <strong>stage0</strong>’s <strong>coreutils</strong>)</li>
+</ul>
+<p>Sounds simple? Heh, not really. I probably got a few details above wrong.
+I was still not sure what are the exact dependencies that are being rebuilt.</p>
+<p>Let’s first look at the <strong>final</strong> <strong>stdenv</strong>’s references after it’s fully built:</p>
+<pre class="shell"><code>$ nix-store --query --graph $(nix-build -A stdenv) | dot -Tsvg &gt; stdenv-final-runtime.svg</code></pre>
+<p>Rendered svg: <a href="../posts.data/240-nixpkgs-bootstrap/stdenv-final-runtime.svg">stdenv-final graph</a></p>
+<p>Note that there are no (runtime) references to <strong>bootstrap-tools</strong> packages.</p>
+<p>Let’s look at <strong>stage4</strong> for comparison:</p>
+<pre class="shell"><code>$ nix-store --query --graph $(nix-build -A stdenv.prev) | dot -Tsvg &gt; stdenv-stage4-runtime.svg</code></pre>
+<p>Rendered svg: <a href="../posts.data/240-nixpkgs-bootstrap/stdenv-stage4-runtime.svg">stdenv-stage4 graph</a></p>
+<p>Note how <strong>patchelf</strong> and <strong>binutils</strong> still use <strong>glibc</strong> which was built using <strong>bootstrap-tools</strong>
+compiler.</p>
+<p>The above graphs don’t show build-time dependencies. Ideally <strong>stdenv-final</strong> should not directly
+depend on anything related to <strong>boostrap-tools</strong>. We can get the graph by looking at the derivation
+instead of final store path:</p>
+<pre class="shell"><code>$ nix-store --query --graph $(nix-instantiate -A stdenv) | dot -Tsvg &gt; stdenv-drv-final-runtime.svg</code></pre>
+<p>Rendered svg: <a href="../posts.data/240-nixpkgs-bootstrap/stdenv-drv-final-runtime.svg">stdenv-drv graph</a></p>
+<p>It’s not really readable: there are too many mostly irrelevant minor details like patches and source
+tarballs. Can we rearrange nodes explicitly as they are pulled in into each stage?</p>
+<p>The simplest (but somewhat incomplete) seems to be the use of <strong>nix-diff</strong> derivation differ:</p>
+<pre><code>$ nix store diff-closures $(nix-instantiate -A stdenv.prev) $(nix-instantiate -A stdenv)
+
+acl: ∅ → 2.3.1, +109.0 KiB
+attr: ∅ → 2.5.1, +78.9 KiB
+bash: ∅ → 5.1-p16, +1519.2 KiB
+binutils: +6390.2 KiB
+binutils-wrapper: +9.9 KiB
+bootstrap: ε → ∅, -129542.0 KiB
+bootstrap-stage0-glibc: ε → ∅
+bootstrap-stage4-gcc-wrapper: 12.0.0 → ∅, -47.5 KiB
+bootstrap-stage4-stdenv: ε → ∅, -41.7 KiB
+busybox: ε → ∅, -117.2 KiB
+bzip2: ∅ → 1.0.6.0.2, +147.6 KiB
+coreutils: ∅ → 9.0, +1769.5 KiB
+diffutils: ∅ → 3.8, +1450.5 KiB
+ed: ∅ → 1.18, +134.7 KiB
+expand-response: -17.0 KiB
+findutils: ∅ → 4.9.0, +1472.3 KiB
+gawk: ∅ → 5.1.1, +2374.2 KiB
+gcc-wrapper: ∅ → 12.0.0, +47.5 KiB
+gnugrep: ∅ → 3.7, +773.2 KiB
+gnumake: ∅ → 4.3, +1391.1 KiB
+gnused: ∅ → 4.8, +725.0 KiB
+gnutar: ∅ → 1.34, +2834.7 KiB
+gzip: ∅ → 1.11, +152.0 KiB
+patch: ∅ → 2.7.6, +222.3 KiB
+pcre: ∅ → 8.45, +514.5 KiB
+stdenv: ∅ → ε, +42.1 KiB
+zlib: -121.4 KiB</code></pre>
+<p>Here we see exact list of packages that differ in the whole tree between <strong>stdenv</strong>
+and it’s immediate predecessor.</p>
+<p>Or we can look at just compiler wrapper difference of <strong>stdenv</strong> (let’s try <strong>nix-diff</strong>
+for a change):</p>
+<pre><code>$ nix-diff $(nix-instantiate -A stdenv.prev.cc) $(nix-instantiate -A stdenv.cc) --line-oriented | cat
+
+- /nix/store/d0ivnqxcmjdg9ihdl4ww9a0c79pyl0nd-bootstrap-stage4-gcc-wrapper-10.3.0.drv:{out}
++ /nix/store/45fs8hhm6afg0m0p2d635zhjh608bqsj-gcc-wrapper-10.3.0.drv:{out}
+• The set of input derivation names do not match:
+    - bootstrap-stage0-stdenv-linux
+    + bash-5.1-p12
+    + bootstrap-stage4-stdenv-linux
+    + coreutils-9.0
+    + gnugrep-3.7
+• The input derivation named `binutils-wrapper-2.35.2` differs
+  - /nix/store/gcyaki78ksxg9s211y4zr4ppnrq1jwlm-binutils-wrapper-2.35.2.drv:{out}
+  + /nix/store/9g4r35k465xg4p02c5krbxqnwvihpmbx-binutils-wrapper-2.35.2.drv:{out}
+  • The set of outputs do not match:
+      + {info}
+      + {man}
+  • The set of input source names do not match:
+      + gnu-binutils-strip-wrapper.sh
+  • The set of input derivation names do not match:
+      - bootstrap-stage1-stdenv-linux
+      + bash-5.1-p12
+      + bootstrap-stage4-stdenv-linux
+      + coreutils-9.0
+      + gnugrep-3.7
+  • The set of input derivations named `binutils-2.35.2` do not match
+      - /nix/store/l343vxcc5ik63ccrggff3js03y1l9154-binutils-2.35.2.drv:{out}
+      + /nix/store/vfzsbipvxkbj9m4yh5is0shfxn3p7b2m-binutils-2.35.2.drv:{info,man,out}
+  • The input derivation named `expand-response-params` differs
+    - /nix/store/5y71wc7khvy8m2qh6vvrvwx31dhk68r7-expand-response-params.drv:{out}
+    + /nix/store/w07x2k4wi8xvmh2nyxvx50nw5pxaga6y-expand-response-params.drv:{out}
+    • The set of input derivation names do not match:
+        - bootstrap-stage1-stdenv-linux
+        + bootstrap-stage3-stdenv-linux
+    • The environments do not match:
+        stdenv=''
+        - /nix/store/7wafj75gbf8kr9i3isdajc5vlm0r8jjp-bootstrap-stage1-stdenv-linux
+        + /nix/store/n89rpfsfs317j2qbm57905qzzq0amyhy-bootstrap-stage3-stdenv-linux
+    ''
+  • Skipping environment comparison
+• Skipping environment comparison</code></pre>
+<p>The above helps getting some intuition on what packages change from one <strong>stdenv</strong>
+to another.</p>
+<p>This still does not show crucial details of where do those <strong>-B</strong> / <strong>-L</strong> options come
+from into the <strong>gcc-wrapper</strong>. And why they matter at all.</p>
+<h1 id="option-stacking">option stacking</h1>
+<p>In contrast to <strong>FHS</strong> distributions <strong>nix</strong> explicitly allows and encourages previous
+versions of software to co-exist with newer ones.</p>
+<p>In our case of <strong>stdenv-stage2</strong> just rebuilds <strong>glibc</strong>. On <strong>FHS</strong> system
+we would update <strong>glibc</strong> inplace and would rely on it’s backwards compatibility to
+avoid system breakage right after such an update. It is practical for simle use cases but
+sometimes this causes complications. For example it’s hard to downgrade <strong>glibc</strong>
+once you have rebuilt a few dependencies (say, <strong>gcc</strong>) against a newer version.
+And inplace glibc update can cause issues with already running executables that lazily load
+<strong>nss</strong> resolver libraries.</p>
+<p>Simplistically <strong>nixpkgs</strong> sidesteps the problem by effectively building multiple separate
+worlds against different libcs (libc usually come with <strong>stdenv</strong> update or by using
+non-default stdenv, like <strong>pkgsMusl.stdenv</strong>).</p>
+<p>For our bootstrap case we somehow need to transition:</p>
+<ul>
+<li>from: <strong>gcc</strong> (provided by <strong>bootstrap-tools</strong>) linked against <strong>glibc</strong> (provided by <strong>bootstrap-tools</strong>)</li>
+<li>to: <strong>gcc</strong> (provided by <strong>nixpkgs</strong>) linked against <strong>glibc</strong> (provided by <strong>nixpkgs</strong>)</li>
+</ul>
+<p>One of the ways to do it is:</p>
+<ul>
+<li>build <strong>glibc</strong></li>
+<li>redirect <strong>gcc</strong> (from <strong>bootstrap-tools</strong>) to built <strong>glibc</strong></li>
+<li>build new <strong>gcc</strong></li>
+<li>[optional] build <strong>glibc</strong> and <strong>gcc</strong> again (to disentangle from
+<strong>bootstrap-tools</strong>’s <strong>gcc</strong> code generator)</li>
+</ul>
+<p>The “redirect <strong>gcc</strong>” part is a tricky but too much: all it needs is the
+override of default <strong>-B</strong> / <strong>-L</strong> / <strong>-Wl,-dynamic-linker,</strong> set of flags
+mentioned in <a href="../posts/239-hacking-on-glibc.html">hacking-on-glibc post</a>.</p>
+<p>We need to watch for option order if we already specify our toolchain
+explicitly. Let’s look at the following example artificial:</p>
+<pre><code># prepare library copies to see the effect:
+
+$ mkdir -p a b
+$ cp /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crt1.o a/
+$ cp /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crt1.o b/
+$ cp /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so a/
+$ cp /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so.6 a/
+$ cp /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so b/
+$ cp /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so.6 b/
+$ cp /glibc-2.33-108/lib/ld-linux-x86-64.so.2 a/
+$ cp /glibc-2.33-108/lib/ld-linux-x86-64.so.2 b/
+
+$ tree
+.
+├── a
+│   ├── crt1.o
+│   ├── ld-linux-x86-64.so.2
+│   ├── libc.so
+│   └── libc.so.6
+├── a.c
+├── b
+│   ├── crt1.o
+│   ├── ld-linux-x86-64.so.2
+│   ├── libc.so
+│   └── libc.so.6</code></pre>
+<p>Above I placed idential copies of <strong>glibc</strong> into a new directory (suppose
+we built slightly newer version of <strong>glibc</strong>) and then pointed <strong>gcc</strong> there.</p>
+<p>Quiz time: try to take some time and guess what the following command would print:</p>
+<pre><code>$ LANG=C gcc hello.c -o c -Wl,--verbose \
+    -La -Lb \
+    -Bb -Ba \
+    -Wl,--dynamic-linker=$PWD/a/ld-linux-x86-64.so.2 -Wl,--dynamic-linker=$PWD/b/ld-linux-x86-64.so.2 \
+    |&amp; fgrep succeeded | unnix | uniq</code></pre>
+<p>Note that <strong>-L</strong> options go in a-then-b order, <strong>-B</strong> options go in b-then-a
+order and dynamic-linker again goes in a-then-b.</p>
+<p>Guess which files get picked from which directory.</p>
+<p>Here is the result:</p>
+<pre><code>$ gcc a.c -o c -Wl,--verbose -La -Lb -Bb -Ba -Wl,--dynamic-linker=$PWD/a/ld-linux-x86-64.so.2 -Wl,--dynamic-linker=$PWD/b/ld-linux-x86-64.so.2 |&amp; fgrep succeeded | unnix | uniq
+attempt to open b/crt1.o succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crti.o succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtbegin.o succeeded
+attempt to open /tmp/cctmOQBK.o succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
+attempt to open a/libc.so succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so.6 succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc_nonshared.a succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2 succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtend.o succeeded
+attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crtn.o succeeded</code></pre>
+<p>Surprisingly (or not so surprisingly) <strong>crt1.o</strong> came from <strong>-Bb</strong>
+(first option in the list), <strong>libc.so</strong> came from <strong>-La</strong> (also first
+option in the list). But dynamic linker was … ignored?</p>
+<p>Yeah. Note that <strong>gcc</strong> is already a thick wrapper in <strong>nixpkgs</strong>.
+Let’s expand it with <strong>NIX_DEBUG=1</strong>:</p>
+<pre><code>$ NIX_DEBUG=1 gcc a.c -o c -La -Lb -Bb -Ba -Wl,--dynamic-linker=$PWD/a/ld-linux-x86-64.so.2 -Wl,--dynamic-linker=$PWD/b/ld-linux-x86-64.so.2 |&amp; unnix
+
+HARDENING: disabled flags: pie pic format stackprotector fortify strictoverflow
+extra flags before to /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/bin/gcc:
+  -Wl\,-dynamic-linker=/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2
+original flags to /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/bin/gcc:
+  a.c
+  -o
+  c
+  -La
+  -Lb
+  -Bb
+  -Ba
+  -Wl\,--dynamic-linker=/tmp/zz/a/ld-linux-x86-64.so.2
+  -Wl\,--dynamic-linker=/tmp/zz/b/ld-linux-x86-64.so.2
+extra flags after to /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/bin/gcc:
+  -B/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0-lib/lib
+  -B/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/
+  -idirafter
+  /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include
+  -idirafter
+  /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/include-fixed
+  -B/&lt;&lt;NIX&gt;&gt;/gcc-wrapper-11.2.0/bin/
+  -L/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib
+  -L/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0-lib/lib
+HARDENING: disabled flags: relro pie bindnow
+extra flags before to /&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld:
+  ''
+...</code></pre>
+<p>Note that <strong>gcc</strong> already injects <strong>-Wl,-dynamic-linker=/&lt;<NIX>&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2</strong>
+as the very first parameter (even before our options). As a result it gets
+picked first. Inability to override the dynamic linker looks like minor a bug
+of <strong>nixpkgs</strong> wrapper. I think wrapper should consistently treat all
+libc overrides. It’s unsafe to mix different parts of <strong>glibc</strong>
+(we already saw <strong>SIGSEGV</strong> on <strong>hello.c</strong> above).</p>
+<p>If you guessed this output right you already know a lot more than me
+on this topic :)</p>
+<p>Given that option order matters a lot <strong>nixpkgs</strong> needs to make sure
+that overrides work as expected at least most of the time:
+if we override <strong>-L</strong> option for <strong>glibc</strong>, then <strong>-B</strong> option override
+should be present and should follow order specified by <strong>-L</strong> (and not
+the other way around).</p>
+<p>I found out about these details only because <strong>nixpkgs</strong> was actually
+getting the option order wrong until
+<a href="https://github.com/NixOS/nixpkgs/pull/158047/commits/649ebfbed65189d7d62e4f2fe0e491552308a6f1" class="uri">https://github.com/NixOS/nixpkgs/pull/158047/commits/649ebfbed65189d7d62e4f2fe0e491552308a6f1</a>
+was applied.</p>
+<p>For quite a while <strong>nixpkgs</strong> was using <strong>crt1.o</strong> from wrong <strong>glibc</strong>
+which made <strong>stdenv</strong> slightly contaminated by <strong>bootstrap-tools</strong>.
+It used to work because <strong>crt1.o</strong> contents did not change for many
+<strong>glibc</strong> releases. Until <strong>glibc-2.34</strong>. Then we started getting all
+sorts of linkage failures at bootstrap:</p>
+<pre><code>    expand-response-params&gt; ld: /nix/store/p4s4jf7aq6v6z9iazll1aiqwb34aqxq9-bootstrap-tools/lib/crt1.o: in function `_start':
+    expand-response-params&gt; /build/glibc-2.27/csu/../sysdeps/x86_64/start.S:101: undefined reference to `__libc_csu_fini'
+    expand-response-params&gt; ld: /build/glibc-2.27/csu/../sysdeps/x86_64/start.S:102: undefined reference to `__libc_csu_init'
+    expand-response-params&gt; collect2: error: ld returned 1 exit status</code></pre>
+<p>Once understood the fix (or workaround) was trivial.</p>
+<p>There are many ways to avoid the mix-up in future. The simplest would be
+to never pass more than one <strong>glibc</strong> via <strong>-B</strong> / <strong>-L</strong> and always
+disable defaul search paths. But that’s for another time :)</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on March 24, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

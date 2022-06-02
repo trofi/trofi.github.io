@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: unbreaking igepv2</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>unbreaking igepv2</h1>
+
+            <p>Не успел я получить новую <strong>arm</strong> коробку igepv2, как тут-же ее сломал :]</p>
+<p>Сначала собрал ядро, это было просто. Выгуглил какой-то древний <strong>defconfig</strong> для
+<strong>igepv2</strong> и включил всё, чего мне не хватало. Главным для меня было отсутствие поддержки
+<strong>btrfs</strong> и <strong>USB</strong>, который без напильника <a href="https://lkml.org/lkml/2011/7/17/68">не собрался</a>.
+Правда, не факт, что именно этот <strong>USB</strong> драйвер мне вообще нужен. И вообще кому-нибудь,
+раз он так классно собирается :]. Ядро загрузилось (почти) с первого раза по <strong>tftp</strong>.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">Kernel</span> command line: mem=512M console=ttyO2,115200n8 root=/dev/sda2 rw rootwait</span></code></pre></div>
+<p>Распаковал <strong>stage3</strong> для <strong>armv7</strong> и получил нормальную <strong>gentoo</strong> :]</p>
+<p>Потом я подумал, что неплохо бы обновить и <strong>u-boot</strong>. Собрал <strong>mainline u-boot</strong> и долго (но не очень :])
+пытался его загрузить из существующего. Команда <strong>g &lt;addr&gt;</strong> должна была бы это делать, но
+<strong>u-boot</strong> где-то рано вис. Скорее всего какие-то компоненты не выживают повторной инициализации.
+Та же фигня, что и на <strong>sheevaplug</strong>. Но <strong>JTAG</strong> у меня не было и я рискнул просто писануть в
+<strong>nand</strong> новый <strong>u-boot</strong>. Он загрузился, но отвалилась сеть и, как выяснилось позже, отвалилась
+возможность сохранять переменные окружения в самом <strong>u-boot</strong>.</p>
+<p>Я предварительно забэкапил (ну это я так думал) старый <strong>u-boot</strong> командой <strong>nanddump</strong> и позже
+попробовал его восстановить. В результате вписал полный мусор и сломал загрузку <strong>igepv2</strong> :]</p>
+<p>Весь следующий день я изучал как это дело можно восстановить. Загрузка на многих <strong>OMAP</strong> от
+<strong>Texas Instruments</strong> начинается с исполнения кастрированного <strong>u-boot</strong> (зовется <strong>x-loader</strong>)
+в <strong>ROM</strong>. <a href="http://www.omappedia.org/wiki/Bootloader_Project#OMAP_Boot_Sequence">Картинка</a>,
+из которой нихрена не понятно, гласит следующее: <strong>x-loader</strong> пытается загрузиться с 3 типов носителей:</p>
+<ul>
+<li>serial console (<strong>UART</strong>), через которую обычно смотрят, что ж там творится на плате</li>
+<li><strong>SD</strong> карточка особого формата (на плате есть слот для <strong>microSD</strong>)</li>
+<li>загрузка из 512MB <strong>NAND</strong></li>
+</ul>
+<p><strong>SD</strong> карточки у меня не было (точнее не хотелось отбирать у владельцев приличных телефонов :]),
+так что я попробовал впихать загрузчик через <strong>serial console</strong>. <a href="http://markmail.org/message/ajwqor7dzvkc2yl3">В теории это не сложно</a>.
+На практике <strong>u-boot-utils</strong> без <a href="https://github.com/trofi/omap-u-boot-utils/commit/e8978e3a9aa3b81bf6270fa951549c56c4450f3a">хака</a>
+не хотел даже передавать данные, а с хаком так и не заставил шайтанское поделие загрузить новый загрузчик.</p>
+<p>Вообще это странно и обидно. Это самый красивый способ проверить свежесобранный <strong>u-boot</strong>
+и ядро не инициализируя никакие лишние подсистемы (типа <strong>ethernet</strong>, <strong>mmc</strong> или <strong>usb</strong>).
+Так что я или осилю <strong>serial</strong> или точно выясню, что он сломан на <strong>igep</strong>.</p>
+<p>День повозился с <strong>serial</strong>, узнал что такое <strong>8N1</strong>, как весело программировать эти поганые
+последовательные устройства и поплёлся в магазин за <strong>microSD</strong> :]</p>
+<p>Открыл страницу по созданию <a href="http://code.google.com/p/beagleboard/wiki/LinuxBootDiskFormat">boot sd</a>
+и “всё сделал” (на самом деле таких “страниц” больше одной и все они используют разные <strong>stage-2</strong> <strong>x-loader</strong>).
+Естественно, не загрузилось :]. Оказывается, <strong>fdisk</strong> с недавних пор начал считать <strong>units</strong> в секторах,
+а не цилиндрах. Из-за этого я создавал невыровненные разделы и <strong>x-loader</strong> посылал меня .</p>
+<p>В конце концов с помощью <strong>rob_w</strong> на <strong>#igep</strong> и немного покурив man <strong>fdisk</strong> я решил собрать самый
+древний вид раздела:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> fdisk <span class="at">-c</span><span class="op">=</span>dos <span class="at">-u</span><span class="op">=</span>cylinders <span class="at">-C</span> 976 <span class="at">-H</span> 255 <span class="at">-S</span> 63 /dev/mmcblk0</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>     <span class="ex">o</span>   <span class="co"># новая таблица разделов</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>     <span class="ex">n</span>   <span class="co"># новый раздел</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>     <span class="ex">p</span>   <span class="co"># primary типа</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>     <span class="ex">1</span>   <span class="co"># первый</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>     <span class="ex">+50</span> <span class="co"># 50 цилиндров (63 * 255 * 50 * 512 = 400 мегов?)</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>     <span class="ex">a</span>   <span class="co"># загрузочный</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>     <span class="fu">w</span>   <span class="co"># записать таблицу разделов</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>     <span class="ex">q</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> mount <span class="at">-t</span> msdos /dev/mmcblk0p1 /mnt/igep_boot</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cd /mnt/igep_boot</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> wget http://downloads.igep.es/binaries/x-loader/v1.4.4-0/x-load-1.4.4-0.igep0020-sdcard.bin.ift <span class="at">-O</span> MLO</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> wget http://downloads.igep.es/binaries/u-boot-arm/v2010.06-0/u-boot-arm-2010.06-0.igep0020.bin <span class="at">-o</span> u-boot.bin</span></code></pre></div>
+<p>И о чудо! Я получил <strong>prompt</strong> <strong>u-boot</strong>. Загрузился по <strong>tftp</strong> в свое новое ядро и прошил этот
+старый <strong>u-boot</strong> в <strong>NAND</strong>. Ура! Можно дальше ломать ядро :].</p>
+<p>Кстати, это не так уж и сложно. Я точно не знаю, какие мне нужны драйвера, по сему включаю
+в <strong>.config</strong> всякую ерунду типа <strong>RTC</strong>, которого, наверное, вообще нет на <strong>igep</strong> :]</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.344787] ------------[ cut <span class="er">here</span> <span class="ex">]------------</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.344848] WARNING: at <span class="er">/home/slyfox/linux-2.6/kernel/irq/handle.c:130</span> <span class="fu">handle_irq_event_percpu+0x180/0x19c()</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.344879] irq 379 <span class="er">handler</span> <span class="ex">twl_rtc_interrupt+0x0/0x98</span> enabled interrupts</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.344909] [<span class="er">&lt;</span>c0036e84<span class="er">&gt;</span>] <span class="er">(</span>unwind_backtrace+0x0/0xfc<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00537dc<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">warn_slowpath_common+0x48/0x60</span><span class="kw">)</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.344940] [<span class="er">&lt;</span>c00537dc<span class="er">&gt;</span>] <span class="er">(</span>warn_slowpath_common+0x48/0x60<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0053888<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">warn_slowpath_fmt+0x30/0x40</span><span class="kw">)</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.344970] [<span class="er">&lt;</span>c0053888<span class="er">&gt;</span>] <span class="er">(</span>warn_slowpath_fmt+0x30/0x40<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0080b14<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_irq_event_percpu+0x180/0x19c</span><span class="kw">)</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345001] [<span class="er">&lt;</span>c0080b14<span class="er">&gt;</span>] <span class="er">(</span>handle_irq_event_percpu+0x180/0x19c<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0080b58<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_irq_event+0x28/0x38</span><span class="kw">)</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345031] [<span class="er">&lt;</span>c0080b58<span class="er">&gt;</span>] <span class="er">(</span>handle_irq_event+0x28/0x38<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0082894<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_edge_irq+0x7c/0x138</span><span class="kw">)</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345031] [<span class="er">&lt;</span>c0082894<span class="er">&gt;</span>] <span class="er">(</span>handle_edge_irq+0x7c/0x138<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00806a4<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">generic_handle_irq+0x34/0x40</span><span class="kw">)</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345062] [<span class="er">&lt;</span>c00806a4<span class="er">&gt;</span>] <span class="er">(</span>generic_handle_irq+0x34/0x40<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0268040<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_twl4030_sih+0x84/0xc4</span><span class="kw">)</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345092] [<span class="er">&lt;</span>c0268040<span class="er">&gt;</span>] <span class="er">(</span>handle_twl4030_sih+0x84/0xc4<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00806a4<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">generic_handle_irq+0x34/0x40</span><span class="kw">)</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345123] [<span class="er">&lt;</span>c00806a4<span class="er">&gt;</span>] <span class="er">(</span>generic_handle_irq+0x34/0x40<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0267d5c<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">twl4030_irq_thread+0xa0/0x128</span><span class="kw">)</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345153] [<span class="er">&lt;</span>c0267d5c<span class="er">&gt;</span>] <span class="er">(</span>twl4030_irq_thread+0xa0/0x128<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c006b9c0<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">kthread+0x84/0x8c</span><span class="kw">)</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345184] [<span class="er">&lt;</span>c006b9c0<span class="er">&gt;</span>] <span class="er">(</span>kthread+0x84/0x8c<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0033818<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">kernel_thread_exit+0x0/0x8</span><span class="kw">)</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>   10.345184] ---[ end <span class="er">trace</span> <span class="ex">5e27d437a975fbd3</span> ]---</span></code></pre></div>
+<p>Или вот результат работы ядра после <strong>mainline u-boot + tftp kernel</strong> (видать,
+контроллер попался ядру не в очень хорошем состоянии) :</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.165222] smsc911x: Driver <span class="er">version</span> <span class="ex">2008-10-21</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.840698] irq 336: <span class="er">nobody</span> <span class="ex">cared</span> <span class="er">(</span><span class="ex">try</span> booting with the <span class="st">&quot;irqpoll&quot;</span> option<span class="kw">)</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.847930] [<span class="er">&lt;</span>c0036e84<span class="er">&gt;</span>] <span class="er">(</span>unwind_backtrace+0x0/0xfc<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0081f58<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">__report_bad_irq+0x20/0xb0</span><span class="kw">)</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.857452] [<span class="er">&lt;</span>c0081f58<span class="er">&gt;</span>] <span class="er">(</span>__report_bad_irq+0x20/0xb0<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00821b0<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">note_interrupt+0x1c8/0x224</span><span class="kw">)</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.867095] [<span class="er">&lt;</span>c00821b0<span class="er">&gt;</span>] <span class="er">(</span>note_interrupt+0x1c8/0x224<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0080a3c<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_irq_event_percpu+0xa8/0x19c</span><span class="kw">)</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.877471] [<span class="er">&lt;</span>c0080a3c<span class="er">&gt;</span>] <span class="er">(</span>handle_irq_event_percpu+0xa8/0x19c<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0080b58<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_irq_event+0x28/0x38</span><span class="kw">)</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.887847] [<span class="er">&lt;</span>c0080b58<span class="er">&gt;</span>] <span class="er">(</span>handle_irq_event+0x28/0x38<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0082cac<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">handle_level_irq+0x80/0xe8</span><span class="kw">)</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.897491] [<span class="er">&lt;</span>c0082cac<span class="er">&gt;</span>] <span class="er">(</span>handle_level_irq+0x80/0xe8<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00806a4<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">generic_handle_irq+0x34/0x40</span><span class="kw">)</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.907318] [<span class="er">&lt;</span>c00806a4<span class="er">&gt;</span>] <span class="er">(</span>generic_handle_irq+0x34/0x40<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c02301b8<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">gpio_irq_handler+0x16c/0x1b0</span><span class="kw">)</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.917297] [<span class="er">&lt;</span>c02301b8<span class="er">&gt;</span>] <span class="er">(</span>gpio_irq_handler+0x16c/0x1b0<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00806a4<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">generic_handle_irq+0x34/0x40</span><span class="kw">)</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.927307] [<span class="er">&lt;</span>c00806a4<span class="er">&gt;</span>] <span class="er">(</span>generic_handle_irq+0x34/0x40<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c002d030<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">asm_do_IRQ+0x30/0x84</span><span class="kw">)</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.936584] [<span class="er">&lt;</span>c002d030<span class="er">&gt;</span>] <span class="er">(</span>asm_do_IRQ+0x30/0x84<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0032af4<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">__irq_svc+0x34/0xa0</span><span class="kw">)</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.945037] Exception stack<span class="er">(</span>0xdf82de48 <span class="er">to</span> <span class="ex">0xdf82de90</span><span class="er">)</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.950347] de40:                   00000000 <span class="er">00010000</span> <span class="ex">00000001</span> 00000000 df97f9c0 c041f584</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.958984] de60: 00000150 <span class="er">00000000</span> <span class="ex">60000013</span> df8846c0 00000013 df881608 00000000 df82de90</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.967590] de80: c022fdf0 <span class="er">c00815f4</span> <span class="ex">40000013</span> ffffffff</span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.972930] [<span class="er">&lt;</span>c0032af4<span class="er">&gt;</span>] <span class="er">(</span>__irq_svc+0x34/0xa0<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00815f4<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">__setup_irq+0x180/0x344</span><span class="kw">)</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.981658] [<span class="er">&lt;</span>c00815f4<span class="er">&gt;</span>] <span class="er">(</span>__setup_irq+0x180/0x344<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0081888<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">request_threaded_irq+0xd0/0x128</span><span class="kw">)</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    1.991485] [<span class="er">&lt;</span>c0081888<span class="er">&gt;</span>] <span class="er">(</span>request_threaded_irq+0xd0/0x128<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c034c744<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">smsc911x_drv_probe+0x484/0xce4</span><span class="kw">)</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.001922] [<span class="er">&lt;</span>c034c744<span class="er">&gt;</span>] <span class="er">(</span>smsc911x_drv_probe+0x484/0xce4<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c025c850<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">platform_drv_probe+0x18/0x1c</span><span class="kw">)</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.012115] [<span class="er">&lt;</span>c025c850<span class="er">&gt;</span>] <span class="er">(</span>platform_drv_probe+0x18/0x1c<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c025b5a0<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">driver_probe_device+0x98/0x1a4</span><span class="kw">)</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.022308] [<span class="er">&lt;</span>c025b5a0<span class="er">&gt;</span>] <span class="er">(</span>driver_probe_device+0x98/0x1a4<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c025b738<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">__driver_attach+0x8c/0x90</span><span class="kw">)</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.032226] [<span class="er">&lt;</span>c025b738<span class="er">&gt;</span>] <span class="er">(</span>__driver_attach+0x8c/0x90<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c025adfc<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">bus_for_each_dev+0x60/0x8c</span><span class="kw">)</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.041748] [<span class="er">&lt;</span>c025adfc<span class="er">&gt;</span>] <span class="er">(</span>bus_for_each_dev+0x60/0x8c<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c025a6d8<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">bus_add_driver+0xa0/0x228</span><span class="kw">)</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.051300] [<span class="er">&lt;</span>c025a6d8<span class="er">&gt;</span>] <span class="er">(</span>bus_add_driver+0xa0/0x228<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c025bd2c<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">driver_register+0x78/0x13c</span><span class="kw">)</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.060852] [<span class="er">&lt;</span>c025bd2c<span class="er">&gt;</span>] <span class="er">(</span>driver_register+0x78/0x13c<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0008530<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">do_one_initcall+0x94/0x164</span><span class="kw">)</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.070495] [<span class="er">&lt;</span>c0008530<span class="er">&gt;</span>] <span class="er">(</span>do_one_initcall+0x94/0x164<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c00086a8<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">kernel_init+0x74/0x118</span><span class="kw">)</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.079742] [<span class="er">&lt;</span>c00086a8<span class="er">&gt;</span>] <span class="er">(</span>kernel_init+0x74/0x118<span class="er">)</span> <span class="er">from</span> <span class="ex">[</span><span class="op">&lt;</span>c0033818<span class="op">&gt;</span>] <span class="er">(</span><span class="ex">kernel_thread_exit+0x0/0x8</span><span class="kw">)</span></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.089019] handlers:</span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>[    2.091400] <span class="er">[&lt;c02976c8&gt;</span><span class="ex">]</span> smsc911x_irqhandler</span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.095916] Disabling IRQ <span class="er">#336</span></span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a><span class="bu">[</span>    2.100738] smsc911x-mdio: probed</span></code></pre></div>
+<p>Если “довольно необычно” работают такие низкоуровневые вещи, то как насчет простого юзерспейса?
+Как ни странно, всё работает: мир обновляется, <strong>ssh</strong> пускает, сейчас <strong>mc</strong> дособерется. Но иногда…</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">slyfox@igepv2</span> ~ $ tftp 192.168.1.5</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">tftp</span><span class="op">&gt;</span> get uImage</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">***</span> buffer overflow detected <span class="pp">***</span>: tftp terminated</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Aborted</span></span></code></pre></div>
+<p>Что с него взять, embedded :]</p>
+
+<div class="info">
+    Posted on July 16, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

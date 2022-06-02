@@ -1,0 +1,352 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: dynamic linking ABI is hard</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>dynamic linking ABI is hard</h1>
+
+            <p>Today on <strong>#gentoo-haskell</strong> Ke shown an example of subtle
+ABI breakage. nettle library exports as part of it’s API
+<strong>NULL</strong>-terminated array of functions <strong>nettle_hashes</strong>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// in nettle-meta.h</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">const</span> <span class="kw">struct</span> nettle_hash <span class="op">*</span> <span class="dt">const</span> nettle_hashes<span class="op">[];</span></span></code></pre></div>
+<p>and defines that array as</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// nettle-meta-hashes.c</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> nettle_hash <span class="op">*</span> <span class="dt">const</span> nettle_hashes<span class="op">[]</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_md2<span class="op">,</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_md4<span class="op">,</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_md5<span class="op">,</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_ripemd160<span class="op">,</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_sha1<span class="op">,</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_sha224<span class="op">,</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_sha256<span class="op">,</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_sha384<span class="op">,</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_sha512<span class="op">,</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    NULL</span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<h1 id="quiz-question">Quiz question!</h1>
+<p>Will <strong>ABI</strong> change if we add or remove a few entries in array? (<a href="https://git.lysator.liu.se/nettle/nettle/commit/2a4acddcd8e004b0632b292f1a32d8ec86278a30">like this patch</a>)</p>
+<p>Would you expect existing binaries to start crashing after library upgrade on your system?</p>
+<!--more-->
+<p>TL;DR: yes, things will break.</p>
+<h1 id="tiny-trigger">Tiny trigger</h1>
+<p>To understand how exactly things break let’s dive into simpler
+example of a library exporting only constant strings and nothing else.</p>
+<p>Public library interface:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// l.h:</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">const</span> <span class="dt">char</span> s1<span class="op">[];</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">const</span> <span class="dt">char</span> s2<span class="op">[];</span></span></code></pre></div>
+<p>Full library implementation:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// l.c:</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;l.h&quot;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef V1</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> s1<span class="op">[]</span> <span class="op">=</span> <span class="st">&quot;v1 s1&quot;</span><span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> s2<span class="op">[]</span> <span class="op">=</span> <span class="st">&quot;v1 s2&quot;</span><span class="op">;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef V2</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> s1<span class="op">[]</span> <span class="op">=</span> <span class="st">&quot;v2 s1 &lt;V2 addition&gt;&quot;</span><span class="op">;</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> s2<span class="op">[]</span> <span class="op">=</span> <span class="st">&quot;v2 s2 &lt;V2 addition&gt;&quot;</span><span class="op">;</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
+<p>And library user:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// exe.c:</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;l.h&quot;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;s1='%s'</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> s1<span class="op">);</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;s2='%s'</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> s2<span class="op">);</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here we just print array values from executable. Nothing fancy.</p>
+<p>Now let’s try to do the following sequence of actions:</p>
+<ol type="1">
+<li>build a library in <strong>V1</strong> mode (shorter strings)</li>
+<li>build an executable against <strong>V1</strong> library</li>
+<li>run executable (linked against <strong>V1</strong>) against <strong>V1</strong> library</li>
+<li>build a library in <strong>V2</strong> mode (longer strings)</li>
+<li>run executable (linked against <strong>V1</strong>) against <strong>V2</strong> library</li>
+<li>build an executable against <strong>V2</strong></li>
+<li>run executable (linked against <strong>V2</strong>) against <strong>V2</strong> library</li>
+</ol>
+<p>Doing <strong>1-3</strong> steps:</p>
+<pre class><code>$ gcc -O2 -DV1 -shared -fPIC l.c -o libl.so
+$ gcc -O2 exe.c -o exe -L. -ll '-Wl,-rpath=$ORIGIN'
+$ echo 'Runnig exe/V1'
+Runnig exe/V1
+$ ./exe
+s1='v1 s1'
+s2='v1 s2'
+$ cp exe exe-v1</code></pre>
+<p>No surprises here. Let’s update library to <strong>V2</strong> (steps <strong>4-5</strong>):</p>
+<pre class><code>$ gcc -O2 -DV2 -shared -fPIC l.c -o libl.so
+$ echo 'Runnig exe/V2'
+Runnig exe/V2
+$ ./exe
+./exe: Symbol `s2' has different size in shared object, consider re-linking
+./exe: Symbol `s1' has different size in shared object, consider re-linking
+s1='v2 s1 '
+s2='v2 s2 v2 s1 '</code></pre>
+<p>Hah! Data corruption! <strong>glibc</strong>’s runtime dynamic linker even hints us
+to relink an executable. Let’s do that (steps <strong>6-7</strong>):</p>
+<pre class><code>$ gcc -O2 exe.c -o exe -L. -ll '-Wl,-rpath=$ORIGIN'
+$ echo 'Runnig exe/V2 (relinked)'
+Runnig exe/V2 (relinked)
+$ ./exe
+s1='v2 s1 &lt;V2 addition&gt;'
+s2='v2 s2 &lt;V2 addition&gt;'
+$ cp exe exe-v2</code></pre>
+<p>Recovered.</p>
+<h1 id="the-clues">The clues</h1>
+<p>So how could executable change when linked against <strong>V1</strong> and <strong>V2</strong> versions?
+The easiest way to see it is to dump all the ELF information we have:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> readelf <span class="at">-a</span> exe-v1 <span class="op">&gt;</span> v1</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> readelf <span class="at">-a</span> exe-v2 <span class="op">&gt;</span> v2</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> diff <span class="at">-u</span> v1 v2</span></code></pre></div>
+<div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- v1  2016-12-03 14:39:09.475769368 +0000</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ v2  2016-12-03 14:39:11.510768031 +0000</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,3 +1,3 @@</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a> Section Headers:</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>   [Nr] Name              Type             Address           Offset</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>        Size              EntSize          Flags  Link  Info  Align</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>   [24] .bss              NOBITS           0000000000601030  00001030</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="st">-       0000000000000010  0000000000000000  WA       0     0     1</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="va">+       0000000000000038  0000000000000000  WA       0     0     16</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a> Program Headers:</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>   Type           Offset             VirtAddr           PhysAddr</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>                  FileSiz            MemSiz              Flags  Align</span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>   LOAD           0x0000000000000de8 0x0000000000600de8 0x0000000000600de8</span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a><span class="st">-                 0x0000000000000248 0x0000000000000258  RW     200000</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a><span class="va">+                 0x0000000000000248 0x0000000000000280  RW     200000</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a> Relocation section '.rela.dyn' at offset 0x498 contains 4 entries:</span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>   Offset          Info           Type           Sym. Value    Sym. Name + Addend</span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a> 000000601030  000900000005 R_X86_64_COPY     0000000000601030 s2 + 0</span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a><span class="st">-000000601036  000600000005 R_X86_64_COPY     0000000000601036 s1 + 0</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="va">+000000601050  000600000005 R_X86_64_COPY     0000000000601050 s1 + 0</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a> Symbol table '.dynsym' contains 11 entries:</span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    Num:    Value          Size Type    Bind   Vis      Ndx Name</span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a><span class="st">-     6: 0000000000601036     6 OBJECT  GLOBAL DEFAULT   24 s1</span></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a><span class="va">+     6: 0000000000601050    20 OBJECT  GLOBAL DEFAULT   24 s1</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a><span class="st">-     9: 0000000000601030     6 OBJECT  GLOBAL DEFAULT   24 s2</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a><span class="va">+     9: 0000000000601030    20 OBJECT  GLOBAL DEFAULT   24 s2</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a> Symbol table '.symtab' contains 60 entries:</span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>    Num:    Value          Size Type    Bind   Vis      Ndx Name</span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a><span class="st">-    43: 0000000000601030     6 OBJECT  GLOBAL DEFAULT   24 s2</span></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a><span class="va">+    43: 0000000000601030    20 OBJECT  GLOBAL DEFAULT   24 s2</span></span>
+<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a><span class="st">-    54: 0000000000601036     6 OBJECT  GLOBAL DEFAULT   24 s1</span></span>
+<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a><span class="va">+    54: 0000000000601050    20 OBJECT  GLOBAL DEFAULT   24 s1</span></span></code></pre></div>
+<p>We see here a lot of interesting facts:</p>
+<ul>
+<li><strong>s1</strong> and <strong>s2</strong> symbols have known sizes</li>
+<li>the sizes change from 6 bytes (“v1 s1\0”) to 20 bytes (“v2 s1 &lt;V2 addition&gt;\0”)</li>
+<li>both <strong>s1</strong> and <strong>s2</strong> have mysterious <strong>R_X86_64_COPY</strong> relocation type</li>
+<li><strong>.bss</strong> section size increased for +40 bytes</li>
+<li>LOAD read/write segment increased for +40 bytes</li>
+</ul>
+<p>It means array contents is copied from library <strong>.data</strong> section to an executable
+<strong>.bss</strong> section at each execution startup time.</p>
+<h1 id="why-does-it-behave-like-that">Why does it behave like that?</h1>
+<p>But why copy? Arrays might be huge in size and copying them would take a while.
+Why not just map the library and use it’s symbols?</p>
+<p>For that we need to understand what drives the process of binary generation.</p>
+<p>All starts from <strong>exe.c</strong> file being converted to the assembly form.
+Let’s look at it:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">; gcc -O2 exe.c -S -o exe.S</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    .<span class="dt">file</span>   <span class="st">&quot;exe.c&quot;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>rodata<span class="op">.</span>str1<span class="op">.</span><span class="dv">1</span><span class="op">,</span><span class="st">&quot;aMS&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits<span class="op">,</span><span class="dv">1</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC0:</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    .string <span class="st">&quot;s1='%s'\n&quot;</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC1:</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    .string <span class="st">&quot;s2='%s'\n&quot;</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>text<span class="op">.</span>startup<span class="op">,</span><span class="st">&quot;ax&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    .p2align <span class="dv">4</span><span class="op">,,</span><span class="dv">15</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    .globl  main</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>    .type   main<span class="op">,</span> <span class="fu">@f</span>unction</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFB23:</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    .cfi_startproc</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    subq    <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>    .cfi_def_cfa_offset <span class="dv">16</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span>s1<span class="op">,</span> <span class="op">%</span><span class="kw">edx</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$.</span>LC0<span class="op">,</span> <span class="op">%</span><span class="kw">esi</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">call</span>    __printf_chk</span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span>s2<span class="op">,</span> <span class="op">%</span><span class="kw">edx</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$.</span>LC1<span class="op">,</span> <span class="op">%</span><span class="kw">esi</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">call</span>    __printf_chk</span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>    addq    <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>    .cfi_def_cfa_offset <span class="dv">8</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">ret</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>    .cfi_endproc</span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFE23:</span></span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>    .size   main<span class="op">,</span> <span class="op">.-</span>main</span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>    .ident  <span class="st">&quot;GCC: (Gentoo 6.2.0-r1 p1.1) 6.2.0&quot;</span></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>note<span class="op">.</span>GNU<span class="op">-</span>stack<span class="op">,</span><span class="st">&quot;&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span></code></pre></div>
+<p>The relevant piece of code here is how <strong>s1</strong> gets propagated to <strong>printf</strong> call:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    .<span class="dt">file</span>   <span class="st">&quot;exe.c&quot;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>rodata<span class="op">.</span>str1<span class="op">.</span><span class="dv">1</span><span class="op">,</span><span class="st">&quot;aMS&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits<span class="op">,</span><span class="dv">1</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC0:</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>    .string <span class="st">&quot;s1='%s'\n&quot;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span>s1<span class="op">,</span> <span class="op">%</span><span class="kw">edx</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$.</span>LC0<span class="op">,</span> <span class="op">%</span><span class="kw">esi</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">call</span>    __printf_chk</span></code></pre></div>
+<p><strong>$s1</strong> is an absolute address to <strong>s1</strong> symbol. It is not known at <strong>exe</strong>
+link time as it’s storage is in external library. There is no indirection used.</p>
+<p>One way of adjusting this address is to use a relocation in code segment (also known at <strong>TEXTREL</strong>).
+But such relocations are unwelcome in linux systems. They have a few disadvantages:</p>
+<ul>
+<li>[insecurity] <strong>.text</strong> sections that contain <strong>TEXTREL</strong>s need to be mapped with <strong>RWX</strong> permissions.</li>
+<li>[inefficiency] Fixing up these relocation has to be done before program takes control.
+Even if code will never be executed.</li>
+<li>[inefficiency] Each fixed relocation unshares code page where relocation was fixed up.</li>
+</ul>
+<p><strong>s1</strong> and <strong>s2</strong> object size is known at link time:
+<strong>ld</strong> accepts both <strong>exe.c</strong> and <strong>libl.so</strong> files to resolve all used symbols in final <strong>exe</strong>.
+Thus linker decides to provide storage for such data in <strong>exe</strong>’s own writable <strong>.bss</strong> section
+and generates special <strong>COPY</strong> relocations as if external data would be local to <strong>exe</strong>.</p>
+<p>When we update <strong>libl.so</strong> with new <strong>s1</strong> object size <strong>exe</strong> still contains
+<strong>COPY</strong> relocation of symbol <strong>s1</strong> of the old size. This leads to partial
+symbol copying at <strong>exe</strong> startup.</p>
+<p>In case of <strong>nettle</strong> that means <strong>NULL</strong>-terminated array will be copied only partially
+(missing 4 last elements including <strong>NULL</strong>) which causes occasional <strong>SIGSEGV</strong>s.</p>
+<h1 id="a-fun-workaround">A fun workaround</h1>
+<p>This absolute relocation problem is well known when writing shared libraries.
+Compiler has a special position independent mode (<strong>-fPIC</strong>) that generates
+non-absolute access to each symbol in the library.</p>
+<p>We can workaround the problem by building <strong>exe.c</strong> with <strong>-fPIC</strong>:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc <span class="at">-O2</span> <span class="at">-DV1</span> <span class="at">-shared</span> <span class="at">-fPIC</span> l.c <span class="at">-o</span> libl.so</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc <span class="at">-O2</span> <span class="at">-fPIC</span> exe.c <span class="at">-o</span> exe <span class="at">-L.</span> <span class="at">-ll</span> <span class="st">'-Wl,-rpath=$ORIGIN'</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo <span class="st">'Runnig exe/V1'</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Runnig</span> exe/V1</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./exe</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="va">s1</span><span class="op">=</span><span class="st">'v1 s1'</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="va">s2</span><span class="op">=</span><span class="st">'v1 s2'</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc <span class="at">-O2</span> <span class="at">-DV2</span> <span class="at">-shared</span> <span class="at">-fPIC</span> l.c <span class="at">-o</span> libl.so</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo <span class="st">'Runnig exe/V2'</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="ex">Runnig</span> exe/V2</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./exe</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="va">s1</span><span class="op">=</span><span class="st">'v2 s1 &lt;V2 addition&gt;'</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="va">s2</span><span class="op">=</span><span class="st">'v2 s2 &lt;V2 addition&gt;'</span></span></code></pre></div>
+<p>It just works. Let’s look at the changes in generated code for <strong>exe.c</strong>:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">; gcc -fPIC -O2 exe.c -S -o exe-fPIC.S</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    .<span class="dt">file</span>   <span class="st">&quot;exe.c&quot;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>rodata<span class="op">.</span>str1<span class="op">.</span><span class="dv">1</span><span class="op">,</span><span class="st">&quot;aMS&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits<span class="op">,</span><span class="dv">1</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC0:</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    .string <span class="st">&quot;s1='%s'\n&quot;</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC1:</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    .string <span class="st">&quot;s2='%s'\n&quot;</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>text<span class="op">.</span>startup<span class="op">,</span><span class="st">&quot;ax&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    .p2align <span class="dv">4</span><span class="op">,,</span><span class="dv">15</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>    .globl  main</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    .type   main<span class="op">,</span> <span class="fu">@f</span>unction</span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFB23:</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    .cfi_startproc</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>    subq    <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>    .cfi_def_cfa_offset <span class="dv">16</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>    s1<span class="fu">@</span><span class="er">G</span>OTPCREL<span class="op">(%</span>rip<span class="op">),</span> <span class="op">%</span><span class="kw">rdx</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>    leaq    <span class="op">.</span>LC0<span class="op">(%</span>rip<span class="op">),</span> <span class="op">%</span><span class="kw">rsi</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">call</span>    __printf_chk<span class="fu">@</span><span class="er">P</span>LT</span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>    s2<span class="fu">@</span><span class="er">G</span>OTPCREL<span class="op">(%</span>rip<span class="op">),</span> <span class="op">%</span><span class="kw">rdx</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>    leaq    <span class="op">.</span>LC1<span class="op">(%</span>rip<span class="op">),</span> <span class="op">%</span><span class="kw">rsi</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">call</span>    __printf_chk<span class="fu">@</span><span class="er">P</span>LT</span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a>    addq    <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a>    .cfi_def_cfa_offset <span class="dv">8</span></span>
+<span id="cb14-30"><a href="#cb14-30" aria-hidden="true" tabindex="-1"></a>    <span class="cf">ret</span></span>
+<span id="cb14-31"><a href="#cb14-31" aria-hidden="true" tabindex="-1"></a>    .cfi_endproc</span>
+<span id="cb14-32"><a href="#cb14-32" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFE23:</span></span>
+<span id="cb14-33"><a href="#cb14-33" aria-hidden="true" tabindex="-1"></a>    .size   main<span class="op">,</span> <span class="op">.-</span>main</span>
+<span id="cb14-34"><a href="#cb14-34" aria-hidden="true" tabindex="-1"></a>    .ident  <span class="st">&quot;GCC: (Gentoo 6.2.0-r1 p1.1) 6.2.0&quot;</span></span>
+<span id="cb14-35"><a href="#cb14-35" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>note<span class="op">.</span>GNU<span class="op">-</span>stack<span class="op">,</span><span class="st">&quot;&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span></code></pre></div>
+<p>Or in a diff form:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- exe.S       2016-12-03 17:51:28.229898505 +0000</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ exe-fPIC.S  2016-12-03 18:09:38.341060805 +0000</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -16,2 +16,2 @@</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="st">-       movl    $s1, %edx</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="st">-       movl    $.LC0, %esi</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="va">+       movq    s1@GOTPCREL(%rip), %rdx</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="va">+       leaq    .LC0(%rip), %rsi</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -20,3 +20,3 @@</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="st">-       call    __printf_chk</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="st">-       movl    $s2, %edx</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="st">-       movl    $.LC1, %esi</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="va">+       call    __printf_chk@PLT</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="va">+       movq    s2@GOTPCREL(%rip), %rdx</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="va">+       leaq    .LC1(%rip), %rsi</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -25 +25 @@</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="st">-       call    __printf_chk</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a><span class="va">+       call    __printf_chk@PLT</span></span></code></pre></div>
+<p>Access to <strong>s1</strong> is now done via separate global offset table (aka <strong>.got</strong>).
+This way we get another layer of indirection (memory dereference) and get
+our <strong>s1</strong> contents without copies.</p>
+<h1 id="a-few-takeaways">A few takeaways</h1>
+<ul>
+<li>Be careful when exporting any objects from libraries (arrays, structs, integral constants)</li>
+<li>Exporting a pointer (const char *) instead of an array (const char []) would be not so devastating</li>
+<li>Dynamic linking is hard :)</li>
+<li>To learn more it’s worth reading Ulrich Drepper’s <a href="https://software.intel.com/sites/default/files/m/a/1/e/dsohowto.pdf">DSO howto</a></li>
+<li>Another good book is <a href="https://wh0rd.org/books/linkers-and-loaders/">Linkers and Loaders</a> by Jonh R. Levine.</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December  3, 2016 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

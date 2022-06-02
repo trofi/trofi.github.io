@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: nix on gentoo howto</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>nix on gentoo howto</h1>
+
+            <h1 id="tldr">TL;DR</h1>
+<p>Getting nix on gentoo (<a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-apps/nix/nix-1.11.6-r1.ebuild#n50">same steps</a>):</p>
+<ul>
+<li>install nix from gentoo main tree: <strong>emerge nix</strong></li>
+<li>enable nix-daemon service:
+<ul>
+<li>on systemd: <strong>systemctl enable nix-daemon</strong></li>
+<li>on openrc: <strong>rc-update add nix-daemon</strong></li>
+</ul></li>
+<li>relogin your user (it will source environment and profile update)</li>
+<li>run <strong>nix-channel --update</strong></li>
+</ul>
+<p>Ready!</p>
+<h1 id="more-fun-commands">More fun commands</h1>
+<ul>
+<li>install a package: <strong>nix-env -iA nixpkgs.firefox</strong></li>
+<li>uninstall a package: <strong>nix-env -e nixpkgs.firefox</strong></li>
+<li>start a new shell with only specified package(s) in environment: <strong>nix-shell --pure -p chromium</strong></li>
+</ul>
+<h1 id="more-words">More words</h1>
+<p><strong>haskell</strong> overlay for <strong>gentoo</strong> had a <strong>sys-apps/nix</strong> package manager
+for a long time. I bumped it’s version a few times but never actually tried to
+use it.</p>
+<p>WARNING: I’ve been using nix only for a week and wrote like 3 <strong>.nix</strong> packages
+for a few binaries and libraries. Take all I write here with a grain of salt.</p>
+<p>Nix is not gentoo-specific at all. Nix is not even haskell-specific.
+The implementation language is <strong>C++</strong>, <strong>Perl</strong> and <a href="https://nixos.org/releases/nix/latest/manual.pdf">Nix Expression Language</a>.</p>
+<p>Nix tries to solve (among other things) an interesting problem of software
+distribution: make packages (binaries + everything else) runnable on machines
+other than the one package was built on.</p>
+<p>Nix tracks precise dependencies of packages it was built against down to libc.
+Once you’ve changed glibc you need to rebuild all dependent packages.</p>
+<p>Every build gets installed into it’s own unique prefix under <strong>/nix/store</strong>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> LANG=C ls <span class="at">-l</span> /nix/store/ <span class="kw">|</span> <span class="fu">egrep</span> <span class="st">'^d.*(glibc|firefox)'</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">dr-xr-xr-x</span> 1 root root      36 Jan  1  1970 49hz360b2i923wg8dcccwlbqc8yv4yii-glibc-2.24-dev</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">dr-xr-xr-x</span> 1 root root      14 Jan  1  1970 iyvj5p6xq12f5b24cjiqi4pphsvna0cc-glibc-iconv-2.24</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">dr-xr-xr-x</span> 1 root root      14 Jan  1  1970 jkas4im9rr89n86h8p4sh3p6j3zdapcr-glibc-2.24-bin</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">dr-xr-xr-x</span> 1 root root      46 Jan  1  1970 kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="ex">dr-xr-xr-x</span> 1 root root      22 Jan  1  1970 w74ads27sakc524hfffi8iz4g8qdcill-firefox-unwrapped-50.1.0</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="ex">dr-xr-xr-x</span> 1 root root      44 Jan  1  1970 xsqz79bzclgrgnnlffp3qa0g4wnbcrp1-firefox-50.1.0</span></code></pre></div>
+<p>And then gets symlinked into user’s environment:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> nix-env <span class="at">-iA</span> nixpkgs.firefox</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">replacing</span> old ‘firefox-50.1.0’</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">installing</span> ‘firefox-50.1.0’</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">building</span> path<span class="er">(</span><span class="ex">s</span><span class="kw">)</span> <span class="ex">‘/nix/store/7ckh9ldic5fdlcqjjjpxadbya9lcj2gg-user-environment’</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="ex">created</span> 85 symlinks in user environment</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> type <span class="at">-P</span> firefox</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="ex">/home/testie/.nix-profile/bin/firefox</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ls <span class="at">-l</span> /home/testie/.nix-profile/bin/firefox</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="ex">lrwxrwxrwx</span> 1 root root 70 Jan  1  1970 /home/testie/.nix-profile/bin/firefox <span class="at">-</span><span class="op">&gt;</span> /nix/store/xsqz79bzclgrgnnlffp3qa0g4wnbcrp1-firefox-50.1.0/bin/firefox</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ldd /nix/store/w74ads27sakc524hfffi8iz4g8qdcill-firefox-unwrapped-50.1.0/lib/firefox-50.1.0/firefox</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="ex">linux-vdso.so.1</span> <span class="er">(</span><span class="ex">0x00007fffd9966000</span><span class="kw">)</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="ex">libpthread.so.0</span> =<span class="op">&gt;</span> /nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib/libpthread.so.0 <span class="er">(</span><span class="ex">0x00007f5a3f720000</span><span class="kw">)</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="ex">libdl.so.2</span> =<span class="op">&gt;</span> /nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib/libdl.so.2 <span class="er">(</span><span class="ex">0x00007f5a3f51c000</span><span class="kw">)</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="ex">libstdc++.so.6</span> =<span class="op">&gt;</span> /nix/store/jar52969wyf10sh2wj62ipfjiw7xaq2j-gcc-5.4.0-lib/lib/libstdc++.so.6 <span class="er">(</span><span class="ex">0x00007f5a3f1a4000</span><span class="kw">)</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="ex">libm.so.6</span> =<span class="op">&gt;</span> /nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib/libm.so.6 <span class="er">(</span><span class="ex">0x00007f5a3ee9f000</span><span class="kw">)</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="ex">libgcc_s.so.1</span> =<span class="op">&gt;</span> /nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib/libgcc_s.so.1 <span class="er">(</span><span class="ex">0x00007f5a3ec89000</span><span class="kw">)</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a><span class="ex">libc.so.6</span> =<span class="op">&gt;</span> /nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib/libc.so.6 <span class="er">(</span><span class="ex">0x00007f5a3e8eb000</span><span class="kw">)</span></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a><span class="ex">/nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib/ld-linux-x86-64.so.2</span> <span class="er">(</span><span class="ex">0x00007f5a3f93d000</span><span class="kw">)</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> LANG=C readelf <span class="at">-a</span> /nix/store/w74ads27sakc524hfffi8iz4g8qdcill-firefox-unwrapped-50.1.0/lib/firefox-50.1.0/firefox <span class="kw">|</span> <span class="fu">grep</span> RUNPATH</span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a><span class="ex">0x000000000000001d</span> <span class="er">(</span><span class="ex">RUNPATH</span><span class="kw">)</span>            <span class="ex">Library</span> runpath: [/nix/store/kk71vkqipf30qc165718jmp0s8cggn2y-glibc-2.24/lib:/nix/store/jar52969wyf10sh2wj62ipfjiw7xaq2j-gcc-5.4.0-lib/lib]</span></code></pre></div>
+<p>Unique interpreter and <strong>RUNPATH</strong> injection trick allows binaries just work without changes in environment.</p>
+<p>That allows having multiple firefox versions (potentially built agains different glibc versions)
+coexist at the same time and not interfere with others.</p>
+<p>From perspective of a gentoo user nix feels like a very fast binary distribution.
+Nix does not need to perform heavyweight file system operations when packages
+are installed or uninstalled. It’s just a matter of unpacking a couple of archives
+into new locations (or reusing existing prebuilt packages).</p>
+<p>As a gentoo dev I feel <strong>.nix</strong> files are almost like <strong>.ebuild</strong>s. But <strong>.nix</strong> files are
+quite unfriendly to a user who does not deeply understand <strong>Nix Expression Language</strong>.</p>
+<p>Overriding <strong>CFLAGS</strong> / <strong>LDFLAGS</strong> system-wide is a challenge. It’s not a
+fundamental problem of nix. Just a matter of exposing a few hooks to users
+(at a price of losing binary cache).</p>
+<h1 id="writing-new-packages">Writing new packages</h1>
+<p>There is quite a few packages still missing in nixpkgs repository. Let’s see how easy
+it is to add a new package locally. I’m used to <strong>lv</strong> tool (it’s a <strong>more</strong>, <strong>less</strong>
+and <strong>most</strong> sibling).</p>
+<p>To get it accessible I had to write the following files:</p>
+<pre class><code># cat ~/.nixpkgs/config.nix 
+{
+  packageOverrides = pkgs:
+    let
+      callPackage = pkgs.lib.callPackageWith (pkgs // self);
+      self = rec {
+        lv = callPackage ./lv/default.nix {};
+      };
+  in self;
+}</code></pre>
+<pre class><code># cat ~/.nixpkgs/lv/default.nix 
+{stdenv, fetchpatch, fetchurl, ncurses}:
+
+stdenv.mkDerivation {
+  name = &quot;lv-4.51&quot;;
+
+  src = fetchurl {
+    # used to be http://www.ff.iij4u.or.jp/~nrt/freeware/lv451.tar.gz
+    # Picking new mirror:
+    url = http://distfiles.gentoo.org/distfiles/lv451.tar.gz;
+    sha256 = &quot;1kwb2mqavhghmixjyp8zjjc2ivx6r2cklb2z8dnvrgcz20kjxkg1&quot;;
+  };
+
+  # fix empty /bin/ recreation
+  patches = [(fetchpatch {
+    name = &quot;lv-4.51-gentoo.patch&quot;;
+    url = &quot;https://gitweb.gentoo.org/repo/gentoo.git/plain/app-text/lv/files/lv-4.51-gentoo.patch&quot;;
+    sha256 = &quot;1s4d9gdmh2q8zr2bpi8ack648zpjz8i5wa0wf3bqd5lp90gaflx4&quot;;
+  })];
+
+  configureScript = &quot;src/configure&quot;;
+
+  buildInputs = [ ncurses ];
+
+  meta = {
+    description = &quot;Powerful Multilingual File Viewer&quot;;
+    homepage = http://www.ff.iij4u.or.jp/~nrt/lv/;
+    license = stdenv.lib.licenses.gpl2;
+    platforms = stdenv.lib.platforms.gnu; # random choice
+  };
+}</code></pre>
+<p>The <strong>lv/default.nix</strong> looks straightforward: it’s a “function” of one table-like argument
+with 4 key-value pairs with names <strong>stdenv</strong>, <strong>fetchpatch</strong>, <strong>fetchurl</strong>, <strong>ncurses</strong>.</p>
+<p>Local <strong>callPackage</strong> function picks fields with the same names from a table merged
+of <strong>pkgs</strong> and <strong>self</strong> tables and passes them to <strong>lv/default.nix</strong>. Here
+nixpkgs exploit lazy evaluation nature of <strong>Nix Expression Language</strong> to allow user to override,
+say, <strong>ncurses</strong> or any other “function” argument.</p>
+<h1 id="overriding-cflags">Overriding CFLAGS</h1>
+<p>How easy would it be to override <strong>CFLAGS</strong>? There is a hack to do it
+at least on per-package level.</p>
+<pre class><code># cat ~/.nixpkgs/config.nix 
+{
+  packageOverrides = pkgs:
+    let
+      callPackage = pkgs.lib.callPackageWith (pkgs // self);
+      self = rec {
+        lv = callPackage ./lv/default.nix {};
+
+        # CFLAGS tweak example:
+        sudo = pkgs.sudo.overrideDerivation (o: {CFLAGS = [&quot;-O0&quot;];});
+      };
+    in self;
+}</code></pre>
+<h1 id="links">Links</h1>
+<ul>
+<li>Nix tools and Nix Expression Language manual: <a href="https://nixos.org/releases/nix/latest/manual.pdf">https://nixos.org/releases/nix/latest/manual.pdf</a></li>
+<li>Nixpkgs manual: <a href="https://nixos.org/nixpkgs/manual/">https://nixos.org/nixpkgs/manual/</a></li>
+<li>NixOS manual: <a href="http://nixos.org/nixos/manual/">http://nixos.org/nixos/manual/</a></li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on January 19, 2017 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

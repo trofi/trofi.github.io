@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: gentoo prefix</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>gentoo prefix</h1>
+
+            <p>Once upon a time I’ve got a bunch of emails from gentoo’s bugzilla about
+haskell prefix support:</p>
+<ul>
+<li><a href="https://bugs.gentoo.org/show_bug.cgi?id=312595">haskell-cabal.eclass PoC changes</a></li>
+<li><a href="https://bugs.gentoo.org/show_bug.cgi?id=312597">ghc ebuild PoC changes</a></li>
+</ul>
+<p>The idea of prefix is quite fun. In one sentence it can be described as:</p>
+<p>run gentoo in your <strong>$HOME/gentoo/</strong> on any host operating system: <strong>MacOS</strong>, <strong>Linux</strong>, <strong>Solaris</strong>, etc.</p>
+<p>I tried to read <a href="http://www.gentoo.org/proj/en/gentoo-alt/prefix/techdocs.xml">the notes</a>
+about porting ebuilds to support it and was seriously confused by <strong>$D</strong>
+vs <strong>$ED</strong>, <strong>$ROOT</strong> vs <strong>$EROOT</strong> and <strong>$EPREFIX</strong> variable meanings.</p>
+<p>So I gave up on it for extended time and returned back to prefix this week.</p>
+<p>I’ve decided to solve my <strong>$ROOT</strong> vs. <strong>$EROOT</strong> confusion and to try to merge
+haskell related changes for prefix. They are very useful after all:
+you could hold various ghc versions without need to keep full-fledged chroot.
+Say, <strong>prefix-ghc612</strong> user could hold <strong>ghc-6.12.3</strong> in his <strong>$HOME/gentoo/</strong> and
+<strong>prefix-ghc700</strong> user could hold currently unstable <strong>ghc-7.0.1</strong>.
+so you just issue:</p>
+<pre><code>sudo su - prefix-ghc612 # or prefix-ghc700</code></pre>
+<p>and get needed ghc and it’s environment.</p>
+<p>So far I’ve decided to actually install prefix. It was quite simple.
+With great help of grobian and <a href="http://www.gentoo.org/proj/en/gentoo-alt/prefix/bootstrap-solaris.xml">solaris HOWTO</a>
+I’ve bootstrapper prefix. There were some deviations from the guide:
+I had to install <strong>coreutils6</strong> instead of coreutils and <strong>tar22</strong> instead of tar.
+The rest of stuff was smooth.</p>
+<p>Then I once again started to look the “porting to prefix” so called <a href="http://www.gentoo.org/proj/en/gentoo-alt/prefix/techdocs.xml">techdoc</a>.
+The thing, which annoyed me is a lost meaning of commonly used <strong>$ROOT</strong> and
+<strong>$D</strong> variables in ebuilds. Prefix team seds them out to <strong>$EROOT</strong> and to <strong>$ED</strong> almost
+in every place of every ebuild! (exceptional cases are to be described below)</p>
+<p>So, what are those E* variables? Basically the sole difference from
+usual gentoo installation is slightly changed absolute path for all the packages.
+The prefixed gentoo root has <strong>EPREFIX</strong> variable name.</p>
+<p>An example:</p>
+<p>Having <strong>EPREFIX=$HOME/gentoo/</strong> you will have (say) gcc installed in
+<strong>$EPREFIX/usr/bin/gcc</strong> (aka <strong>$HOME/gentoo/usr/bin/gcc</strong>).</p>
+<p>In order to achieve it portage should call not <code>./configure --prefix=/usr</code>
+but <code>./configure --prefix=$EPREFIX/usr</code>.
+And that’s all!</p>
+<p>Except you need to adjust all the ebuilds, which use absolute paths to use <strong>$EPREFIX</strong>.
+An example:</p>
+<pre><code># somewhere in pkg_setup() on gentoo-x86 tree
+[[ -e /usr/bin/python2 ]] &amp;&amp; einfo &quot;Whoa, you have python&quot;
+
+# on prefix tree should be changed to
+[[ -e $EPREFIX/usr/bin/python2 ]] &amp;&amp; einfo &quot;Whoa, you have python&quot;</code></pre>
+<p>Everything else should use relative path and do not suffer from change at all!</p>
+<p>But! there is one serious culprit. Under prefix <strong>$ROOT</strong> is meaningless variable!
+There is <strong>EROOT=$ROOT/$EPREFIX</strong> to mean gentoo root.</p>
+<p>Let’s see at the following merge session:</p>
+<pre><code>&gt;&gt;&gt; Completed installing less-440 into /home/prefix/gentoo/var/tmp/portage/sys-apps/less-440/image/home/prefix/gentoo/
+
+strip: i686-pc-linux-gnu-strip --strip-unneeded -R .comment
+   usr/bin/lessecho
+   usr/bin/lesskey
+   usr/bin/less</code></pre>
+<p>The <strong>$D</strong> variable is <strong>/home/prefix/gentoo/var/tmp/portage/sys-apps/less-440/image/</strong>,
+and if you plan to use any modifications in the image you should use <strong>${D}{$EPREFIX}</strong>
+as an absolute path.
+Like the following:</p>
+<pre><code>make DESTDIR=&quot;${D}&quot; install
+strip ${D}${EPRFIX}/usr/bin/less</code></pre>
+<p>For simplicity there is <strong>$ED</strong> variable <strong>ED=${D}${EPREFIX}</strong> (I would call it <strong>$DE</strong>,
+which would have shortening of: <strong>D</strong> + <strong>E</strong>(prefix)). So you can use the following to
+access to the staging area:</p>
+<pre><code>make DESTDIR=&quot;${D}&quot; install
+strip ${ED}/usr/bin/less</code></pre>
+<p>Ok, once again: <strong>$D</strong> points to the sandbox root for a staging install (as it always was).
+My apologies to darkside and grobian for not getting right it from the very start.</p>
+<p>And <strong>$EROOT</strong> is for prefixed root to access things like:</p>
+<ul>
+<li>preserve_old_libs</li>
+<li>/var/db/pkg</li>
+<li>update fonts caches</li>
+<li>configure vim plugins</li>
+<li>root for /usr/src/linux source and modules installation path</li>
+<li>gnome schemas (no idea what is it, but sounds host OS unrelated)</li>
+<li>logs path offset</li>
+<li>mysql bases offset</li>
+<li>/etc/</li>
+</ul>
+<p>What about the <strong>$ROOT</strong> then? And here we have a problem. Under prefix <strong>$ROOT</strong> is not our
+prefixed gentoo’s root, but host’s root (aka “/”)! Gah! Why would we need to know about it at all?
+And there is rare cases when we need it:</p>
+<ul>
+<li>very rarely you have to rely on host’s environment:
+<ul>
+<li>critical things used by prefixed gentoo (host’s devices directory for example)</li>
+<li>host’s libraries (<a href="http://sources.gentoo.org/cgi-bin/viewvc.cgi/gentoo-x86/x11-libs/libSM/libSM-1.2.0.ebuild?view=markup">like libSM ebuild</a>)
+which prefix _<a href>has</a> to use: authentication is one of examples</li>
+</ul></li>
+<li>think about poor user running something like <code>ROOT=/foo emerge bar</code>.
+He should get <strong>/foo/$EPREFIX/usr/bin/less</strong> in the end and nothing else.</li>
+</ul>
+<p>The short guideline for prefix porter:</p>
+<ul>
+<li>always change <strong>$ROOT</strong> to <strong>$EROOT</strong> if the package is not tangled to host</li>
+<li>make sure you understand where <strong>$D</strong> (sandbox root) and <strong>$ED</strong> (gentoo root in sandbox)
+point to and use them wisely</li>
+<li>don’t forget to add <strong>$EPREFIX</strong> when absolute names are used</li>
+</ul>
+
+<div class="info">
+    Posted on February  5, 2011 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

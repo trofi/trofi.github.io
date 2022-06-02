@@ -1,0 +1,787 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: Debugging wine</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>Debugging wine</h1>
+
+            <p>Sometimes I test gcc toolchains against less popular targets
+like <strong>i686-w64-mingw32</strong> (32-bit windows). As a cheap run time
+test I use <a href="https://www.winehq.org/">Wine</a>. Today I tried to
+run a simple executable:</p>
+<pre class><code>$ echo 'int main() {}' | i686-w64-mingw32-gcc -x c - -o a.exe -ggdb3 &amp;&amp; wine a.exe
+Segmentation fault</code></pre>
+<p>It crashed! I attempted to run standard <strong>wine</strong> programs.
+That also did not work:</p>
+<pre class><code>$ winecfg
+Segmentation fault</code></pre>
+<p>Maybe <strong>wine</strong> itself is broken? (and not just runtime
+linked into my <strong>a.exe</strong>).</p>
+<p>The new quest has started \o/.</p>
+<h1 id="what-is-wine">What is Wine?</h1>
+<p><strong>wine</strong> is a rare sort of software: it executes
+windows binaries on native system directly as much as reasonably
+possible. No instruction level emulation is involved.</p>
+<p><strong>wine</strong> loads
+<a href="https://en.wikipedia.org/wiki/Portable_Executable">PE/COFF</a>
+(windows native) executable file formats on systems that don’t
+support it (Linux native format is
+<a href="https://en.wikipedia.org/wiki/Executable_and_Linkable_Format">ELF</a>
+for example).</p>
+<p>Simpler windows-specific library calls are re-implemented in terms
+of linux library calls. More complicated calls are implemented
+by communicating with <strong>wineserver</strong> standalone daemon.</p>
+<h1 id="debugging">Debugging</h1>
+<p>I never investigated program crashes under wine before. Internetz say
+<strong>wine</strong> comes with
+<a href="https://wiki.winehq.org/Wine_Developer%27s_Guide/Debugging_Wine">winedbg</a>
+tool that might help with that. I tried it:</p>
+<pre class><code>$ winedbg a.exe
+Segmentation fault
+$ winedbg
+Segmentation fault</code></pre>
+<p>No luck. Why did <strong>winedbg</strong> fail? I tried to find something
+I could attach <strong>gdb</strong> to:</p>
+<pre class><code>$ file $(which winedbg)
+/usr/bin/winedbg: symbolic link to /usr/bin/winedbg-vanilla-5.22
+$ file $(which /usr/bin/winedbg-vanilla-5.22)
+/usr/bin/winedbg-vanilla-5.22: POSIX shell script, ASCII text executable
+$ file $(which winedbg)
+/usr/bin/winedbg: symbolic link to /usr/bin/winedbg-vanilla-5.22
+$ bash -x /usr/bin/winedbg-vanilla-5.22
++ exec /usr/lib/wine-vanilla-5.22/bin/winedbg
+Segmentation fault
+$ file /usr/lib/wine-vanilla-5.22/bin/winedbg
+/usr/lib/wine-vanilla-5.22/bin/winedbg: POSIX shell script, ASCII text executable
+$ bash -x /usr/lib/wine-vanilla-5.22/bin/winedbg
+...
++ exec /usr/lib/wine-vanilla-5.22/bin/wine winedbg.exe
+Segmentation fault
+
+$ file /usr/lib/wine-vanilla-5.22/wine/fakedlls/winedbg.exe
+/usr/lib/wine-vanilla-5.22/wine/fakedlls/winedbg.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
+<p>The above says <strong>/usr/bin/winedbg</strong> is a shell wrapper around
+<strong>winedbg.exe</strong> <strong>PE/COFF</strong> executable (ran through <strong>wine</strong>).
+It makes <strong>windbg</strong> even more complex program than <strong>a.exe</strong>.</p>
+<p>This is yet another hint at problems in <strong>wine</strong> itself. I settled
+on debugging simpler <strong>a.exe</strong> program.</p>
+<h1 id="getting-clues">Getting clues</h1>
+<p>To get some idea what binary actually crashes I used <strong>strace</strong>:</p>
+<pre class><code>$ strace -s 10000 -f -etrace=execve wine a.exe
+execve(&quot;/usr/bin/wine&quot;, [&quot;wine&quot;, &quot;a.exe&quot;], 0x7ffd82e380d8 /* 83 vars */) = 0
+execve(&quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, [&quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, &quot;a.exe&quot;], 0x55a3215c07c0 /* 81 vars */) = 0
+[ Process PID=2324610 runs in 32 bit mode. ]
+execve(&quot;/usr/lib/wine-vanilla-5.22/bin/wine-preloader&quot;, [&quot;/usr/lib/wine-vanilla-5.22/bin/wine-preloader&quot;, &quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, &quot;a.exe&quot;], 0x7e99a2a0 /* 82 vars */) = 0
+strace: Process 2324611 attached
+strace: Process 2324612 attached
+[pid 2324611] +++ exited with 0 +++
+[pid 2324610] --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=2324611, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---
+[pid 2324612] execve(&quot;/usr/lib/wine-vanilla-5.22/bin/wine64-preloader&quot;, [&quot;/usr/lib/wine-vanilla-5.22/bin/wine64-preloader&quot;, &quot;/usr/lib/wine-vanilla-5.22/bin/wine64&quot;, &quot;C:\\windows\\system32\\conhost.exe&quot;, &quot;--unix&quot;, &quot;--width&quot;, &quot;192&quot;, &quot;--height&quot;, &quot;55&quot;, &quot;--server&quot;, &quot;0x10&quot;], 0x7e890b10 /* 84 vars */) = 0
+[pid 2324612] [ Process PID=2324612 runs in 64 bit mode. ]
+[pid 2324610] --- SIGSEGV {si_signo=SIGSEGV, si_code=SEGV_MAPERR, si_addr=0xfffffffc} ---
+[pid 2324610] --- SIGSEGV {si_signo=SIGSEGV, si_code=SEGV_MAPERR, si_addr=0xfffffe28} ---
+[pid 2324610] +++ killed by SIGSEGV +++
++++ exited with 0 +++
+Segmentation fault
+
+$ file /usr/lib/wine-vanilla-5.22/bin/wine-preloader
+/usr/lib/wine-vanilla-5.22/bin/wine-preloader: ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV), statically linked, stripped
+$ file /usr/lib/wine-vanilla-5.22/bin/wine64-preloader
+/usr/lib/wine-vanilla-5.22/bin/wine64-preloader: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, stripped
+$ file /usr/lib64/wine-vanilla-5.22/wine/fakedlls/conhost.exe
+/usr/lib64/wine-vanilla-5.22/wine/fakedlls/conhost.exe: PE32+ executable (GUI) x86-64, for MS Windows</code></pre>
+<p>Here we see a few interesting bits:</p>
+<ul>
+<li><p>before catching <strong>SIGSEGV</strong> our program <strong>execve()</strong>s twice:</p>
+<ul>
+<li><strong>wine</strong> shell script execs <strong>wine</strong> binary</li>
+<li><strong>wine</strong> binary execs <strong>wine-preloader</strong> binary</li>
+</ul></li>
+<li><p>it also <strong>fork()</strong>s and execs <strong>wine64-preloader</strong> to run <strong>conhost.exe</strong></p>
+<pre class><code>- wine a.exe -&gt; exec &quot;wine-preloader wine a.exe&quot;
+  ` -&gt; fork -&gt; exec &quot;wine64-preloader conhost.exe&quot;</code></pre></li>
+<li><p><strong>wine-preloader</strong> is a 32-bit static <strong>ELF</strong> executable. It’s address space
+will host our future <strong>a.exe</strong>.</p></li>
+<li><p><strong>wine64-preloader</strong> is a 64-bit static <strong>ELF</strong> executable. It’s address space
+will host some 64-bit <strong>conhost.exe</strong> process. <strong>conhost.exe</strong> seems to be an
+equivalent of virtual terminal for windows.</p></li>
+</ul>
+<p>We see a <strong>SIGSEGV</strong> only for 32-bit <strong>wine-preloader</strong>. 64-bit
+processes seem to work fine.</p>
+<p>I rebuilt <strong>wine</strong> with <strong>CFLAGS+=-ggdb3</strong> to get plenty of
+debugging symbols and ran <strong>wine</strong> under <strong>gdb</strong>:</p>
+<pre class><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
+Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
+
+(gdb) run
+Starting program: /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library &quot;/lib64/libthread_db.so.1&quot;.
+process 2326226 is executing new program: /usr/lib/wine-vanilla-5.22/bin/wine-preloader
+[Detaching after fork from child process 2326230]
+
+
+(gdb) info proc
+process 2326226
+cmdline = 'a.exe                                                                                  '
+cwd = '/'
+exe = '/usr/lib/wine-vanilla-5.22/bin/wine-preloader'
+
+Program received signal SIGSEGV, Segmentation fault.
+0x7bc714dd in ?? ()
+(gdb) bt
+#0  0x7bc714dd in ?? ()
+#1  0x7b03c0de in ?? ()
+#2  0x7edde0ab in ?? ()
+#3  0x7edff106 in ?? ()
+#4  0x7bc52d86 in ?? ()
+#5  0x7bc55c2f in ?? ()
+#6  0x7bc55f7c in ?? ()
+#7  0x7bc58e38 in ?? ()
+#8  0x00000000 in ?? ()</code></pre>
+<p>That is not a very useful backtrace. Why none of the addresses are
+resolved?</p>
+<p>Looks like <strong>gdb</strong> does not know anything about dynamically loaded
+modules (handled by <strong>wine-preloader</strong> ?). As a workaround we can
+manually add them.</p>
+<p>The <strong>2325141</strong> debugged process is not yet finished and we can poke at
+it’s address map:</p>
+<pre class><code>$ cat /proc/2325141/maps
+00010000-00110000 rw-p 00000000 00:00 0
+00110000-00120000 rwxp 00000000 00:00 0
+...
+00400000-00401000 r-xp 00000000 08:03 53849265                           /home/slyfox/.wine/drive_c/a.exe
+00401000-00403000 r-xp 00000000 00:00 0
+...
+0040a000-0040c000 r-xp 00003000 08:03 53849265                           /home/slyfox/.wine/drive_c/a.exe
+...
+7b000000-7b016000 r--p 00000000 08:03 86205568                           /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so
+...
+7bc00000-7bc19000 r--p 00000000 08:03 86206617                           /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so
+...
+7d000000-7d001000 r--p 00000000 08:03 86270026                           /usr/lib/wine-vanilla-5.22/bin/wine
+...
+7d001000-7d002000 r-xp 00001000 08:03 86270026                           /usr/lib/wine-vanilla-5.22/bin/wine
+...
+7d3ff000-7d400000 r--p 00000000 08:03 86270404                           /usr/lib/wine-vanilla-5.22/bin/wine-preloader
+...
+7d405000-7d427000 rw-p 00000000 00:00 0                                  [heap]
+...
+7ed8c000-7ed8e000 r--p 00000000 08:03 86205774                           /usr/lib/wine-vanilla-5.22/wine/msvcrt.so
+...
+7ee78000-7ee7d000 r--p 00000000 08:03 85966906                           /usr/lib/wine-vanilla-5.22/libwine.so.1.0
+...
+f7c12000-f7c1c000 r--p 00000000 08:03 85213329                           /lib/libm-2.32.so
+...
+f7cdf000-f7cf3000 r--p 00000000 08:03 86206591                           /usr/lib/wine-vanilla-5.22/wine/ntdll.so
+...
+f7d81000-f7d9a000 r--p 00000000 08:03 85213351                           /lib/libc-2.32.so
+...
+f7d9a000-f7eee000 r-xp 00019000 08:03 85213351                           /lib/libc-2.32.so
+...
+f7fcc000-f7fcd000 r--p 00000000 08:03 85213350                           /lib/ld-2.32.so
+...
+f7ff8000-f7ffc000 r--p 00000000 00:00 0                                  [vvar]
+f7ffc000-f7ffe000 r-xp 00000000 00:00 0                                  [vdso]
+f8000000-ffcd0000 ---p 00000000 00:00 0
+ffcd0000-fffd0000 rw-p 00000000 00:00 0
+fffdc000-ffffe000 rw-p 00000000 00:00 0                                  [stack]</code></pre>
+<p>This is a huge list of objects present in our address space.</p>
+<p>Now looking at <strong>gdb</strong>’s view:</p>
+<pre class><code>(gdb) info files
+Symbols from &quot;/usr/lib/wine-vanilla-5.22/bin/wine-preloader&quot;.
+Native process:
+        Using the running image of child process 2326226.
+        While running this, GDB does not access memory from...
+Local exec file:
+        `/usr/lib/wine-vanilla-5.22/bin/wine-preloader', file type elf32-i386.
+        Entry point: 0x7d400000
+        0x7d400000 - 0x7d401880 is .text
+        0x7d402000 - 0x7d4022e0 is .rodata
+        0x7d4022e0 - 0x7d4024a4 is .eh_frame
+        0x7d404000 - 0x7d40400c is .got.plt
+        0x7d404020 - 0x7d404060 is .data
+        0x7d404060 - 0x7d404490 is .bss</code></pre>
+<p><strong>gdb</strong> onlysees <strong>wine-preloader</strong> binary,
+but our backtrace contains addresses like <strong>0x7bc714dd</strong> which looks
+suspiciously close to <strong>ntdll.dll.so</strong> range from <strong>/proc/$pid/maps</strong>.</p>
+<p>Let’s add <strong>ntdll.dll.so</strong> symbols into our session:</p>
+<pre class><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so
+add symbol table from file &quot;/usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so&quot;
+(y or n) y
+
+Reading symbols from /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so...
+Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so.debug...
+
+(gdb) info registers
+eax            0x0                 0
+ecx            0x0                 0
+edx            0x7ffc2c00          2147232768
+ebx            0x0                 0
+esp            0xfffffffc          0xfffffffc
+ebp            0x61ed88            0x61ed88
+esi            0x7ffc2bf8          2147232760
+edi            0x61ed60            6417760
+eip            0x7bc714dd          0x7bc714dd &lt;RtlAnsiStringToUnicodeString+141&gt;
+eflags         0x10246             [ PF ZF IF RF ]
+cs             0x23                35
+ss             0x2b                43
+ds             0x2b                43
+es             0x2b                43
+fs             0x63                99
+gs             0x6b                107
+
+(gdb) bt
+#0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
+    doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
+Backtrace stopped: Cannot access memory at address 0xfffffffc</code></pre>
+<p>We got a function name! But our backtrace became even worse:
+only one frame is visible instead of 8 frames before. What is wrong?</p>
+<p>The stack pointer (<strong>esp 0xfffffffc</strong>) is incorrect and looks more like
+a <strong>NULL</strong> pointer dereference with small negative offset than a real
+stack pointer. No chance to get 8 frames here.</p>
+<p>Perhaps <strong>gdb</strong> used frame pointer (<strong>ebp 0x61ed88</strong>) before we loaded symbols?</p>
+<p>Let’s try to fake stack pointer to be closer to frame pointer with a hack:</p>
+<pre class><code>(gdb) set $esp=$ebp
+
+(gdb) bt
+#0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=0x7b03c0de, ansi=0x7ee405be, doalloc=0 '\000') at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
+#1  0x0061edc8 in ?? ()
+#2  0x7b03c0de in ?? ()
+#3  0x7edde0ab in ?? ()
+#4  0x7edff106 in ?? ()
+#5  0x7bc52d86 in call_dll_entry_point ()
+#6  0x7ffc2c00 in ?? ()
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
+<p>This looks more plausible. It’s still probably wrong as stack pointer within function
+is likely off by a few values. But it’s better that nothing.</p>
+<p>Let’s add symbols for address <strong>0x7b03c0de</strong> from <strong>/proc/2325141/maps</strong>.
+<strong>kernelbase.dll.so</strong> looks closest.</p>
+<pre class><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so
+add symbol table from file &quot;/usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so&quot;
+(y or n) y
+Reading symbols from /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so...
+Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so.debug...
+
+(gdb) bt
+#0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=0x7b03c0de &lt;CreateFileA+73&gt;, ansi=0x7ee405be, doalloc=0 '\000')
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
+#1  0x0061edc8 in ?? ()
+#2  0x7b03c0de in CreateFileA (name=0x7ee405be &quot;CONIN$&quot;, access=3221225472, sharing=3, sa=0x0, creation=3, attributes=0, template=0x0)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/kernelbase/file.c:704
+#3  0x7edde0ab in ?? ()
+#4  0x7edff106 in ?? ()
+#5  0x7bc52d86 in call_dll_entry_point ()
+#6  0x00000003 in ?? ()
+#7  0x00000004 in ?? ()
+#8  0x0000ffff in ?? ()
+#9  0x000000b8 in ?? ()
+#10 0x00000000 in ?? ()</code></pre>
+<p>Presence of <strong>CreateFileA(“CONIN$”) / RtlAnsiStringToUnicodeString()</strong>
+looks very close!</p>
+<p>But parameters to <strong>RtlAnsiStringToUnicodeString()</strong> seem incorrect:
+<strong>uni=0x7b03c0de &lt;CreateFileA+73&gt;</strong> is a code address (should be some
+writable address). It’s probably a stack corruption and our stack
+pointer is wrong.</p>
+<p>Ideally I would like to get to the point where corruption happens.</p>
+<p>The definition of <strong>RtlAnsiStringToUnicodeString()</strong> has nothing unusual or suspicious:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">//(gdb) list RtlAnsiStringToUnicodeString</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>     NTSTATUS WINAPI RtlAnsiStringToUnicodeString<span class="op">(</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>         PUNICODE_STRING uni<span class="op">,</span> <span class="co">/* [I/O] Destination for the unicode string */</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>         PCANSI_STRING ansi<span class="op">,</span>  <span class="co">/* [I]   Ansi string to be converted */</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>         BOOLEAN doalloc<span class="op">)</span>     <span class="co">/* [I]   TRUE=Allocate new buffer for uni, FALSE=Use existing buffer */</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>     <span class="op">{</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>         DWORD total <span class="op">=</span> RtlAnsiStringToUnicodeSize<span class="op">(</span> ansi <span class="op">);</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>         <span class="cf">if</span> <span class="op">(</span>total <span class="op">&gt;</span> <span class="bn">0xffff</span><span class="op">)</span> <span class="cf">return</span> STATUS_INVALID_PARAMETER_2<span class="op">;</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>         uni<span class="op">-&gt;</span>Length <span class="op">=</span> total <span class="op">-</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">);</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>         <span class="cf">if</span> <span class="op">(</span>doalloc<span class="op">)</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>         <span class="op">{</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>             uni<span class="op">-&gt;</span>MaximumLength <span class="op">=</span> total<span class="op">;</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>             <span class="cf">if</span> <span class="op">(!(</span>uni<span class="op">-&gt;</span>Buffer <span class="op">=</span> RtlAllocateHeap<span class="op">(</span> GetProcessHeap<span class="op">(),</span> <span class="dv">0</span><span class="op">,</span> total <span class="op">)))</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>                 <span class="cf">return</span> STATUS_NO_MEMORY<span class="op">;</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>         <span class="op">}</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>         <span class="cf">else</span> <span class="cf">if</span> <span class="op">(</span>total <span class="op">&gt;</span> uni<span class="op">-&gt;</span>MaximumLength<span class="op">)</span> <span class="cf">return</span> STATUS_BUFFER_OVERFLOW<span class="op">;</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>         RtlMultiByteToUnicodeN<span class="op">(</span> uni<span class="op">-&gt;</span>Buffer<span class="op">,</span> uni<span class="op">-&gt;</span>Length<span class="op">,</span> NULL<span class="op">,</span> ansi<span class="op">-&gt;</span>Buffer<span class="op">,</span> ansi<span class="op">-&gt;</span>Length <span class="op">);</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>         uni<span class="op">-&gt;</span>Buffer<span class="op">[</span>uni<span class="op">-&gt;</span>Length <span class="op">/</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">)]</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>         <span class="cf">return</span> STATUS_SUCCESS<span class="op">;</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span></code></pre></div>
+<p>Let’s see if we can find out something else about the way our program crashes
+by looking at exact instructions and register values around:</p>
+<pre class><code>(gdb) disassemble RtlAnsiStringToUnicodeString
+Dump of assembler code for function RtlAnsiStringToUnicodeString:
+   0x7bc71450 &lt;+0&gt;:     lea    0x4(%esp),%ecx
+   0x7bc71454 &lt;+4&gt;:     and    $0xfffffff0,%esp
+   0x7bc71457 &lt;+7&gt;:     push   -0x4(%ecx)
+   0x7bc7145a &lt;+10&gt;:    push   %ebp
+   0x7bc7145b &lt;+11&gt;:    mov    %esp,%ebp
+   0x7bc7145d &lt;+13&gt;:    push   %edi
+   0x7bc7145e &lt;+14&gt;:    push   %esi
+   0x7bc7145f &lt;+15&gt;:    push   %ebx
+   0x7bc71460 &lt;+16&gt;:    push   %ecx
+   0x7bc71461 &lt;+17&gt;:    sub    $0x1c,%esp
+   0x7bc71464 &lt;+20&gt;:    mov    0x4(%ecx),%esi
+   0x7bc71467 &lt;+23&gt;:    mov    (%ecx),%ebx
+   0x7bc71469 &lt;+25&gt;:    mov    0x8(%ecx),%edi
+   0x7bc7146c &lt;+28&gt;:    movzwl (%esi),%eax
+   0x7bc7146f &lt;+31&gt;:    push   %eax
+   0x7bc71470 &lt;+32&gt;:    lea    -0x1c(%ebp),%eax
+   0x7bc71473 &lt;+35&gt;:    push   0x4(%esi)
+   0x7bc71476 &lt;+38&gt;:    push   %eax
+   0x7bc71477 &lt;+39&gt;:    call   0x7bc5d3e0 &lt;RtlMultiByteToUnicodeSize&gt;
+   ....
+   0x7bc714d5 &lt;+133&gt;:   pop    %ecx
+   0x7bc714d6 &lt;+134&gt;:   pop    %ebx
+   0x7bc714d7 &lt;+135&gt;:   pop    %esi
+   0x7bc714d8 &lt;+136&gt;:   pop    %edi
+   0x7bc714d9 &lt;+137&gt;:   pop    %ebp
+   0x7bc714da &lt;+138&gt;:   lea    -0x4(%ecx),%esp
+=&gt; 0x7bc714dd &lt;+141&gt;:   ret    $0xc
+
+(gdb) print (void*)$ecx
+$3 = (void *) 0x0
+(gdb) print (void*)$ecx-4
+$4 = (void *) 0xfffffffc</code></pre>
+<p>Hah, it’s completely obvious! You can see the bug, right?
+No, it’s not obvious at all. I’m just kidding.</p>
+<p>In the dump above I saw nothing that would stands.</p>
+<p>But somehow <strong>ecx</strong> value on stack was overwritten by <strong>0x0</strong>
+value and we were not able to return back from the function
+with <strong>ret $0xc</strong>. That is an explicit sign of stack corruption.</p>
+<p>Let’s find out what overwrites <strong>ecx</strong> on stack
+while <strong>RtlAnsiStringToUnicodeString()</strong> is executing.</p>
+<p>I tried a naive attempt by running <strong>wine</strong> under <strong>gdb</strong> as is:</p>
+<pre class><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
+Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
+
+(gdb) break RtlAnsiStringToUnicodeString
+Function &quot;RtlAnsiStringToUnicodeString&quot; not defined.
+Make breakpoint pending on future shared library load? (y or [n]) y
+Breakpoint 1 (RtlAnsiStringToUnicodeString) pending.
+(gdb) run
+
+Starting program: /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library &quot;/lib64/libthread_db.so.1&quot;.
+process 2326439 is executing new program: /usr/lib/wine-vanilla-5.22/bin/wine-preloader
+[Detaching after fork from child process 2326443]
+
+Program received signal SIGSEGV, Segmentation fault.
+0x7bc714dd in ?? ()</code></pre>
+<p>Execution did not stop at <strong>RtlAnsiStringToUnicodeString()</strong>. My understanding on why
+it happened is because <strong>ntdll.dll.so</strong> gets loaded to address space in a way not
+visible to <strong>gdb</strong>. It has something to do with re-execution of <strong>wine-preloader</strong>
+binary in place of <strong>wine</strong>.</p>
+<p>I happened to notice that the way re-execution happens
+is by checking <a href="https://source.winehq.org/git/wine.git/blob/HEAD:/dlls/ntdll/unix/loader.c#l1758">WINELOADERNOEXEC=1</a>.</p>
+<p>My understanding of re-execution is to adjust <strong>PATH</strong>, <strong>WINEPREFIX</strong>
+and similar variables (and switch 32/64-bit address space if needed)</p>
+<p>We should be able to set environment up as needed without the need for re-execution.</p>
+<p>I tried the simple way:</p>
+<pre class><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
+Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
+
+(gdb) run
+Starting program: /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library &quot;/lib64/libthread_db.so.1&quot;.
+[Detaching after fork from child process 2326739]
+
+Program received signal SIGSEGV, Segmentation fault.
+0x7bc714dd in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
+    doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
+581     }
+
+(gdb) bt
+#0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
+    doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
+Backtrace stopped: Cannot access memory at address 0xfffffffc
+(gdb) set $esp=$ebp
+(gdb) bt
+#0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=0x7b03c0de &lt;CreateFileA+73&gt;, ansi=0x7fe205be, doalloc=0 '\000')
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
+#1  0x0061edc8 in ?? ()
+#2  0x7b03c0de in CreateFileA (name=0x7fe205be &quot;CONIN$&quot;, access=3221225472, sharing=3, sa=0x0, creation=3, attributes=0, template=0x0)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/kernelbase/file.c:704
+#3  0x7fdbe0ab in msvcrt_init_console () at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/msvcrt/console.c:48
+#4  0x7fddf106 in DllMain (hinstDLL=0x7fdb0000 &lt;__wine_spec_pe_header+49120&gt;, fdwReason=1, lpvReserved=0x61fd24)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/msvcrt/main.c:115
+#5  0x7bc52d86 in call_dll_entry_point () from /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so
+#6  0x7bc55c2f in MODULE_InitDLL (wm=wm@entry=0x1110d8, reason=reason@entry=1, lpReserved=lpReserved@entry=0x61fd24)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/loader.c:1329
+#7  0x7bc55f7c in process_attach (wm=0x1110d8, lpReserved=lpReserved@entry=0x61fd24) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/loader.c:1423
+#8  0x7bc58e38 in process_attach (lpReserved=0x61fd24, wm=&lt;optimized out&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/loader.c:1394
+#9  LdrInitializeThunk (context=0x61fd24, unknown2=1073733632, unknown3=0, unknown4=0) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/loader.c:3539
+#10 0x00000000 in ?? ()</code></pre>
+<p>It worked as is! We get a nice backtrace and we can even set lazy breakpoints.</p>
+<p>Let’s track down the exact place where stack corruption happens. The plan is simple:</p>
+<ol type="1">
+<li>Stop at the call of <strong>RtlAnsiStringToUnicodeString()</strong></li>
+<li>Check where <strong>ecx</strong> is saved on stack there</li>
+<li>Set a watchpoint on memory location in saved stack space</li>
+<li>Observe where change happens.</li>
+</ol>
+<p>Full session that executes it:</p>
+<pre class><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
+Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
+
+(gdb) break RtlAnsiStringToUnicodeString
+Function &quot;RtlAnsiStringToUnicodeString&quot; not defined.
+Make breakpoint pending on future shared library load? (y or [n]) y
+Breakpoint 1 (RtlAnsiStringToUnicodeString) pending.
+
+(gdb) run
+Starting program: /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library &quot;/lib64/libthread_db.so.1&quot;.
+[Detaching after fork from child process 2326777]
+
+Breakpoint 1, RtlAnsiStringToUnicodeString (uni=0x3ffe2bf8, ansi=0x61ed60, doalloc=0 '\000') at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:566
+566         DWORD total = RtlAnsiStringToUnicodeSize( ansi );
+(gdb) disassemble
+Dump of assembler code for function RtlAnsiStringToUnicodeString:
+=&gt; 0x7bc71450 &lt;+0&gt;:     lea    0x4(%esp),%ecx
+   0x7bc71454 &lt;+4&gt;:     and    $0xfffffff0,%esp
+   0x7bc71457 &lt;+7&gt;:     push   -0x4(%ecx)
+   0x7bc7145a &lt;+10&gt;:    push   %ebp
+   0x7bc7145b &lt;+11&gt;:    mov    %esp,%ebp
+   0x7bc7145d &lt;+13&gt;:    push   %edi
+   0x7bc7145e &lt;+14&gt;:    push   %esi
+   0x7bc7145f &lt;+15&gt;:    push   %ebx
+   0x7bc71460 &lt;+16&gt;:    push   %ecx
+   0x7bc71461 &lt;+17&gt;:    sub    $0x1c,%esp
+...
+
+(gdb) break *0x7bc71461
+Breakpoint 2 at 0x7bc71461: file /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c, line 565.
+
+(gdb) continue
+Continuing.
+
+Breakpoint 2, 0x7bc71461 in RtlAnsiStringToUnicodeString (uni=0x3ffe2bf8, ansi=0x61ed60, doalloc=0 '\000')
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:565
+565     {
+
+(gdb) disassemble
+Dump of assembler code for function RtlAnsiStringToUnicodeString:
+   0x7bc71450 &lt;+0&gt;:     lea    0x4(%esp),%ecx
+   0x7bc71454 &lt;+4&gt;:     and    $0xfffffff0,%esp
+   0x7bc71457 &lt;+7&gt;:     push   -0x4(%ecx)
+   0x7bc7145a &lt;+10&gt;:    push   %ebp
+   0x7bc7145b &lt;+11&gt;:    mov    %esp,%ebp
+   0x7bc7145d &lt;+13&gt;:    push   %edi
+   0x7bc7145e &lt;+14&gt;:    push   %esi
+   0x7bc7145f &lt;+15&gt;:    push   %ebx
+   0x7bc71460 &lt;+16&gt;:    push   %ecx
+=&gt; 0x7bc71461 &lt;+17&gt;:    sub    $0x1c,%esp
+
+(gdb) print (void*)$ecx
+$2 = (void *) 0x61ed50
+(gdb) print *(void**)$esp
+$3 = (void *) 0x61ed50
+(gdb) print (void*)$esp
+$4 = (void *) 0x61ed28
+
+(gdb) watch -l *0x61ed28
+Hardware watchpoint 3: -location *0x61ed28
+(gdb) continue
+Continuing.
+
+Hardware watchpoint 3: -location *0x61ed28
+
+Old value = 6417744
+New value = 0
+RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, reslen=0x61ed28, src=&lt;optimized out&gt;, srclen=&lt;optimized out&gt;)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:972
+972         return STATUS_SUCCESS
+
+(gdb) bt
+#0  RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, reslen=0x61ed28, src=&lt;optimized out&gt;, srclen=&lt;optimized out&gt;)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:972
+#1  0x7bc5d3c5 in RtlMultiByteToUnicodeN (dst=0x3ffe2c00, dstlen=12, reslen=0x0, src=0x7fe205be &quot;CONIN$&quot;, srclen=6)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:1019
+#2  0x7bc714bb in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
+    doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:578
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
+<p>Aha! From the above we see that <strong>RtlCustomCPToUnicodeN()</strong>
+managed to write into stack of it’s grand-caller:</p>
+<pre class><code>-&gt; RtlAnsiStringToUnicodeString() [puts $ecx on stack ]
+  -&gt;RtlMultiByteToUnicodeN()
+    -&gt;RtlCustomCPToUnicodeN() [ corrupts $ecx on stack ]</code></pre>
+<p>The call chain is straightforward but unexpected. Let’s see the definitions
+of <strong>RtlCustomCPToUnicodeN()</strong> and <strong>RtlMultiByteToUnicodeN()</strong> for clues
+where stack corruption could happen due to a code bug:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">//(gdb) list RtlCustomCPToUnicodeN</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>NTSTATUS WINAPI RtlCustomCPToUnicodeN<span class="op">(</span> CPTABLEINFO <span class="op">*</span>info<span class="op">,</span> WCHAR <span class="op">*</span>dst<span class="op">,</span> DWORD dstlen<span class="op">,</span> DWORD <span class="op">*</span>reslen<span class="op">,</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>                                       <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>src<span class="op">,</span> DWORD srclen <span class="op">)</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    DWORD i<span class="op">,</span> ret<span class="op">;</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    dstlen <span class="op">/=</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">);</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>info<span class="op">-&gt;</span>DBCSOffsets<span class="op">)</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> dstlen<span class="op">;</span> srclen <span class="op">&amp;&amp;</span> i<span class="op">;</span> i<span class="op">--,</span> srclen<span class="op">--,</span> src<span class="op">++,</span> dst<span class="op">++)</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>            USHORT off <span class="op">=</span> info<span class="op">-&gt;</span>DBCSOffsets<span class="op">[(</span><span class="dt">unsigned</span> <span class="dt">char</span><span class="op">)*</span>src<span class="op">];</span></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>off <span class="op">&amp;&amp;</span> srclen <span class="op">&gt;</span> <span class="dv">1</span><span class="op">)</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>            <span class="op">{</span></span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>                src<span class="op">++;</span></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>                srclen<span class="op">--;</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>                <span class="op">*</span>dst <span class="op">=</span> info<span class="op">-&gt;</span>DBCSOffsets<span class="op">[</span>off <span class="op">+</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">char</span><span class="op">)*</span>src<span class="op">];</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>            <span class="cf">else</span> <span class="op">*</span>dst <span class="op">=</span> info<span class="op">-&gt;</span>MultiByteTable<span class="op">[(</span><span class="dt">unsigned</span> <span class="dt">char</span><span class="op">)*</span>src<span class="op">];</span></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>        ret <span class="op">=</span> dstlen <span class="op">-</span> i<span class="op">;</span></span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span></span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>        ret <span class="op">=</span> min<span class="op">(</span> srclen<span class="op">,</span> dstlen <span class="op">);</span></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> ret<span class="op">;</span> i<span class="op">++)</span> dst<span class="op">[</span>i<span class="op">]</span> <span class="op">=</span> info<span class="op">-&gt;</span>MultiByteTable<span class="op">[(</span><span class="dt">unsigned</span> <span class="dt">char</span><span class="op">)</span>src<span class="op">[</span>i<span class="op">]];</span></span>
+<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>reslen<span class="op">)</span> <span class="op">*</span>reslen <span class="op">=</span> ret <span class="op">*</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">);</span></span>
+<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> STATUS_SUCCESS<span class="op">;</span></span>
+<span id="cb19-32"><a href="#cb19-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-33"><a href="#cb19-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-34"><a href="#cb19-34" aria-hidden="true" tabindex="-1"></a>NTSTATUS WINAPI RtlMultiByteToUnicodeN<span class="op">(</span> WCHAR <span class="op">*</span>dst<span class="op">,</span> DWORD dstlen<span class="op">,</span> DWORD <span class="op">*</span>reslen<span class="op">,</span></span>
+<span id="cb19-35"><a href="#cb19-35" aria-hidden="true" tabindex="-1"></a>                                        <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>src<span class="op">,</span> DWORD srclen <span class="op">)</span></span>
+<span id="cb19-36"><a href="#cb19-36" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb19-37"><a href="#cb19-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>nls_info<span class="op">.</span>AnsiTableInfo<span class="op">.</span>WideCharTable<span class="op">)</span></span>
+<span id="cb19-38"><a href="#cb19-38" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> RtlCustomCPToUnicodeN<span class="op">(</span> <span class="op">&amp;</span>nls_info<span class="op">.</span>AnsiTableInfo<span class="op">,</span> dst<span class="op">,</span> dstlen<span class="op">,</span> reslen<span class="op">,</span> src<span class="op">,</span> srclen <span class="op">);</span></span>
+<span id="cb19-39"><a href="#cb19-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-40"><a href="#cb19-40" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* locale not setup yet */</span></span>
+<span id="cb19-41"><a href="#cb19-41" aria-hidden="true" tabindex="-1"></a>    dstlen <span class="op">=</span> min<span class="op">(</span> srclen<span class="op">,</span> dstlen <span class="op">/</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">)</span> <span class="op">);</span></span>
+<span id="cb19-42"><a href="#cb19-42" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-43"><a href="#cb19-43" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>reslen<span class="op">)</span> <span class="op">*</span>reslen <span class="op">=</span> dstlen <span class="op">*</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">);</span></span>
+<span id="cb19-44"><a href="#cb19-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="op">(</span>dstlen<span class="op">--)</span> <span class="op">*</span>dst<span class="op">++</span> <span class="op">=</span> <span class="op">*</span>src<span class="op">++</span> <span class="op">&amp;</span> <span class="bn">0x7f</span><span class="op">;</span></span>
+<span id="cb19-45"><a href="#cb19-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> STATUS_SUCCESS<span class="op">;</span></span>
+<span id="cb19-46"><a href="#cb19-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>gdb</strong> says corruption happens at a line
+<strong>if (reslen) *reslen = ret * sizeof(WCHAR);</strong>. But what is
+wrong with it?</p>
+<p>The hint is seen in backtrace itself:</p>
+<pre class><code>(gdb) bt
+#0  RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, reslen=0x61ed28, src=&lt;optimized out&gt;, srclen=&lt;optimized out&gt;)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:972
+#1  0x7bc5d3c5 in RtlMultiByteToUnicodeN (dst=0x3ffe2c00, dstlen=12, reslen=0x0, src=0x7fe205be &quot;CONIN$&quot;, srclen=6)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:1019
+#2  0x7bc714bb in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
+    doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:578
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
+<p>Somehow <strong>reslen</strong> value in <strong>gdb</strong> backtrace suddenly changed
+from <strong>reslen=0x0</strong> (frame 2) to <strong>reslen=0x61ed28</strong> (frame 3).
+That smells like an ABI mismatch between caller and callee.</p>
+<p>Let’s have a peek at how <strong>RtlMultiByteToUnicodeN()</strong> calls <strong>RtlCustomCPToUnicodeN()</strong>
+in the assembly:</p>
+<pre class><code>(gdb) fr 1
+#1  0x7bc5d3c5 in RtlMultiByteToUnicodeN (dst=0x3ffe2c00, dstlen=12, reslen=0x0, src=0x7fe205be &quot;CONIN$&quot;, srclen=6)
+    at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:1019
+1019            return RtlCustomCPToUnicodeN( &amp;nls_info.AnsiTableInfo, dst, dstlen, reslen, src, srclen );
+
+Dump of assembler code for function RtlMultiByteToUnicodeN:
+   0x7bc5d330 &lt;+0&gt;:     lea    0x4(%esp),%ecx
+   0x7bc5d334 &lt;+4&gt;:     and    $0xfffffff0,%esp
+   0x7bc5d337 &lt;+7&gt;:     push   -0x4(%ecx)
+   0x7bc5d33a &lt;+10&gt;:    push   %ebp
+   0x7bc5d33b &lt;+11&gt;:    mov    %esp,%ebp
+   0x7bc5d33d &lt;+13&gt;:    push   %ebx
+   0x7bc5d33e &lt;+14&gt;:    mov    0x8(%ebp),%eax
+   0x7bc5d341 &lt;+17&gt;:    vmovd  0xc(%ebp),%xmm0
+   0x7bc5d346 &lt;+22&gt;:    vmovd  0x18(%ebp),%xmm1
+   0x7bc5d34b &lt;+27&gt;:    mov    0x7bcc150c,%ebx
+   0x7bc5d351 &lt;+33&gt;:    push   %ecx
+   0x7bc5d352 &lt;+34&gt;:    mov    0x10(%ebp),%edx
+   0x7bc5d355 &lt;+37&gt;:    mov    0x14(%ebp),%ecx
+   0x7bc5d358 &lt;+40&gt;:    test   %ebx,%ebx
+   0x7bc5d35a &lt;+42&gt;:    jne    0x7bc5d3a8 &lt;RtlMultiByteToUnicodeN+120&gt;
+   ...
+   0x7bc5d3a8 &lt;+120&gt;:   sub    $0x4,%esp
+   0x7bc5d3ab &lt;+123&gt;:   vmovd  %xmm1,(%esp)
+   0x7bc5d3b0 &lt;+128&gt;:   push   %ecx
+   0x7bc5d3b1 &lt;+129&gt;:   push   %edx
+   0x7bc5d3b2 &lt;+130&gt;:   sub    $0x4,%esp
+   0x7bc5d3b5 &lt;+133&gt;:   vmovd  %xmm0,(%esp)
+   0x7bc5d3ba &lt;+138&gt;:   push   %eax
+   0x7bc5d3bb &lt;+139&gt;:   push   $0x7bcc14ec
+   0x7bc5d3c0 &lt;+144&gt;:   call   0x7bc5d150 &lt;RtlCustomCPToUnicodeN&gt;
+=&gt; 0x7bc5d3c5 &lt;+149&gt;:   lea    -0x8(%ebp),%esp
+   0x7bc5d3c8 &lt;+152&gt;:   pop    %ecx
+   0x7bc5d3c9 &lt;+153&gt;:   pop    %ebx
+   0x7bc5d3ca &lt;+154&gt;:   pop    %ebp
+   0x7bc5d3cb &lt;+155&gt;:   lea    -0x4(%ecx),%esp
+   0x7bc5d3ce &lt;+158&gt;:   ret    $0x14</code></pre>
+<p>Here we already have suspicious code. Can you spot it?</p>
+<p>We know what we are looking for:
+we need to track life of parameter 3 (<strong>reslen=0x0</strong>) being passed as parameter 4 into
+<strong>RtlCustomCPToUnicodeN()</strong>.</p>
+<p>All the 3 functions in the backtrace are <strong>WINAPI</strong>
+(aka <strong>__attribute__((stdcall))</strong>). This means all argumens
+should be passed on stack. Specifically at <strong>RtlMultiByteToUnicodeN()</strong>
+entry first argument should be at <strong>esp + 4</strong>:</p>
+<pre class><code>; at RtlMultiByteToUnicodeN entry:
+             | ...
+ $esp     -&gt; | &lt;return address to RtlAnsiStringToUnicodeString&gt;
+ $esp + 4 -&gt; | arg1: dst
+             | arg2: dstlen
+             | arg3: reslen
+             | arg4: src
+             | arg5: srclen
+             | ...</code></pre>
+<p>Let’s trace <strong>reslen</strong> through to <strong>RtlCustomCPToUnicodeN()</strong> call
+site (<strong>RtlMultiByteToUnicodeN+144</strong>).</p>
+<pre class><code>Dump of assembler code for function RtlMultiByteToUnicodeN:
+   0x7bc5d330 &lt;+0&gt;:     lea    0x4(%esp),%ecx   ; $ecx=$esp+4 (save pointer to parameter 1 on stack)
+   0x7bc5d334 &lt;+4&gt;:     and    $0xfffffff0,%esp ; align $esp to 16 bytes
+   0x7bc5d337 &lt;+7&gt;:     push   -0x4(%ecx)       ; re-save return address on current top of stack
+   0x7bc5d33a &lt;+10&gt;:    push   %ebp             ; safe frame pointer.
+   0x7bc5d33b &lt;+11&gt;:    mov    %esp,%ebp
+   0x7bc5d33d &lt;+13&gt;:    push   %ebx
+   0x7bc5d33e &lt;+14&gt;:    mov    0x8(%ebp),%eax   ; load arg1(dst)
+   0x7bc5d341 &lt;+17&gt;:    vmovd  0xc(%ebp),%xmm0  ; load arg2(dstlen)
+   0x7bc5d346 &lt;+22&gt;:    vmovd  0x18(%ebp),%xmm1 ; load arg5(srclen)
+   0x7bc5d34b &lt;+27&gt;:    mov    0x7bcc150c,%ebx  ; load 'nls_info.AnsiTableInfo.WideCharTable' address
+   0x7bc5d351 &lt;+33&gt;:    push   %ecx
+   0x7bc5d352 &lt;+34&gt;:    mov    0x10(%ebp),%edx  ; -&gt;&gt;&gt; load arg3(reslen)
+   0x7bc5d355 &lt;+37&gt;:    mov    0x14(%ebp),%ecx  ; load arg4(src)
+   0x7bc5d358 &lt;+40&gt;:    test   %ebx,%ebx
+   0x7bc5d35a &lt;+42&gt;:    jne    0x7bc5d3a8 &lt;RtlMultiByteToUnicodeN+120&gt;
+   ...
+   0x7bc5d3ab &lt;+123&gt;:   vmovd  %xmm1,(%esp)     ; push srclen (forward arg5 unmodified)
+   0x7bc5d3b0 &lt;+128&gt;:   push   %ecx             ; push src (forward arg4 unmodified)
+   0x7bc5d3b1 &lt;+129&gt;:   push   %edx             ; -&gt;&gt;&gt; push reslen (forward arg3 unmodified)
+   0x7bc5d3b2 &lt;+130&gt;:   sub    $0x4,%esp
+   0x7bc5d3b5 &lt;+133&gt;:   vmovd  %xmm0,(%esp)     ; push dstlen (forward arg2 unmodified)
+   0x7bc5d3ba &lt;+138&gt;:   push   %eax             ; push dst (forward arg1 unmodified)
+   0x7bc5d3bb &lt;+139&gt;:   push   $0x7bcc14ec      ; push info
+   0x7bc5d3c0 &lt;+144&gt;:   call   0x7bc5d150 &lt;RtlCustomCPToUnicodeN&gt;
+   0x7bc5d3c5 &lt;+149&gt;:   lea    -0x8(%ebp),%esp
+   0x7bc5d3c8 &lt;+152&gt;:   pop    %ecx
+   0x7bc5d3c9 &lt;+153&gt;:   pop    %ebx
+   0x7bc5d3ca &lt;+154&gt;:   pop    %ebp
+   0x7bc5d3cb &lt;+155&gt;:   lea    -0x4(%ecx),%esp
+   0x7bc5d3ce &lt;+158&gt;:   ret    $0x14</code></pre>
+<p>The only problem with this code is that arguments are loaded from
+<strong>ebp</strong> as if <strong>and $0xfffffff0,%esp</strong> instruction never existed.
+And as a result we load arguments at a wrong stack location!</p>
+<p>That is a compiler bug. Filed as <a href="https://gcc.gnu.org/PR98161">https://gcc.gnu.org/PR98161</a>.</p>
+<p>Here is the single-file example:</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">short</span> u16<span class="op">;</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">int</span>   u32<span class="op">;</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">char</span>  u8<span class="op">;</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>u32</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    __attribute__<span class="op">((</span>__force_align_arg_pointer__<span class="op">))</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>unreach<span class="op">(</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> u16 <span class="op">*</span> pu16<span class="op">,</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    u16 <span class="op">*</span>dst<span class="op">,</span> u32 dstlen<span class="op">,</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> u8 <span class="op">*</span>src<span class="op">,</span> u32 srclen</span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">)</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>u32 i <span class="op">=</span> dstlen<span class="op">;</span> srclen <span class="op">&amp;&amp;</span> i<span class="op">;</span> i<span class="op">--,</span> srclen<span class="op">--,</span> src<span class="op">++,</span> dst<span class="op">++)</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>        u16 off <span class="op">=</span> pu16<span class="op">[*</span>src<span class="op">];</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>off<span class="op">)</span></span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>            src<span class="op">++;</span> srclen<span class="op">--;</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a>            <span class="op">*</span>dst <span class="op">=</span> pu16<span class="op">[</span>off <span class="op">+</span> <span class="op">*</span>src<span class="op">];</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">56</span><span class="op">;</span></span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>u32</span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>    __attribute__<span class="op">((</span>__force_align_arg_pointer__<span class="op">))</span></span>
+<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>    __attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
+<span id="cb24-28"><a href="#cb24-28" aria-hidden="true" tabindex="-1"></a>bug<span class="op">(</span></span>
+<span id="cb24-29"><a href="#cb24-29" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> u16 <span class="op">*</span> pu16<span class="op">,</span></span>
+<span id="cb24-30"><a href="#cb24-30" aria-hidden="true" tabindex="-1"></a>    u16 <span class="op">*</span>dst<span class="op">,</span> u32 dstlen<span class="op">,</span></span>
+<span id="cb24-31"><a href="#cb24-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> u8 <span class="op">*</span>src<span class="op">,</span> u32 srclen</span>
+<span id="cb24-32"><a href="#cb24-32" aria-hidden="true" tabindex="-1"></a>  <span class="op">)</span></span>
+<span id="cb24-33"><a href="#cb24-33" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb24-34"><a href="#cb24-34" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>pu16<span class="op">)</span></span>
+<span id="cb24-35"><a href="#cb24-35" aria-hidden="true" tabindex="-1"></a>       <span class="co">/* Branch should not execute, but stack realignment</span></span>
+<span id="cb24-36"><a href="#cb24-36" aria-hidden="true" tabindex="-1"></a><span class="co">        * reads wrong 'pu16' value from stack. */</span></span>
+<span id="cb24-37"><a href="#cb24-37" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> unreach<span class="op">(</span>pu16<span class="op">,</span> dst<span class="op">,</span> dstlen<span class="op">,</span> src<span class="op">,</span> srclen<span class="op">);</span></span>
+<span id="cb24-38"><a href="#cb24-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-39"><a href="#cb24-39" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span>srclen <span class="op">&lt;</span> dstlen<span class="op">)</span> <span class="op">?</span> srclen <span class="op">:</span> dstlen<span class="op">;</span></span>
+<span id="cb24-40"><a href="#cb24-40" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-41"><a href="#cb24-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-42"><a href="#cb24-42" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb24-43"><a href="#cb24-43" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should return 12 */</span></span>
+<span id="cb24-44"><a href="#cb24-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> bug<span class="op">(</span><span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">12</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">34</span><span class="op">);</span></span>
+<span id="cb24-45"><a href="#cb24-45" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The mismatch is seen on <strong>-O1</strong> / <strong>-O2</strong>:</p>
+<pre class><code>$ x86_64-pc-linux-gnu-gcc -m32 -fno-PIC -fno-builtin -pipe -fcf-protection=none -fno-stack-protector -fno-omit-frame-pointer \
+    -O1 -mavx -o bug bug.c.c
+./bug; echo $?
+12
+
+$ x86_64-pc-linux-gnu-gcc -m32 -fno-PIC -fno-builtin -pipe -fcf-protection=none -fno-stack-protector -fno-omit-frame-pointer \
+    -O2 -mavx -o bug bug.c.c
+./bug; echo $?
+56</code></pre>
+<p>There are a few unusual things about the example:</p>
+<ul>
+<li><strong>wine</strong> uses <strong>__attribute__((__force_align_arg_pointer__))</strong> to realign stack
+as windows and linux have slightly different alignment assumptions.</li>
+<li><strong>-msse4</strong> or above was used to compile <strong>wine</strong></li>
+<li>unreleased <strong>gcc-11</strong> was used to compile <strong>wine</strong> (<strong>gcc-10</strong> works fine)</li>
+</ul>
+<h1 id="parting-words">Parting words</h1>
+<ul>
+<li><strong>wine</strong> can normally run <strong>mingw</strong>-compiled binaries :)</li>
+<li><strong>wine</strong>’s loader process is very similar to <strong>glibc</strong>’s ld process
+with a few minor differences like re-execution on first run.</li>
+<li><strong>WINELOADERNOEXEC=1</strong> is a good hack to make <strong>wine</strong> more
+debuggable under <strong>gdb</strong>. I wonder if <strong>gdb</strong> (or <strong>wine</strong>?)
+could be tweaked to avoid the need for <strong>WINELOADERNOEXEC=1</strong>
+as a workaround to get symbols.</li>
+<li><strong>gdb</strong> is quite usable to debug binaries under <strong>wine</strong>.</li>
+<li><strong>gcc-11</strong> is still an unreleased version of compiler. If you
+enjoy tracking these kinds of bugs as I do you might want to
+give it a try.</li>
+</ul>
+<p>I reported the bug this Sunday morning and was lazily writing
+this blog post. <strong>gcc</strong> upstream already fixed bug in master
+before I have finished the post. What a speed!</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December  6, 2020 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

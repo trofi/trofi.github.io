@@ -1,0 +1,1107 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: ptrace() and accidental boot fix on ia64</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>ptrace() and accidental boot fix on ia64</h1>
+
+            <p>This story is another dive into linux kernel internals. It has
+started as a <strong>strace</strong> hangup on <strong>ia64</strong> and ended up being
+an unusual case of <strong>gcc</strong> generating garbage code for linux
+kernel (not perfectly valid C either). I’ll try to cover a few
+<strong>ptrace()</strong> system call corners on <strong>x86_64</strong> and <strong>ia64</strong> for
+comparison.</p>
+<h1 id="intro">Intro</h1>
+<p>I updated <a href="../posts/207-linker-script-weird-tricks-or-EFI-on-ia64.html">**elilo**</a>
+and <strong>kernel</strong> on <strong>ia64</strong> machine recently.</p>
+<p>Kernel boot times shrunk from 10 minutes (kernel <strong>3.14.14</strong>)
+down to 2 minutes (kernel <strong>4.9.72</strong>). <strong>3.14.14</strong> kernel had
+large 8-minute pause when early console was not accessible.
+Every time this pause happened I thought I bricked the
+machine. And now delays are gone \o/</p>
+<p>One new thing broke (so far): every time I ran <strong>strace</strong> it
+was hanging without any output printed. Mike Frysinger pointed
+out <strong>strace</strong> hangup likely related to <strong>gdb</strong> problems on
+<strong>ia64</strong> <a href="https://bugs.gentoo.org/518130">reported before</a>
+by Émeric Maschino.</p>
+<p>And he was right!</p>
+<h1 id="reproducing">Reproducing</h1>
+<p>Using <a href="../posts/199-ia64-machine-emulation.html">ski image</a> I
+booted fresh kernel to make sure the bug was still there:</p>
+<pre class><code># strace ls
+&lt;no response, hangup&gt;</code></pre>
+<p>Yay! <strong>ski</strong> was able reproduce it: no need to torture
+physical machine while debugging. Next step was to find where
+<strong>strace</strong> got stuck. As <strong>strace</strong> and <strong>gdb</strong> are broken I
+had to resort to <strong>printf()</strong> debugging.</p>
+<p>Before doing that I tried <strong>strace</strong>’s <strong>-d</strong> option to
+enable debug mode where it prints everything it expects from
+tracee process:</p>
+<pre class><code>root@ia64 / # strace -d ls
+strace: ptrace_setoptions = 0x51
+strace: new tcb for pid 52, active tcbs:1
+strace: [wait(0x80137f) = 52] WIFSTOPPED,sig=SIGSTOP,EVENT_STOP (128)
+strace: pid 52 has TCB_STARTUP, initializing it
+strace: [wait(0x80057f) = 52] WIFSTOPPED,sig=SIGTRAP,EVENT_STOP (128)
+strace: [wait(0x00127f) = 52] WIFSTOPPED,sig=SIGCONT
+strace: [wait(0x00857f) = 52] WIFSTOPPED,sig=133
+????</code></pre>
+<p>Cryptic output. I tried to compare this output against
+correctly working <strong>x86_64</strong> system to understand what went
+wrong:</p>
+<pre class><code>amd64 $ strace -d ls
+strace: ptrace_setoptions = 0x51
+strace: new tcb for pid 29343, active tcbs:1
+strace: [wait(0x80137f) = 29343] WIFSTOPPED,sig=SIGSTOP,EVENT_STOP (128)
+strace: pid 29343 has TCB_STARTUP, initializing it
+strace: [wait(0x80057f) = 29343] WIFSTOPPED,sig=SIGTRAP,EVENT_STOP (128)
+strace: [wait(0x00127f) = 29343] WIFSTOPPED,sig=SIGCONT
+strace: [wait(0x00857f) = 29343] WIFSTOPPED,sig=133
+execve(&quot;/bin/ls&quot;, [&quot;ls&quot;], 0x60000fffffa4f1f8 /* 36 vars */strace: [wait(0x04057f) = 29343] WIFSTOPPED,sig=SIGTRAP,EVENT_EXEC (4)
+strace: [wait(0x00857f) = 29343] WIFSTOPPED,sig=133
+...</code></pre>
+<p>Up to <strong>execve</strong> call both logs are identical. Still no clue.</p>
+<p>I spent some time looking at ptrace state machine in kernel
+and gave up trying to understand what was wrong. I then asked
+<a href="https://github.com/strace/strace/issues/33">strace maintainer</a>
+on what could be wrong and got an almost immediate response
+from Dmitry V. Levin: <strong>strace</strong> did not show actual error.</p>
+<p>After a source code tweak he pointed at <strong>ptrace()</strong> syscall
+failure returning <strong>-EIO</strong>:</p>
+<pre class><code>$ ./strace -d /
+./strace: ptrace_setoptions = 0x51
+./strace: new tcb for pid 11080, active tcbs:1
+./strace: [wait(0x80137f) = 11080] WIFSTOPPED,sig=SIGSTOP,EVENT_STOP (128)
+./strace: pid 11080 has TCB_STARTUP, initializing it
+./strace: [wait(0x80057f) = 11080] WIFSTOPPED,sig=SIGTRAP,EVENT_STOP (128)
+./strace: [wait(0x00127f) = 11080] WIFSTOPPED,sig=SIGCONT
+./strace: [wait(0x00857f) = 11080] WIFSTOPPED,sig=133
+./strace: get_regs: get_regs_error: Input/output error
+????
+...
+&quot;Looks like ptrace(PTRACE_GETREGS) always fails with EIO on this new kernel.&quot;</code></pre>
+<p>Now I got a more specific signal: <strong>ptrace(PTRACE_GETREGS,…)</strong>
+syscall failed.</p>
+<h1 id="into-the-kernel">Into the kernel</h1>
+<p>I felt I had finally found the smoking gun: getting registers of
+<strong>WIFSTOPPED</strong> tracee task should never fail. All registers
+must be already stored somewhere in memory.</p>
+<p>Otherwise how would kernel be able to resume executing tracee
+task when needed?</p>
+<p>Before diving into <strong>ia64</strong> land let’s look into <strong>x86_64</strong>
+<strong>ptrace(PTRACE_GETREGS, …)</strong> implementation.</p>
+<h2 id="x86_64-ptraceptrace_getregs">x86_64 ptrace(PTRACE_GETREGS)</h2>
+<p>To find a <strong>&lt;foo&gt;</strong> syscall implementation in kernel we can
+search for <strong>sys_&lt;foo&gt;()</strong> function definition. The lazy way
+to find a definition is to interrogate built kernel with <strong>gdb</strong>:</p>
+<pre class><code>$ gdb --quiet ./vmlinux
+(gdb) list sys_ptrace
+1105
+1106    #ifndef arch_ptrace_attach
+1107    #define arch_ptrace_attach(child)       do { } while (0)
+1108    #endif
+1109
+1110    SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
+1111                    unsigned long, data)
+1112    {
+1113            struct task_struct *child;
+1114            long ret;</code></pre>
+<p><strong>SYSCALL_DEFINE4(ptrace, …)</strong> macro defines actual
+<a href="http://lxr.linux.no/#linux+v4.15.13/kernel/ptrace.c#L1121">sys_ptrace()</a>
+which does a few sanity checks and dispatches to <strong>arch_ptrace()</strong>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>SYSCALL_DEFINE4<span class="op">(</span>ptrace<span class="op">,</span> <span class="dt">long</span><span class="op">,</span> request<span class="op">,</span> <span class="dt">long</span><span class="op">,</span> pid<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span><span class="op">,</span> addr<span class="op">,</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>                <span class="dt">unsigned</span> <span class="dt">long</span><span class="op">,</span> data<span class="op">)</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// simplified a bit</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> task_struct <span class="op">*</span>child<span class="op">;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> ret<span class="op">;</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    child <span class="op">=</span> ptrace_get_task_struct<span class="op">(</span>pid<span class="op">);</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    ret <span class="op">=</span> arch_ptrace<span class="op">(</span>child<span class="op">,</span> request<span class="op">,</span> addr<span class="op">,</span> data<span class="op">);</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ret<span class="op">;</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>x86_64</strong> implementation
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/x86/kernel/ptrace.c#L809">does copy_regset_to_user() call</a>
+and takes a few lines of code to fetch registers:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> arch_ptrace<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>child<span class="op">,</span> <span class="dt">long</span> request<span class="op">,</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>                 <span class="dt">unsigned</span> <span class="dt">long</span> addr<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> data<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>   <span class="co">// ...</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>   <span class="cf">case</span> PTRACE_GETREGS<span class="op">:</span>    <span class="co">/* Get all gp regs from the child. */</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>       <span class="cf">return</span> copy_regset_to_user<span class="op">(</span>child<span class="op">,</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                                  task_user_regset_view<span class="op">(</span>current<span class="op">),</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>                                  REGSET_GENERAL<span class="op">,</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>                                  <span class="dv">0</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> user_regs_struct<span class="op">),</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>                                  datap<span class="op">);</span></span></code></pre></div>
+<p>Let’s look at it in detail to get the idea where registers
+are normally stored.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">int</span> copy_regset_to_user<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>target<span class="op">,</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>                                      <span class="dt">const</span> <span class="kw">struct</span> user_regset_view <span class="op">*</span>view<span class="op">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>                                      <span class="dt">unsigned</span> <span class="dt">int</span> setno<span class="op">,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>                                      <span class="dt">unsigned</span> <span class="dt">int</span> offset<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">int</span> size<span class="op">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>                                      <span class="dt">void</span> __user <span class="op">*</span>data<span class="op">)</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="kw">struct</span> user_regset <span class="op">*</span>regset <span class="op">=</span> <span class="op">&amp;</span>view<span class="op">-&gt;</span>regsets<span class="op">[</span>setno<span class="op">];</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>regset<span class="op">-&gt;</span>get<span class="op">)</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="op">-</span>EOPNOTSUPP<span class="op">;</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>access_ok<span class="op">(</span>VERIFY_WRITE<span class="op">,</span> data<span class="op">,</span> size<span class="op">))</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="op">-</span>EFAULT<span class="op">;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> regset<span class="op">-&gt;</span>get<span class="op">(</span>target<span class="op">,</span> regset<span class="op">,</span> offset<span class="op">,</span> size<span class="op">,</span> NULL<span class="op">,</span> data<span class="op">);</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <strong>copy_regset_to_user()</strong> is just a dispatcher to
+<strong>view</strong> argument. Moving on:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> user_regset_view <span class="op">*</span>task_user_regset_view<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>task<span class="op">)</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// simplified #ifdef-ery</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>user_64bit_mode<span class="op">(</span>task_pt_regs<span class="op">(</span>task<span class="op">)))</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">&amp;</span>user_x86_32_view<span class="op">;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">&amp;</span>user_x86_64_view<span class="op">;</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">const</span> <span class="kw">struct</span> user_regset_view user_x86_64_view <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>name <span class="op">=</span> <span class="st">&quot;x86_64&quot;</span><span class="op">,</span> <span class="op">.</span>e_machine <span class="op">=</span> EM_X86_64<span class="op">,</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>regsets <span class="op">=</span> x86_64_regsets<span class="op">,</span> <span class="op">.</span>n <span class="op">=</span> ARRAY_SIZE<span class="op">(</span>x86_64_regsets<span class="op">)</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> user_regset x86_64_regsets<span class="op">[]</span> __ro_after_init <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">[</span>REGSET_GENERAL<span class="op">]</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>core_note_type <span class="op">=</span> NT_PRSTATUS<span class="op">,</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>n <span class="op">=</span> <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> user_regs_struct<span class="op">)</span> <span class="op">/</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">),</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>size <span class="op">=</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">),</span> <span class="op">.</span>align <span class="op">=</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">),</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>get <span class="op">=</span> genregs_get<span class="op">,</span> <span class="op">.</span>set <span class="op">=</span> genregs_set</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">},</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span></code></pre></div>
+<p>A bit of boilerplate to tie <strong>genregs_get()</strong> and <strong>genregs_set()</strong>
+to 64-bit (or 32-bit) caller. Let’s look at 64-bit variant of
+<strong>genregs_get()</strong> as it’s used in our <strong>PTRACE_GETREGS</strong> case:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> genregs_get<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>target<span class="op">,</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">const</span> <span class="kw">struct</span> user_regset <span class="op">*</span>regset<span class="op">,</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">unsigned</span> <span class="dt">int</span> pos<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">int</span> count<span class="op">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">void</span> <span class="op">*</span>kbuf<span class="op">,</span> <span class="dt">void</span> __user <span class="op">*</span>ubuf<span class="op">)</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>kbuf<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">long</span> <span class="op">*</span>k <span class="op">=</span> kbuf<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">while</span> <span class="op">(</span>count <span class="op">&gt;=</span> <span class="kw">sizeof</span><span class="op">(*</span>k<span class="op">))</span> <span class="op">{</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>            <span class="op">*</span>k<span class="op">++</span> <span class="op">=</span> getreg<span class="op">(</span>target<span class="op">,</span> pos<span class="op">);</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>        count <span class="op">-=</span> <span class="kw">sizeof</span><span class="op">(*</span>k<span class="op">);</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>        pos <span class="op">+=</span> <span class="kw">sizeof</span><span class="op">(*</span>k<span class="op">);</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">long</span> __user <span class="op">*</span>u <span class="op">=</span> ubuf<span class="op">;</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">while</span> <span class="op">(</span>count <span class="op">&gt;=</span> <span class="kw">sizeof</span><span class="op">(*</span>u<span class="op">))</span> <span class="op">{</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>__put_user<span class="op">(</span>getreg<span class="op">(</span>target<span class="op">,</span> pos<span class="op">),</span> u<span class="op">++))</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span> <span class="op">-</span>EFAULT<span class="op">;</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>            count <span class="op">-=</span> <span class="kw">sizeof</span><span class="op">(*</span>u<span class="op">);</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>            pos <span class="op">+=</span> <span class="kw">sizeof</span><span class="op">(*</span>u<span class="op">);</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">unsigned</span> <span class="dt">long</span> getreg<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>task<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> offset<span class="op">)</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... simplified</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">*</span>pt_regs_access<span class="op">(</span>task_pt_regs<span class="op">(</span>task<span class="op">),</span> offset<span class="op">);</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">unsigned</span> <span class="dt">long</span> <span class="op">*</span>pt_regs_access<span class="op">(</span><span class="kw">struct</span> pt_regs <span class="op">*</span>regs<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> regno<span class="op">)</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>    BUILD_BUG_ON<span class="op">(</span>offsetof<span class="op">(</span><span class="kw">struct</span> pt_regs<span class="op">,</span> bx<span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">);</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">&amp;</span>regs<span class="op">-&gt;</span>bx <span class="op">+</span> <span class="op">(</span>regno <span class="op">&gt;&gt;</span> <span class="dv">2</span><span class="op">);</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a><span class="co">// ..</span></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a><span class="pp">#define task_pt_regs(task) \</span></span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a><span class="pp">({                                                                  \</span></span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a><span class="pp">    unsigned long __ptr = (unsigned long)task_stack_page(task);     \</span></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a><span class="pp">    __ptr += THREAD_SIZE - TOP_OF_KERNEL_STACK_PADDING;             \</span></span>
+<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a><span class="pp">    ((struct pt_regs *)__ptr) - 1;                                  \</span></span>
+<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a><span class="pp">})</span></span>
+<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">void</span> <span class="op">*</span>task_stack_page<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> task_struct <span class="op">*</span>task<span class="op">)</span></span>
+<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> task<span class="op">-&gt;</span>stack<span class="op">;</span></span>
+<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>From <strong>task_pt_regs()</strong> defnition we see that actual register
+contents is stored in task’s kernel stack.
+And <strong>genregs_get()</strong> copies register contents one by one in a
+<strong>while()</strong> loop.</p>
+<p>How do task’s registers get stored to task’s kernel stack?
+There are a few paths to get there. Most frequent is perhaps
+interrupt handling when task is descheduled from CPU and is
+moved to scheduler wait queue.</p>
+<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S?h=v4.18-rc7#n546">ENTRY(interrupt_entry)</a>:
+is an entry point for interrupt handling.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span><span class="op">(</span>interrupt_entry<span class="op">)</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    UNWIND_HINT_FUNC</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    ASM_CLAC</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">cld</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    testb        <span class="op">$</span><span class="bn">3</span><span class="op">,</span> <span class="kw">CS</span><span class="op">-</span>ORIG_RAX<span class="op">+</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">jz</span>        <span class="fl">1</span><span class="bn">f</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">SWAPGS</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    /*</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>     * Switch to the thread stack<span class="op">.</span> The IRET frame <span class="op">and</span> orig_ax are</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>     * on the stack<span class="op">,</span> as well as the return address<span class="op">.</span> <span class="kw">RDI</span><span class="op">..</span><span class="kw">R12</span> are</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>     * <span class="bu">not</span> <span class="op">(</span>yet<span class="op">)</span> on the stack <span class="op">and</span> space has <span class="op">not</span> <span class="op">(</span>yet<span class="op">)</span> been</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>     * allocated for them<span class="op">.</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>     */</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">rdi</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>    /* Need to switch before accessing the thread stack<span class="op">.</span> <span class="op">*/</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>    SWITCH_TO_KERNEL_CR3 scratch_reg<span class="op">=%</span><span class="kw">rdi</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>        <span class="op">%</span><span class="kw">rsp</span><span class="op">,</span> <span class="op">%</span><span class="kw">rdi</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>        PER_CPU_VAR<span class="op">(</span>cpu_current_top_of_stack<span class="op">),</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>     /*</span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>      * We have <span class="kw">RDI</span><span class="op">,</span> return address<span class="op">,</span> <span class="op">and</span> orig_ax on the stack on</span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>      * top of the IRET frame<span class="op">.</span> That means offset<span class="op">=</span><span class="dv">24</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>      */</span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>    UNWIND_HINT_IRET_REGS base<span class="op">=%</span><span class="kw">rdi</span> offset<span class="op">=</span><span class="dv">24</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">7</span><span class="op">*</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                <span class="op">/*</span> regs<span class="op">-&gt;</span><span class="kw">ss</span> <span class="op">*/</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">6</span><span class="op">*</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                <span class="op">/*</span> regs<span class="op">-&gt;</span><span class="kw">rsp</span> <span class="op">*/</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">5</span><span class="op">*</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                <span class="op">/*</span> regs<span class="op">-&gt;</span>eflags <span class="op">*/</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">4</span><span class="op">*</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                <span class="op">/*</span> regs<span class="op">-&gt;</span><span class="kw">cs</span> <span class="op">*/</span></span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">3</span><span class="op">*</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                <span class="op">/*</span> regs<span class="op">-&gt;</span>ip <span class="op">*/</span></span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">2</span><span class="op">*</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                <span class="op">/*</span> regs<span class="op">-&gt;</span>orig_ax <span class="op">*/</span></span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="dv">8</span><span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                        <span class="op">/*</span> return address <span class="op">*/</span></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>    UNWIND_HINT_FUNC</span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>        <span class="op">(%</span><span class="kw">rdi</span><span class="op">),</span> <span class="op">%</span><span class="kw">rdi</span></span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>1:</span>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a>    PUSH_AND_CLEAR_REGS save_ret<span class="op">=</span><span class="dv">1</span></span>
+<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a>    ENCODE_FRAME_POINTER <span class="dv">8</span></span>
+<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>    testb        <span class="op">$</span><span class="bn">3</span><span class="op">,</span> <span class="kw">CS</span><span class="op">+</span><span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">jz</span>        <span class="fl">1</span><span class="bn">f</span></span>
+<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a>    /*</span>
+<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>     * IRQ from user mode<span class="op">.</span></span>
+<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>     *</span>
+<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>     * We need to tell lockdep that IRQs are off<span class="op">.</span>  We can<span class="st">'t do this until</span></span>
+<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a>     * we fix gsbase<span class="op">,</span> <span class="op">and</span> we should do it before enter_from_user_mode</span>
+<span id="cb11-52"><a href="#cb11-52" aria-hidden="true" tabindex="-1"></a>     * (which can take locks<span class="op">).</span>  Since TRACE_IRQS_OFF is idempotent<span class="op">,</span></span>
+<span id="cb11-53"><a href="#cb11-53" aria-hidden="true" tabindex="-1"></a>     * the simplest way to handle it is to just call it twice if</span>
+<span id="cb11-54"><a href="#cb11-54" aria-hidden="true" tabindex="-1"></a>     * we enter from user mode<span class="op">.</span>  There<span class="st">'s no reason to optimize this since</span></span>
+<span id="cb11-55"><a href="#cb11-55" aria-hidden="true" tabindex="-1"></a>     * TRACE_IRQS_OFF is a no<span class="op">-</span>op if lockdep is off<span class="op">.</span></span>
+<span id="cb11-56"><a href="#cb11-56" aria-hidden="true" tabindex="-1"></a>     */</span>
+<span id="cb11-57"><a href="#cb11-57" aria-hidden="true" tabindex="-1"></a>    TRACE_IRQS_OFF</span>
+<span id="cb11-58"><a href="#cb11-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-59"><a href="#cb11-59" aria-hidden="true" tabindex="-1"></a>    CALL_enter_from_user_mode</span>
+<span id="cb11-60"><a href="#cb11-60" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-61"><a href="#cb11-61" aria-hidden="true" tabindex="-1"></a>1:</span>
+<span id="cb11-62"><a href="#cb11-62" aria-hidden="true" tabindex="-1"></a>    ENTER_IRQ_STACK old_rsp<span class="op">=%</span><span class="kw">rdi</span> save_ret<span class="op">=</span><span class="dv">1</span></span>
+<span id="cb11-63"><a href="#cb11-63" aria-hidden="true" tabindex="-1"></a>    /* We entered an interrupt context <span class="op">-</span> irqs are off<span class="op">:</span> <span class="op">*/</span></span>
+<span id="cb11-64"><a href="#cb11-64" aria-hidden="true" tabindex="-1"></a>    TRACE_IRQS_OFF</span>
+<span id="cb11-65"><a href="#cb11-65" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-66"><a href="#cb11-66" aria-hidden="true" tabindex="-1"></a>    <span class="cf">ret</span></span>
+<span id="cb11-67"><a href="#cb11-67" aria-hidden="true" tabindex="-1"></a><span class="pp">END</span><span class="op">(</span>interrupt_entry<span class="op">)</span></span>
+<span id="cb11-68"><a href="#cb11-68" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span>
+<span id="cb11-69"><a href="#cb11-69" aria-hidden="true" tabindex="-1"></a>.<span class="pp">macro</span> PUSH_AND_CLEAR_REGS <span class="kw">rdx</span><span class="op">=%</span><span class="kw">rdx</span> <span class="kw">rax</span><span class="op">=%</span><span class="kw">rax</span> save_ret<span class="op">=</span><span class="dv">0</span></span>
+<span id="cb11-70"><a href="#cb11-70" aria-hidden="true" tabindex="-1"></a>    /*</span>
+<span id="cb11-71"><a href="#cb11-71" aria-hidden="true" tabindex="-1"></a>     * <span class="bu">Push</span> registers <span class="op">and</span> sanitize registers of values that a</span>
+<span id="cb11-72"><a href="#cb11-72" aria-hidden="true" tabindex="-1"></a>     * speculation attack might otherwise want to exploit<span class="op">.</span> The</span>
+<span id="cb11-73"><a href="#cb11-73" aria-hidden="true" tabindex="-1"></a>     * lower registers are likely clobbered well before they</span>
+<span id="cb11-74"><a href="#cb11-74" aria-hidden="true" tabindex="-1"></a>     * could be put to use in a speculative execution gadget<span class="op">.</span></span>
+<span id="cb11-75"><a href="#cb11-75" aria-hidden="true" tabindex="-1"></a>     * Interleave <span class="op">XOR</span> with PUSH for better uop scheduling<span class="op">:</span></span>
+<span id="cb11-76"><a href="#cb11-76" aria-hidden="true" tabindex="-1"></a>     */</span>
+<span id="cb11-77"><a href="#cb11-77" aria-hidden="true" tabindex="-1"></a>    .<span class="pp">if</span> <span class="op">\</span>save_ret</span>
+<span id="cb11-78"><a href="#cb11-78" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">rsi</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">si</span> <span class="op">*/</span></span>
+<span id="cb11-79"><a href="#cb11-79" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>        <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rsi</span>        <span class="op">/*</span> temporarily store the return address in <span class="op">%</span><span class="kw">rsi</span> <span class="op">*/</span></span>
+<span id="cb11-80"><a href="#cb11-80" aria-hidden="true" tabindex="-1"></a>    <span class="bu">movq</span>        <span class="op">%</span><span class="kw">rdi</span><span class="op">,</span> <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span>        <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">di</span> <span class="op">(</span>overwriting original return address<span class="op">)</span> <span class="op">*/</span></span>
+<span id="cb11-81"><a href="#cb11-81" aria-hidden="true" tabindex="-1"></a>    .<span class="pp">else</span></span>
+<span id="cb11-82"><a href="#cb11-82" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">rdi</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">di</span> <span class="op">*/</span></span>
+<span id="cb11-83"><a href="#cb11-83" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">rsi</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">si</span> <span class="op">*/</span></span>
+<span id="cb11-84"><a href="#cb11-84" aria-hidden="true" tabindex="-1"></a>    .endif</span>
+<span id="cb11-85"><a href="#cb11-85" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">\</span><span class="kw">rdx</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">dx</span> <span class="op">*/</span></span>
+<span id="cb11-86"><a href="#cb11-86" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span><span class="kw">edx</span><span class="op">,</span> <span class="op">%</span><span class="kw">edx</span>        <span class="op">/*</span> nospec   <span class="kw">dx</span> <span class="op">*/</span></span>
+<span id="cb11-87"><a href="#cb11-87" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">rcx</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">cx</span> <span class="op">*/</span></span>
+<span id="cb11-88"><a href="#cb11-88" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span><span class="kw">ecx</span><span class="op">,</span> <span class="op">%</span><span class="kw">ecx</span>        <span class="op">/*</span> nospec   <span class="kw">cx</span> <span class="op">*/</span></span>
+<span id="cb11-89"><a href="#cb11-89" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">\</span><span class="kw">rax</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">ax</span> <span class="op">*/</span></span>
+<span id="cb11-90"><a href="#cb11-90" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">r8</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r8</span> <span class="op">*/</span></span>
+<span id="cb11-91"><a href="#cb11-91" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r8d<span class="op">,</span> <span class="op">%</span>r8d        <span class="op">/*</span> nospec   <span class="kw">r8</span> <span class="op">*/</span></span>
+<span id="cb11-92"><a href="#cb11-92" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">r9</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r9</span> <span class="op">*/</span></span>
+<span id="cb11-93"><a href="#cb11-93" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r9d<span class="op">,</span> <span class="op">%</span>r9d        <span class="op">/*</span> nospec   <span class="kw">r9</span> <span class="op">*/</span></span>
+<span id="cb11-94"><a href="#cb11-94" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">r10</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r10</span> <span class="op">*/</span></span>
+<span id="cb11-95"><a href="#cb11-95" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r10d<span class="op">,</span> <span class="op">%</span>r10d        <span class="op">/*</span> nospec   <span class="kw">r10</span> <span class="op">*/</span></span>
+<span id="cb11-96"><a href="#cb11-96" aria-hidden="true" tabindex="-1"></a>    pushq   <span class="op">%</span><span class="kw">r11</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r11</span> <span class="op">*/</span></span>
+<span id="cb11-97"><a href="#cb11-97" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r11d<span class="op">,</span> <span class="op">%</span>r11d        <span class="op">/*</span> nospec   <span class="kw">r11</span><span class="op">*/</span></span>
+<span id="cb11-98"><a href="#cb11-98" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">rbx</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">rbx</span> <span class="op">*/</span></span>
+<span id="cb11-99"><a href="#cb11-99" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">ebx</span><span class="op">,</span> <span class="op">%</span><span class="kw">ebx</span>        <span class="op">/*</span> nospec   <span class="kw">rbx</span><span class="op">*/</span></span>
+<span id="cb11-100"><a href="#cb11-100" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">rbp</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">rbp</span> <span class="op">*/</span></span>
+<span id="cb11-101"><a href="#cb11-101" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">ebp</span><span class="op">,</span> <span class="op">%</span><span class="kw">ebp</span>        <span class="op">/*</span> nospec   <span class="kw">rbp</span><span class="op">*/</span></span>
+<span id="cb11-102"><a href="#cb11-102" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">r12</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r12</span> <span class="op">*/</span></span>
+<span id="cb11-103"><a href="#cb11-103" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r12d<span class="op">,</span> <span class="op">%</span>r12d        <span class="op">/*</span> nospec   <span class="kw">r12</span><span class="op">*/</span></span>
+<span id="cb11-104"><a href="#cb11-104" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">r13</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r13</span> <span class="op">*/</span></span>
+<span id="cb11-105"><a href="#cb11-105" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r13d<span class="op">,</span> <span class="op">%</span>r13d        <span class="op">/*</span> nospec   <span class="kw">r13</span><span class="op">*/</span></span>
+<span id="cb11-106"><a href="#cb11-106" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">r14</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r14</span> <span class="op">*/</span></span>
+<span id="cb11-107"><a href="#cb11-107" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r14d<span class="op">,</span> <span class="op">%</span>r14d        <span class="op">/*</span> nospec   <span class="kw">r14</span><span class="op">*/</span></span>
+<span id="cb11-108"><a href="#cb11-108" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">r15</span>                <span class="op">/*</span> pt_regs<span class="op">-&gt;</span><span class="kw">r15</span> <span class="op">*/</span></span>
+<span id="cb11-109"><a href="#cb11-109" aria-hidden="true" tabindex="-1"></a>    xorl        <span class="op">%</span>r15d<span class="op">,</span> <span class="op">%</span>r15d        <span class="op">/*</span> nospec   <span class="kw">r15</span><span class="op">*/</span></span>
+<span id="cb11-110"><a href="#cb11-110" aria-hidden="true" tabindex="-1"></a>    UNWIND_HINT_REGS</span>
+<span id="cb11-111"><a href="#cb11-111" aria-hidden="true" tabindex="-1"></a>    .<span class="pp">if</span> <span class="op">\</span>save_ret</span>
+<span id="cb11-112"><a href="#cb11-112" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">rsi</span>                <span class="op">/*</span> return address on top of stack <span class="op">*/</span></span>
+<span id="cb11-113"><a href="#cb11-113" aria-hidden="true" tabindex="-1"></a>    .endif</span>
+<span id="cb11-114"><a href="#cb11-114" aria-hidden="true" tabindex="-1"></a>.endm</span></code></pre></div>
+<p>Interesting effects of the <strong>interrupt_entry</strong> are:</p>
+<ul>
+<li>registers are backed up by <strong>PUSH_AND_CLEAR_REGS</strong> macro</li>
+<li>memory area used for backup is <strong>PER_CPU_VAR(cpu_current_top_of_stack)</strong>
+(task’s kernel stack)</li>
+</ul>
+<p>To recap: <strong>ptrace(PTRACE_GETREGS, …)</strong> does elementwise copy
+(using <strong>__put_user()</strong>) for each general register located in a
+single <strong>struct pt_regs</strong> in task’s kernel stack to tracer’s userspace.</p>
+<p>Now let’s look at how <strong>ia64</strong> does the same.</p>
+<h2 id="ia64-ptraceptrace_getregs">ia64 ptrace(PTRACE_GETREGS)</h2>
+<p>“Can’t be much more complicated than on x86_64” was my
+thought. Haha.</p>
+<p>I started searching for <strong>-EIO</strong> failure in kernel and
+sprinkling <strong>printk()</strong> statements in <strong>ptrace()</strong>
+handling code.</p>
+<p><strong>ia64</strong> begins with the same call path as <strong>x86_64</strong>:</p>
+<ul>
+<li><strong>ptrace()</strong> entry point: <a href="http://lxr.linux.no/#linux+v4.15.13/kernel/ptrace.c#L1121">SYSCALL_DEFINE4(ptrace…</a></li>
+<li>ia64-specific <strong>arch_ptrace()</strong> handler: <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/ptrace.c#L1158">arch_ptrace(…</a></li>
+<li><a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/ptrace.c#L828">**ptrace_getregs(..**</a></li>
+</ul>
+<p>Again, <strong>ptrace_getregs()</strong> is supposed to copy in-memory
+context back to caller’s userspace.
+Where did it return <strong>EIO</strong>?</p>
+<p><strong>Quiz</strong>: while you are skimming through the
+<strong>ptrace_getregs()</strong> code and comments right below, try to
+guess which <strong>EIO</strong> exit path is taken in our case. I’ve
+marked the cases with <strong>[N]</strong> numbers.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">long</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>ptrace_getregs <span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>child<span class="op">,</span> <span class="kw">struct</span> pt_all_user_regs __user <span class="op">*</span>ppr<span class="op">)</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [1] check if we can write back to userspace</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>access_ok<span class="op">(</span>VERIFY_WRITE<span class="op">,</span> ppr<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> pt_all_user_regs<span class="op">)))</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [2] get pointer to register context (ok)</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>    pt <span class="op">=</span> task_pt_regs<span class="op">(</span>child<span class="op">);</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [3] and tracee kernel stack (unexpected!)</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    sw <span class="op">=</span> <span class="op">(</span><span class="kw">struct</span> switch_stack <span class="op">*)</span> <span class="op">(</span>child<span class="op">-&gt;</span>thread<span class="op">.</span>ksp <span class="op">+</span> <span class="dv">16</span><span class="op">);</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [4] Try to unwind tracee's call chain (even more unexpected!)</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>    unw_init_from_blocked_task<span class="op">(&amp;</span>info<span class="op">,</span> child<span class="op">);</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>unw_unwind_to_user<span class="op">(&amp;</span>info<span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [5] validate alignment of target userspace buffer</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(((</span><span class="dt">unsigned</span> <span class="dt">long</span><span class="op">)</span> ppr <span class="op">&amp;</span> <span class="bn">0x7</span><span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>            dprintk<span class="op">(</span><span class="st">&quot;ptrace:unaligned register address %p</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> ppr<span class="op">);</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [6] fetch special registers into local variables</span></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>access_uarea<span class="op">(</span>child<span class="op">,</span> PT_CR_IPSR<span class="op">,</span> <span class="op">&amp;</span>psr<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>        <span class="op">||</span> access_uarea<span class="op">(</span>child<span class="op">,</span> PT_AR_EC<span class="op">,</span> <span class="op">&amp;</span>ec<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a>        <span class="op">||</span> access_uarea<span class="op">(</span>child<span class="op">,</span> PT_AR_LC<span class="op">,</span> <span class="op">&amp;</span>lc<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span></span>
+<span id="cb12-30"><a href="#cb12-30" aria-hidden="true" tabindex="-1"></a>        <span class="op">||</span> access_uarea<span class="op">(</span>child<span class="op">,</span> PT_AR_RNAT<span class="op">,</span> <span class="op">&amp;</span>rnat<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span></span>
+<span id="cb12-31"><a href="#cb12-31" aria-hidden="true" tabindex="-1"></a>        <span class="op">||</span> access_uarea<span class="op">(</span>child<span class="op">,</span> PT_AR_BSP<span class="op">,</span> <span class="op">&amp;</span>bsp<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span></span>
+<span id="cb12-32"><a href="#cb12-32" aria-hidden="true" tabindex="-1"></a>        <span class="op">||</span> access_uarea<span class="op">(</span>child<span class="op">,</span> PT_CFM<span class="op">,</span> <span class="op">&amp;</span>cfm<span class="op">,</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-33"><a href="#cb12-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">||</span> access_uarea<span class="op">(</span>child<span class="op">,</span> PT_NAT_BITS<span class="op">,</span> <span class="op">&amp;</span>nat_bits<span class="op">,</span> <span class="dv">0</span><span class="op">))</span></span>
+<span id="cb12-34"><a href="#cb12-34" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-35"><a href="#cb12-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-36"><a href="#cb12-36" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* control regs */</span></span>
+<span id="cb12-37"><a href="#cb12-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-38"><a href="#cb12-38" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [7] Finally start populating reguster contents into userspace:</span></span>
+<span id="cb12-39"><a href="#cb12-39" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>cr_iip<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>cr_iip<span class="op">);</span></span>
+<span id="cb12-40"><a href="#cb12-40" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>psr<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>cr_ipsr<span class="op">);</span></span>
+<span id="cb12-41"><a href="#cb12-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-42"><a href="#cb12-42" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* app regs */</span></span>
+<span id="cb12-43"><a href="#cb12-43" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [8] a few application registers</span></span>
+<span id="cb12-44"><a href="#cb12-44" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>ar_pfs<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_PFS<span class="op">]);</span></span>
+<span id="cb12-45"><a href="#cb12-45" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>ar_rsc<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_RSC<span class="op">]);</span></span>
+<span id="cb12-46"><a href="#cb12-46" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>ar_bspstore<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_BSPSTORE<span class="op">]);</span></span>
+<span id="cb12-47"><a href="#cb12-47" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>ar_unat<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_UNAT<span class="op">]);</span></span>
+<span id="cb12-48"><a href="#cb12-48" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>ar_ccv<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_CCV<span class="op">]);</span></span>
+<span id="cb12-49"><a href="#cb12-49" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>ar_fpsr<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_FPSR<span class="op">]);</span></span>
+<span id="cb12-50"><a href="#cb12-50" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-51"><a href="#cb12-51" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>ec<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_EC<span class="op">]);</span></span>
+<span id="cb12-52"><a href="#cb12-52" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>lc<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_LC<span class="op">]);</span></span>
+<span id="cb12-53"><a href="#cb12-53" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>rnat<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_RNAT<span class="op">]);</span></span>
+<span id="cb12-54"><a href="#cb12-54" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>bsp<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>ar<span class="op">[</span>PT_AUR_BSP<span class="op">]);</span></span>
+<span id="cb12-55"><a href="#cb12-55" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>cfm<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>cfm<span class="op">);</span></span>
+<span id="cb12-56"><a href="#cb12-56" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-57"><a href="#cb12-57" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* gr1-gr3 */</span></span>
+<span id="cb12-58"><a href="#cb12-58" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [9] normal (general) registers</span></span>
+<span id="cb12-59"><a href="#cb12-59" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">1</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r1<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">));</span></span>
+<span id="cb12-60"><a href="#cb12-60" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">2</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r2<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">)</span> <span class="op">*</span><span class="dv">2</span><span class="op">);</span></span>
+<span id="cb12-61"><a href="#cb12-61" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-62"><a href="#cb12-62" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* gr4-gr7 */</span></span>
+<span id="cb12-63"><a href="#cb12-63" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [10] more normal (general) registers!</span></span>
+<span id="cb12-64"><a href="#cb12-64" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">4</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">8</span><span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb12-65"><a href="#cb12-65" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>unw_access_gr<span class="op">(&amp;</span>info<span class="op">,</span> i<span class="op">,</span> <span class="op">&amp;</span>val<span class="op">,</span> <span class="op">&amp;</span>nat<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-66"><a href="#cb12-66" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-67"><a href="#cb12-67" aria-hidden="true" tabindex="-1"></a>            retval <span class="op">|=</span> __put_user<span class="op">(</span>val<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span>i<span class="op">]);</span></span>
+<span id="cb12-68"><a href="#cb12-68" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-69"><a href="#cb12-69" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-70"><a href="#cb12-70" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* gr8-gr11 */</span></span>
+<span id="cb12-71"><a href="#cb12-71" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [11] even more normal (general) registers!!</span></span>
+<span id="cb12-72"><a href="#cb12-72" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">8</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r8<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">)</span> <span class="op">*</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb12-73"><a href="#cb12-73" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-74"><a href="#cb12-74" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* gr12-gr15 */</span></span>
+<span id="cb12-75"><a href="#cb12-75" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [11] you've got the idea</span></span>
+<span id="cb12-76"><a href="#cb12-76" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">12</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r12<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">)</span> <span class="op">*</span> <span class="dv">2</span><span class="op">);</span></span>
+<span id="cb12-77"><a href="#cb12-77" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">14</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r14<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">));</span></span>
+<span id="cb12-78"><a href="#cb12-78" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">15</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r15<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">));</span></span>
+<span id="cb12-79"><a href="#cb12-79" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-80"><a href="#cb12-80" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* gr16-gr31 */</span></span>
+<span id="cb12-81"><a href="#cb12-81" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [12] even more of those</span></span>
+<span id="cb12-82"><a href="#cb12-82" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>gr<span class="op">[</span><span class="dv">16</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>r16<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">long</span><span class="op">)</span> <span class="op">*</span> <span class="dv">16</span><span class="op">);</span></span>
+<span id="cb12-83"><a href="#cb12-83" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-84"><a href="#cb12-84" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* b0 */</span></span>
+<span id="cb12-85"><a href="#cb12-85" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [13] branch register b0</span></span>
+<span id="cb12-86"><a href="#cb12-86" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>b0<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>br<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
+<span id="cb12-87"><a href="#cb12-87" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-88"><a href="#cb12-88" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* b1-b5 */</span></span>
+<span id="cb12-89"><a href="#cb12-89" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [13] more branch registers</span></span>
+<span id="cb12-90"><a href="#cb12-90" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">1</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">6</span><span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb12-91"><a href="#cb12-91" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>unw_access_br<span class="op">(&amp;</span>info<span class="op">,</span> i<span class="op">,</span> <span class="op">&amp;</span>val<span class="op">,</span> <span class="dv">0</span><span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-92"><a href="#cb12-92" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-93"><a href="#cb12-93" aria-hidden="true" tabindex="-1"></a>            __put_user<span class="op">(</span>val<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>br<span class="op">[</span>i<span class="op">]);</span></span>
+<span id="cb12-94"><a href="#cb12-94" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-95"><a href="#cb12-95" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-96"><a href="#cb12-96" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* b6-b7 */</span></span>
+<span id="cb12-97"><a href="#cb12-97" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [14] even more branch registers</span></span>
+<span id="cb12-98"><a href="#cb12-98" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>b6<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>br<span class="op">[</span><span class="dv">6</span><span class="op">]);</span></span>
+<span id="cb12-99"><a href="#cb12-99" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>b7<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>br<span class="op">[</span><span class="dv">7</span><span class="op">]);</span></span>
+<span id="cb12-100"><a href="#cb12-100" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-101"><a href="#cb12-101" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* fr2-fr5 */</span></span>
+<span id="cb12-102"><a href="#cb12-102" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [15] floating point registers</span></span>
+<span id="cb12-103"><a href="#cb12-103" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">2</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">6</span><span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb12-104"><a href="#cb12-104" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>unw_get_fr<span class="op">(&amp;</span>info<span class="op">,</span> i<span class="op">,</span> <span class="op">&amp;</span>fpval<span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-105"><a href="#cb12-105" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-106"><a href="#cb12-106" aria-hidden="true" tabindex="-1"></a>            retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>fr<span class="op">[</span>i<span class="op">],</span> <span class="op">&amp;</span>fpval<span class="op">,</span> <span class="kw">sizeof</span> <span class="op">(</span>fpval<span class="op">));</span></span>
+<span id="cb12-107"><a href="#cb12-107" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-108"><a href="#cb12-108" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-109"><a href="#cb12-109" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* fr6-fr11 */</span></span>
+<span id="cb12-110"><a href="#cb12-110" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [16] more floating point registers</span></span>
+<span id="cb12-111"><a href="#cb12-111" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>fr<span class="op">[</span><span class="dv">6</span><span class="op">],</span> <span class="op">&amp;</span>pt<span class="op">-&gt;</span>f6<span class="op">,</span></span>
+<span id="cb12-112"><a href="#cb12-112" aria-hidden="true" tabindex="-1"></a>                             <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> ia64_fpreg<span class="op">)</span> <span class="op">*</span> <span class="dv">6</span><span class="op">);</span></span>
+<span id="cb12-113"><a href="#cb12-113" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-114"><a href="#cb12-114" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* fp scratch regs(12-15) */</span></span>
+<span id="cb12-115"><a href="#cb12-115" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [17] more floating point registers</span></span>
+<span id="cb12-116"><a href="#cb12-116" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>fr<span class="op">[</span><span class="dv">12</span><span class="op">],</span> <span class="op">&amp;</span>sw<span class="op">-&gt;</span>f12<span class="op">,</span></span>
+<span id="cb12-117"><a href="#cb12-117" aria-hidden="true" tabindex="-1"></a>                             <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> ia64_fpreg<span class="op">)</span> <span class="op">*</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb12-118"><a href="#cb12-118" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-119"><a href="#cb12-119" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* fr16-fr31 */</span></span>
+<span id="cb12-120"><a href="#cb12-120" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [18] even more floating point registers</span></span>
+<span id="cb12-121"><a href="#cb12-121" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">16</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">32</span><span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb12-122"><a href="#cb12-122" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>unw_get_fr<span class="op">(&amp;</span>info<span class="op">,</span> i<span class="op">,</span> <span class="op">&amp;</span>fpval<span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-123"><a href="#cb12-123" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">return</span> <span class="op">-</span>EIO<span class="op">;</span></span>
+<span id="cb12-124"><a href="#cb12-124" aria-hidden="true" tabindex="-1"></a>            retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>fr<span class="op">[</span>i<span class="op">],</span> <span class="op">&amp;</span>fpval<span class="op">,</span> <span class="kw">sizeof</span> <span class="op">(</span>fpval<span class="op">));</span></span>
+<span id="cb12-125"><a href="#cb12-125" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-126"><a href="#cb12-126" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-127"><a href="#cb12-127" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* fph */</span></span>
+<span id="cb12-128"><a href="#cb12-128" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [19] rest of floating point registers</span></span>
+<span id="cb12-129"><a href="#cb12-129" aria-hidden="true" tabindex="-1"></a>    ia64_flush_fph<span class="op">(</span>child<span class="op">);</span></span>
+<span id="cb12-130"><a href="#cb12-130" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __copy_to_user<span class="op">(&amp;</span>ppr<span class="op">-&gt;</span>fr<span class="op">[</span><span class="dv">32</span><span class="op">],</span> <span class="op">&amp;</span>child<span class="op">-&gt;</span>thread<span class="op">.</span>fph<span class="op">,</span></span>
+<span id="cb12-131"><a href="#cb12-131" aria-hidden="true" tabindex="-1"></a>                             <span class="kw">sizeof</span><span class="op">(</span>ppr<span class="op">-&gt;</span>fr<span class="op">[</span><span class="dv">32</span><span class="op">])</span> <span class="op">*</span> <span class="dv">96</span><span class="op">);</span></span>
+<span id="cb12-132"><a href="#cb12-132" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-133"><a href="#cb12-133" aria-hidden="true" tabindex="-1"></a>    <span class="co">/*  preds */</span></span>
+<span id="cb12-134"><a href="#cb12-134" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [20] predicate registers</span></span>
+<span id="cb12-135"><a href="#cb12-135" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>pt<span class="op">-&gt;</span>pr<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>pr<span class="op">);</span></span>
+<span id="cb12-136"><a href="#cb12-136" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-137"><a href="#cb12-137" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* nat bits */</span></span>
+<span id="cb12-138"><a href="#cb12-138" aria-hidden="true" tabindex="-1"></a>    <span class="co">// [20] NaT status registers</span></span>
+<span id="cb12-139"><a href="#cb12-139" aria-hidden="true" tabindex="-1"></a>    retval <span class="op">|=</span> __put_user<span class="op">(</span>nat_bits<span class="op">,</span> <span class="op">&amp;</span>ppr<span class="op">-&gt;</span>nat<span class="op">);</span></span>
+<span id="cb12-140"><a href="#cb12-140" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-141"><a href="#cb12-141" aria-hidden="true" tabindex="-1"></a>    ret <span class="op">=</span> retval <span class="op">?</span> <span class="op">-</span>EIO <span class="op">:</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb12-142"><a href="#cb12-142" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ret<span class="op">;</span></span>
+<span id="cb12-143"><a href="#cb12-143" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>It’s a huge function. Be afraid not! It has two main parts:</p>
+<ul>
+<li>extraction of register values using <strong>unw_unwind_to_user()</strong></li>
+<li>copying extracted values to caller’s userspace using
+<strong>__put_user()</strong> and <strong>__copy_to_user()</strong> helpers.</li>
+</ul>
+<p>Those two are a analogous of <strong>x86_64</strong>’s
+<strong>copy_regset_to_user()</strong> implementation.</p>
+<p><strong>Quiz answer</strong>: surprisingly it’s case <strong>[4]</strong>: <strong>EIO</strong>
+popped up due to a failure in <strong>unw_unwind_to_user()</strong> call.
+Or not so surprisingly given it’s The Function to fetch
+register values from somewhere.</p>
+<p>Let’s check where register contents are hiding on <strong>ia64</strong>.
+Here goes <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1970">unw_unwind_to_user() definition</a>:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>unw_unwind_to_user <span class="op">(</span><span class="kw">struct</span> unw_frame_info <span class="op">*</span>info<span class="op">)</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">long</span> ip<span class="op">,</span> sp<span class="op">,</span> pr <span class="op">=</span> info<span class="op">-&gt;</span>pr<span class="op">;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">do</span> <span class="op">{</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>                unw_get_sp<span class="op">(</span>info<span class="op">,</span> <span class="op">&amp;</span>sp<span class="op">);</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="op">((</span><span class="dt">long</span><span class="op">)((</span><span class="dt">unsigned</span> <span class="dt">long</span><span class="op">)</span>info<span class="op">-&gt;</span>task <span class="op">+</span> IA64_STK_OFFSET <span class="op">-</span> sp<span class="op">)</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>                    <span class="op">&lt;</span> IA64_PT_REGS_SIZE<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>                        UNW_DPRINT<span class="op">(</span><span class="dv">0</span><span class="op">,</span> <span class="st">&quot;unwind.%s: ran off the top of the kernel stack</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>                                   __func__<span class="op">);</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>                        <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="op">(</span>unw_is_intr_frame<span class="op">(</span>info<span class="op">)</span> <span class="op">&amp;&amp;</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>                    <span class="op">(</span>pr <span class="op">&amp;</span> <span class="op">(</span><span class="dv">1</span><span class="bu">UL</span> <span class="op">&lt;&lt;</span> PRED_USER_STACK<span class="op">)))</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>                        <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="op">(</span>unw_get_pr <span class="op">(</span>info<span class="op">,</span> <span class="op">&amp;</span>pr<span class="op">)</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>                        unw_get_rp<span class="op">(</span>info<span class="op">,</span> <span class="op">&amp;</span>ip<span class="op">);</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>                        UNW_DPRINT<span class="op">(</span><span class="dv">0</span><span class="op">,</span> <span class="st">&quot;unwind.%s: failed to read &quot;</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>                                   <span class="st">&quot;predicate register (ip=0x%lx)</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>                                __func__<span class="op">,</span> ip<span class="op">);</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>                        <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">while</span> <span class="op">(</span>unw_unwind<span class="op">(</span>info<span class="op">)</span> <span class="op">&gt;=</span> <span class="dv">0</span><span class="op">);</span></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>        unw_get_ip<span class="op">(</span>info<span class="op">,</span> <span class="op">&amp;</span>ip<span class="op">);</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>        UNW_DPRINT<span class="op">(</span><span class="dv">0</span><span class="op">,</span> <span class="st">&quot;unwind.%s: failed to unwind to user-level (ip=0x%lx)</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a>                   __func__<span class="op">,</span> ip<span class="op">);</span></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a>EXPORT_SYMBOL<span class="op">(</span>unw_unwind_to_user<span class="op">);</span></span></code></pre></div>
+<p>The code above is more complicated than on <strong>x86_64</strong>. How is
+it supposed to work?</p>
+<p>For efficiency reasons syscall interface (and even interrupt
+handling interface) on <strong>ia64</strong> looks a lot more like normal
+function call. This means that <strong>linux</strong> does not store
+all general registers to a separate <strong>struct pt_regs</strong> backup
+area for each task switch.</p>
+<p>Let’s peek at interrupt handling entry for completeness.</p>
+<p><strong>ia64</strong> uses <strong>interrupt</strong> entrypoint to enter the kernel
+at <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/ivt.S?h=v4.18-rc7#n878">ENTRY(interrupt)</a>:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span><span class="op">(</span>interrupt<span class="op">)</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    /* interrupt handler has become too big to fit this area<span class="op">.</span> <span class="op">*/</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>sptk<span class="op">.</span>many __interrupt</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="pp">END</span><span class="op">(</span>interrupt<span class="op">)</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>// ...</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span><span class="op">(</span>__interrupt<span class="op">)</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    DBG_FAULT<span class="op">(</span><span class="dv">12</span><span class="op">)</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">mov</span> r31<span class="op">=</span>pr                  <span class="op">//</span> prepare to save predicates</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>    SAVE_MIN_WITH_COVER         <span class="op">//</span> uses r31<span class="co">; defines r2 and r3</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    SSM_PSR_IC_AND_DEFAULT_BITS_AND_SRLZ_I<span class="op">(</span>r3<span class="op">,</span> <span class="kw">r14</span><span class="op">)</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>                                // ensure everybody knows psr<span class="op">.</span>ic is back on</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>    adds r3<span class="op">=</span><span class="dv">8</span><span class="op">,</span>r2                <span class="op">//</span> set up second base pointer for SAVE_REST</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>    SAVE_REST</span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>    MCA_RECOVER_RANGE<span class="op">(</span>interrupt<span class="op">)</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>    alloc <span class="kw">r14</span><span class="op">=</span>ar<span class="op">.</span>pfs<span class="op">,</span><span class="dv">0</span><span class="op">,</span><span class="dv">0</span><span class="op">,</span><span class="dv">2</span><span class="op">,</span><span class="dv">0</span> <span class="op">//</span> must be first in an insn group</span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    MOV_FROM_IVR<span class="op">(</span>out0<span class="op">,</span> <span class="kw">r8</span><span class="op">)</span>        <span class="op">//</span> pass cr<span class="op">.</span>ivr as first arg</span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> out1<span class="op">=</span><span class="dv">16</span><span class="op">,</span><span class="kw">sp</span>                <span class="op">//</span> pass pointer to pt_regs as second arg</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>    srlz<span class="op">.</span>d                        <span class="op">//</span> make sure we see the effect of cr<span class="op">.</span>ivr</span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r14</span><span class="op">=</span>ia64_leave_kernel</span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>    <span class="bu">mov</span> <span class="dt">rp</span><span class="op">=</span><span class="kw">r14</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>call<span class="op">.</span>sptk<span class="op">.</span>many b6<span class="op">=</span>ia64_handle_irq</span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a><span class="pp">END</span><span class="op">(</span>__interrupt<span class="op">)</span></span></code></pre></div>
+<p>The code above handles interrupts as:</p>
+<ul>
+<li><strong>SAVE_MIN_WITH_COVER</strong> sets kernel stack (<strong>r12</strong>), gp
+(<strong>r1</strong>) and so on</li>
+<li><strong>SAVE_REST</strong> stores rest of registers <strong>r2</strong> to <strong>r31</strong> but
+leaves <strong>r32</strong> to <strong>r127</strong> be managed by <strong>RSE</strong> (register
+stack engine) like normal function call would.</li>
+<li>Hands off control to C code in <strong>ia64_handle_irq</strong>.</li>
+</ul>
+<p>All the above means that in order to get register <strong>r32</strong>
+or similar we would need to perform stack kernel unwinding
+down to the userspace boundary and read register values from
+<strong>RSE</strong> memory area (backing store).</p>
+<h1 id="into-the-rabbit-hole">Into the rabbit hole</h1>
+<p>Back to our unwinder failure.</p>
+<p>Our case is not very complicated as tracee is stopped at system
+call boundary and there is not too much to unwind. How one would
+know where user boundary starts? <strong>linux</strong> looks at return
+instruction pointer in every stack frame and checks if it’s return
+address still points to kernel address space.</p>
+<p>Unwinding failure seemingly happens in depths of
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1883">unw_unwind(info, &amp;ip)</a>.
+From there
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1834">find_save_locs(info);</a>
+is called. <strong>find_save_locs()</strong> lazily builds or runs an
+unwind script. The <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1714">run_script()</a>
+is a small bytecode interpter of 11 instruction types.</p>
+<p>If the above does not make sense to you it’s fine. It did not
+make sense to me either.</p>
+<p>To get more information from unwinder I enabled debugging
+output for unwinder by adding <strong>#define UNW_DEBUG</strong>:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/unwind.c</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/unwind.c</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    @@ -56,4 +56,6 @@</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a> #define UNW_STATS      0       /* WARNING: this disabled interrupts for long time-spans!! */</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="va">+#define UNW_DEBUG 1</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a> #ifdef UNW_DEBUG</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>   static unsigned int unw_debug_level = UNW_DEBUG;</span></code></pre></div>
+<p>I ran <strong>strace</strong> again:</p>
+<pre class><code>ia64 # strace -v -d ls
+strace: ptrace_setoptions = 0x51
+unwind.build_script: no unwind info for ip=0xa00000010001c1a0 (prev ip=0x0)
+unwind.run_script: no state-&gt;pt, dst=18, val=136
+unwind.unw_unwind: failed to locate return link (ip=0xa00000010001c1a0)!
+unwind.unw_unwind_to_user: failed to unwind to user-level (ip=0xa00000010001c1a0)</code></pre>
+<p><strong>build_script()</strong> couldn’t resolve current <strong>ip=0xa00000010001c1a0</strong>
+address. Why? No idea! I added <strong>printk()</strong> around the place where I
+expected a match:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/unwind.c</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/unwind.c</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1562,6 +1564,8 @@ build_script (struct unw_frame_info *info)</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>        prev = NULL;</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>        for (table = unw.tables; table; table = table-&gt;next) {</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="va">+               UNW_DPRINT(0, &quot;unwind.%s: looking up ip=%#lx in [start=%#lx,end=%#lx)\n&quot;,</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a><span class="va">+                          __func__, ip, table-&gt;start, table-&gt;end);</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>                if (ip &gt;= table-&gt;start &amp;&amp; ip &lt; table-&gt;end) {</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>                        /*</span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>                         * Leave the kernel unwind table at the very front,</span></code></pre></div>
+<p>I ran <strong>strace</strong> again:</p>
+<pre class><code>ia64 # strace -v -d ls
+strace: ptrace_setoptions = 0x51
+unwind.build_script: looking up ip=0xa00000010001c1a0 in [start=0xa000000100009240,end=0xa000000100000000)
+unwind.build_script: looking up ip=0xa00000010001c1a0 in [start=0xa000000000040720,end=0xa000000000040ad0)
+unwind.build_script: no unwind info for ip=0xa00000010001c1a0 (prev ip=0x0)</code></pre>
+<p>Can you spot the problem? Look at this range:
+<strong>[start=0xa000000100009240,end=0xa000000100000000)</strong>.
+It’s <strong>end</strong> is less than <strong>start</strong>. This renders
+<strong>table-&gt;start &amp;&amp; ip &lt; table-&gt;end</strong> condition to be always
+false. How could it happen?</p>
+<p>It means the <strong>ptrace()</strong> itself is not at fault here but
+a victim of already corrupted <strong>table-&gt;end</strong> value.</p>
+<h1 id="going-deeper">Going deeper</h1>
+<p>To find <strong>table-&gt;end</strong> corruption I checked if <strong>table</strong> was
+populated correctly. It is done by a simple function
+<strong>init_unwind_table()</strong>:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>init_unwind_table <span class="op">(</span><span class="kw">struct</span> unw_table <span class="op">*</span>table<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> segment_base<span class="op">,</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>                   <span class="dt">unsigned</span> <span class="dt">long</span> gp<span class="op">,</span> <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>table_start<span class="op">,</span> <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>table_end<span class="op">)</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="kw">struct</span> unw_table_entry <span class="op">*</span>start <span class="op">=</span> table_start<span class="op">,</span> <span class="op">*</span>end <span class="op">=</span> table_end<span class="op">;</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>name <span class="op">=</span> name<span class="op">;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>segment_base <span class="op">=</span> segment_base<span class="op">;</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>gp <span class="op">=</span> gp<span class="op">;</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>start <span class="op">=</span> segment_base <span class="op">+</span> start<span class="op">[</span><span class="dv">0</span><span class="op">].</span>start_offset<span class="op">;</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>end <span class="op">=</span> segment_base <span class="op">+</span> end<span class="op">[-</span><span class="dv">1</span><span class="op">].</span>end_offset<span class="op">;</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>array <span class="op">=</span> start<span class="op">;</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>length <span class="op">=</span> end <span class="op">-</span> start<span class="op">;</span></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Table construction happens in only a few places:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __init</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>unw_init <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">extern</span> <span class="dt">char</span> __gp<span class="op">[];</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">extern</span> <span class="dt">char</span> __start_unwind<span class="op">[],</span> __end_unwind<span class="op">[];</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Kernel's own unwind table</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    init_unwind_table<span class="op">(&amp;</span>unw<span class="op">.</span>kernel_table<span class="op">,</span> <span class="st">&quot;kernel&quot;</span><span class="op">,</span> KERNEL_START<span class="op">,</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span><span class="op">)</span> __gp<span class="op">,</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>        __start_unwind<span class="op">,</span> __end_unwind<span class="op">);</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>unw_add_unwind_table <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> segment_base<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> gp<span class="op">,</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>                      <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>table_start<span class="op">,</span> <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>table_end<span class="op">)</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>    init_unwind_table<span class="op">(</span>table<span class="op">,</span> name<span class="op">,</span> segment_base<span class="op">,</span> gp<span class="op">,</span> table_start<span class="op">,</span> table_end<span class="op">);</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> __init</span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>create_gate_table <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb20-23"><a href="#cb20-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb20-24"><a href="#cb20-24" aria-hidden="true" tabindex="-1"></a>    unw_add_unwind_table<span class="op">(</span><span class="st">&quot;linux-gate.so&quot;</span><span class="op">,</span> segbase<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> start<span class="op">,</span> end<span class="op">);</span></span>
+<span id="cb20-25"><a href="#cb20-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb20-26"><a href="#cb20-26" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb20-27"><a href="#cb20-27" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
+<span id="cb20-28"><a href="#cb20-28" aria-hidden="true" tabindex="-1"></a>register_unwind_table <span class="op">(</span><span class="kw">struct</span> module <span class="op">*</span>mod<span class="op">)</span></span>
+<span id="cb20-29"><a href="#cb20-29" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb20-30"><a href="#cb20-30" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb20-31"><a href="#cb20-31" aria-hidden="true" tabindex="-1"></a>    mod<span class="op">-&gt;</span>arch<span class="op">.</span>core_unw_table <span class="op">=</span> unw_add_unwind_table<span class="op">(</span>mod<span class="op">-&gt;</span>name<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> mod<span class="op">-&gt;</span>arch<span class="op">.</span>gp<span class="op">,</span></span>
+<span id="cb20-32"><a href="#cb20-32" aria-hidden="true" tabindex="-1"></a>                                                    core<span class="op">,</span> core <span class="op">+</span> num_core<span class="op">);</span></span>
+<span id="cb20-33"><a href="#cb20-33" aria-hidden="true" tabindex="-1"></a>    mod<span class="op">-&gt;</span>arch<span class="op">.</span>init_unw_table <span class="op">=</span> unw_add_unwind_table<span class="op">(</span>mod<span class="op">-&gt;</span>name<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> mod<span class="op">-&gt;</span>arch<span class="op">.</span>gp<span class="op">,</span></span>
+<span id="cb20-34"><a href="#cb20-34" aria-hidden="true" tabindex="-1"></a>                                                    init<span class="op">,</span> init <span class="op">+</span> num_init<span class="op">);</span></span>
+<span id="cb20-35"><a href="#cb20-35" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here we see unwind tables created for:</p>
+<ul>
+<li>one table for kernel itself</li>
+<li>one table <strong>linux-gate.so</strong> (equivalent of <strong>linux-vdso.so.1</strong> on <strong>x86_64</strong>)</li>
+<li>one table for each kernel module</li>
+</ul>
+<h1 id="arrays-are-hard">Arrays are hard</h1>
+<p>Nothing complicated, right? Actually <strong>gcc</strong> fails to generate
+correct code for <strong>end[-1].end_offset</strong> expression! It happens
+to be a rare corner case:</p>
+<p>Both <strong>__start_unwind</strong> and <strong>__end_unwind</strong> are defined in
+linker script as external symbols:</p>
+<pre class><code># somewhere in arch/ia64/kernel/vmlinux.lds.S
+# ...
+SECTIONS {
+    # ...
+    .IA_64.unwind : AT(ADDR(.IA_64.unwind) - LOAD_OFFSET) {
+            __start_unwind = .;
+            *(.IA_64.unwind*)
+            __end_unwind = .;
+    } :code :unwind
+    # ...</code></pre>
+<p>Here is how C code defines <strong>__end_unwind</strong>:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __end_unwind<span class="op">[];</span></span></code></pre></div>
+<p>If we manually inline all the above into <strong>unw_init</strong> we will
+get the following:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __init</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>unw_init <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">extern</span> <span class="dt">char</span> __end_unwind<span class="op">[];</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>end <span class="op">=</span> segment_base <span class="op">+</span> <span class="op">((</span>unw_table_entry <span class="op">*)</span>__end_unwind<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>end_offset<span class="op">;</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>If <strong>__end_unwind[]</strong> would be an array defined in <strong>C</strong> then
+negative index <strong>-1</strong> would cause undefned behaviour.</p>
+<p>On the practical side it’s just pointer arithmetics. Is there
+anything special about subtracting a few bytes from an
+arbitrary address and then dereference it?</p>
+<p>Let’s check what kind of assembly <strong>gcc</strong> actually generates.</p>
+<h1 id="compiler-mysteries">Compiler mysteries</h1>
+<p>Still reading? Great! You got to most exciting part of this
+article!</p>
+<p>Let’s look at simpler code first. And then we will grow it to
+be closer to our initial example.</p>
+<p>Let’s start from global array with a negative index:</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">long</span> __some_table<span class="op">[];</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> __some_table<span class="op">[-</span><span class="dv">1</span><span class="op">];</span> <span class="op">}</span></span></code></pre></div>
+<p>Compilation result (I’ll strip irrelevant bits and annotations):</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    .text</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    .global end<span class="op">#</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">proc</span> end<span class="op">#</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a><span class="fu">end:</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    addl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">l</span>toffx<span class="op">(</span>__some_table<span class="op">#),</span> r1</span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    ld8<span class="op">.</span>mov <span class="kw">r14</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">],</span> __some_table<span class="op">#</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    adds <span class="kw">r14</span> <span class="op">=</span> <span class="op">-</span><span class="dv">8</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span>
+<span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    .endp end<span class="op">#</span></span></code></pre></div>
+<p>Here two things happen:</p>
+<ul>
+<li><strong>__some_table</strong> address is read from <strong>GOT</strong> (<strong>r1</strong> is
+rougly <strong>GOT</strong> register) by performing an <strong>ld8.mov</strong> (a
+form of 8-byte load) into <strong>r14</strong>.</li>
+<li>final value is loaded at address <strong>r14 - 18</strong> using <strong>ld8</strong> (also a 8-byte load).</li>
+</ul>
+<p>Simple!</p>
+<p>We can simplify the example by avoiding <strong>GOT</strong> indirection.
+The typical way to do it is to use
+<strong>__attribute__((visibility(“hidden”)))</strong> hint:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">long</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)));</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> __some_table<span class="op">[-</span><span class="dv">1</span><span class="op">];</span> <span class="op">}</span></span></code></pre></div>
+<p>Assembly code:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    .text</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    .global end<span class="op">#</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">proc</span> end<span class="op">#</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="fu">end:</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>    adds <span class="kw">r14</span> <span class="op">=</span> <span class="op">-</span><span class="dv">8</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
+<p>Here <strong>movl r14 = @gprel(__some_table#)</strong> is a link-time
+64-bit constant: an offset of <strong>__some_table</strong> array from
+<strong>r1</strong> value. Only a single 8-byte load happens at address
+<strong>@gprel(__some_table#) + r1 - 8</strong>.</p>
+<p>Also straightforward.</p>
+<p>Now let’s change the alignment of our table from <strong>long</strong>
+(8 bytes on <strong>ia64</strong>) to <strong>char</strong> (1 byte):</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)));</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="dt">long</span><span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">];</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb29"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>    .text</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    .global end<span class="op">#</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">proc</span> end<span class="op">#</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a><span class="fu">end:</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a>    adds r19 <span class="op">=</span> <span class="op">-</span><span class="dv">7</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>    adds r16 <span class="op">=</span> <span class="op">-</span><span class="dv">8</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>    adds r18 <span class="op">=</span> <span class="op">-</span><span class="dv">6</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>    adds r17 <span class="op">=</span> <span class="op">-</span><span class="dv">5</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>    adds r21 <span class="op">=</span> <span class="op">-</span><span class="dv">4</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>    adds <span class="kw">r15</span> <span class="op">=</span> <span class="op">-</span><span class="dv">3</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a>    ld1 r19 <span class="op">=</span> <span class="op">[</span>r19<span class="op">]</span></span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a>    adds r20 <span class="op">=</span> <span class="op">-</span><span class="dv">2</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a>    adds <span class="kw">r14</span> <span class="op">=</span> <span class="op">-</span><span class="dv">1</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a>    ld1 r16 <span class="op">=</span> <span class="op">[</span>r16<span class="op">]</span></span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a>    ld1 r18 <span class="op">=</span> <span class="op">[</span>r18<span class="op">]</span></span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> r19 <span class="op">=</span> r19<span class="op">,</span> <span class="dv">8</span></span>
+<span id="cb29-24"><a href="#cb29-24" aria-hidden="true" tabindex="-1"></a>    ld1 r17 <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb29-25"><a href="#cb29-25" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-26"><a href="#cb29-26" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> r19 <span class="op">=</span> r16<span class="op">,</span> r19</span>
+<span id="cb29-27"><a href="#cb29-27" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> r18 <span class="op">=</span> r18<span class="op">,</span> <span class="dv">16</span></span>
+<span id="cb29-28"><a href="#cb29-28" aria-hidden="true" tabindex="-1"></a>    ld1 r16 <span class="op">=</span> <span class="op">[</span>r21<span class="op">]</span></span>
+<span id="cb29-29"><a href="#cb29-29" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r15</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r15</span><span class="op">]</span></span>
+<span id="cb29-30"><a href="#cb29-30" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> r17 <span class="op">=</span> r17<span class="op">,</span> <span class="dv">24</span></span>
+<span id="cb29-31"><a href="#cb29-31" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-32"><a href="#cb29-32" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> r18 <span class="op">=</span> r19<span class="op">,</span> r18</span>
+<span id="cb29-33"><a href="#cb29-33" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> r16 <span class="op">=</span> r16<span class="op">,</span> <span class="dv">32</span></span>
+<span id="cb29-34"><a href="#cb29-34" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span>r20<span class="op">]</span></span>
+<span id="cb29-35"><a href="#cb29-35" aria-hidden="true" tabindex="-1"></a>    ld1 r19 <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb29-36"><a href="#cb29-36" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="dv">40</span></span>
+<span id="cb29-37"><a href="#cb29-37" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-38"><a href="#cb29-38" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> r17 <span class="op">=</span> r18<span class="op">,</span> r17</span>
+<span id="cb29-39"><a href="#cb29-39" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r14</span> <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> <span class="dv">48</span></span>
+<span id="cb29-40"><a href="#cb29-40" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r8</span> <span class="op">=</span> r19<span class="op">,</span> <span class="dv">56</span></span>
+<span id="cb29-41"><a href="#cb29-41" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-42"><a href="#cb29-42" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> r16 <span class="op">=</span> r17<span class="op">,</span> r16</span>
+<span id="cb29-43"><a href="#cb29-43" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-44"><a href="#cb29-44" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r15</span> <span class="op">=</span> r16<span class="op">,</span> <span class="kw">r15</span></span>
+<span id="cb29-45"><a href="#cb29-45" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-46"><a href="#cb29-46" aria-hidden="true" tabindex="-1"></a>    .mmi</span>
+<span id="cb29-47"><a href="#cb29-47" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r14</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb29-48"><a href="#cb29-48" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb29-49"><a href="#cb29-49" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="kw">r8</span></span>
+<span id="cb29-50"><a href="#cb29-50" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span>
+<span id="cb29-51"><a href="#cb29-51" aria-hidden="true" tabindex="-1"></a>    .endp end<span class="op">#</span></span></code></pre></div>
+<p>This is quite a blowup in code size! Here instead of one
+8-byte <strong>ld8</strong> load compiler generated 8 1-byte <strong>ld1</strong>
+loads to assemble valid value with the help of arithmetic
+<strong>shift</strong>s and <strong>or</strong>s.</p>
+<p>Note how each individual byte gets it’s personal register to
+keep an address and result of the load.</p>
+<p>Here is the subset of above instructions to handle byte offset
+<strong>-5</strong>:</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">; point r14 at __some_table:</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a><span class="co">; read one byte and shift it</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="co">; into destination byte position:</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>adds r17 <span class="op">=</span> <span class="op">-</span><span class="dv">5</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>ld1 r17 <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a><span class="bu">shl</span> r17 <span class="op">=</span> r17<span class="op">,</span> <span class="dv">24</span></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span> r16 <span class="op">=</span> r17<span class="op">,</span> r16</span></code></pre></div>
+<p>This code, while ugly and inefficient, is still correct.</p>
+<p>Now let’s wrap our 8-byte value in a <strong>struct</strong> to make
+example closer to original unwinder’s table registration code:</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)));</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span> <span class="dt">long</span> v<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="kw">struct</span> s <span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>v<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<p><strong>Quiz time</strong>: do you think generated code will be exactly the same as
+in previous example or somehow different?</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    .text</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    .global end<span class="op">#</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">proc</span> end<span class="op">#</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="fu">end:</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>    movl r16 <span class="op">=</span> <span class="bn">0x1ffffffffffffff9</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r15</span> <span class="op">=</span> <span class="bn">0x1ffffffffffffff8</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>    movl r17 <span class="op">=</span> <span class="bn">0x1ffffffffffffffa</span></span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="kw">r15</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> r17 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> r16 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r16</span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-17"><a href="#cb32-17" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r15</span><span class="op">]</span></span>
+<span id="cb32-18"><a href="#cb32-18" aria-hidden="true" tabindex="-1"></a>    ld1 r16 <span class="op">=</span> <span class="op">[</span>r16<span class="op">]</span></span>
+<span id="cb32-19"><a href="#cb32-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-20"><a href="#cb32-20" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r15</span> <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb32-21"><a href="#cb32-21" aria-hidden="true" tabindex="-1"></a>    movl r17 <span class="op">=</span> <span class="bn">0x1ffffffffffffffb</span></span>
+<span id="cb32-22"><a href="#cb32-22" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> r16 <span class="op">=</span> r16<span class="op">,</span> <span class="dv">8</span></span>
+<span id="cb32-23"><a href="#cb32-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-24"><a href="#cb32-24" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> r17 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb32-25"><a href="#cb32-25" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> r16 <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> r16</span>
+<span id="cb32-26"><a href="#cb32-26" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="dv">16</span></span>
+<span id="cb32-27"><a href="#cb32-27" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-28"><a href="#cb32-28" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb32-29"><a href="#cb32-29" aria-hidden="true" tabindex="-1"></a>    movl r17 <span class="op">=</span> <span class="bn">0x1ffffffffffffffc</span></span>
+<span id="cb32-30"><a href="#cb32-30" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r15</span> <span class="op">=</span> r16<span class="op">,</span> <span class="kw">r15</span></span>
+<span id="cb32-31"><a href="#cb32-31" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-32"><a href="#cb32-32" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> r17 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb32-33"><a href="#cb32-33" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> <span class="dv">24</span></span>
+<span id="cb32-34"><a href="#cb32-34" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-35"><a href="#cb32-35" aria-hidden="true" tabindex="-1"></a>    ld1 r16 <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb32-36"><a href="#cb32-36" aria-hidden="true" tabindex="-1"></a>    movl r17 <span class="op">=</span> <span class="bn">0x1ffffffffffffffd</span></span>
+<span id="cb32-37"><a href="#cb32-37" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r8</span></span>
+<span id="cb32-38"><a href="#cb32-38" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-39"><a href="#cb32-39" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> r17 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb32-40"><a href="#cb32-40" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> r16 <span class="op">=</span> r16<span class="op">,</span> <span class="dv">32</span></span>
+<span id="cb32-41"><a href="#cb32-41" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-42"><a href="#cb32-42" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r15</span> <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb32-43"><a href="#cb32-43" aria-hidden="true" tabindex="-1"></a>    movl r17 <span class="op">=</span> <span class="bn">0x1ffffffffffffffe</span></span>
+<span id="cb32-44"><a href="#cb32-44" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> r16 <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> r16</span>
+<span id="cb32-45"><a href="#cb32-45" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-46"><a href="#cb32-46" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> r17 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb32-47"><a href="#cb32-47" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="dv">40</span></span>
+<span id="cb32-48"><a href="#cb32-48" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-49"><a href="#cb32-49" aria-hidden="true" tabindex="-1"></a>    ld1 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb32-50"><a href="#cb32-50" aria-hidden="true" tabindex="-1"></a>    movl r17 <span class="op">=</span> <span class="bn">0x1fffffffffffffff</span></span>
+<span id="cb32-51"><a href="#cb32-51" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r15</span> <span class="op">=</span> r16<span class="op">,</span> <span class="kw">r15</span></span>
+<span id="cb32-52"><a href="#cb32-52" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-53"><a href="#cb32-53" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb32-54"><a href="#cb32-54" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> <span class="dv">48</span></span>
+<span id="cb32-55"><a href="#cb32-55" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-56"><a href="#cb32-56" aria-hidden="true" tabindex="-1"></a>    ld1 r16 <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb32-57"><a href="#cb32-57" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r8</span></span>
+<span id="cb32-58"><a href="#cb32-58" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-59"><a href="#cb32-59" aria-hidden="true" tabindex="-1"></a>    <span class="bu">shl</span> <span class="kw">r8</span> <span class="op">=</span> r16<span class="op">,</span> <span class="dv">56</span></span>
+<span id="cb32-60"><a href="#cb32-60" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb32-61"><a href="#cb32-61" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r8</span></span>
+<span id="cb32-62"><a href="#cb32-62" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span>
+<span id="cb32-63"><a href="#cb32-63" aria-hidden="true" tabindex="-1"></a>    .endp end<span class="op">#</span></span></code></pre></div>
+<p>The code is different from previous one! Seemingly not too much
+but there one suspicious detail: offsets now are very large.
+Let’s look at our <strong>-5</strong> example again:</p>
+<div class="sourceCode" id="cb33"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co">; point r14 at __some_table:</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a><span class="co">; read one byte and shift it</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="co">; into destination byte position:</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>movl r17 <span class="op">=</span> <span class="bn">0x1ffffffffffffffb</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span> r17 <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> r17</span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>ld1 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a><span class="bu">shl</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> <span class="dv">24</span></span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r8</span></span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span></code></pre></div>
+<p>The offset <strong>0x1ffffffffffffffb</strong> (2305843009213693947) used
+here is incorrect. It should have been <strong>0xfffffffffffffffb</strong>
+(-5).</p>
+<p>We encounter (arguably) a compiler bug known as
+<a href="https://gcc.gnu.org/PR84184">PR84184</a>. Upstream says struct
+handling is different enough from direct array dereferences
+to trick <strong>gcc</strong> into generating incorrect byte offsets.</p>
+<p>One day I’ll take a closer look at it to understand mechanics.</p>
+<p>Let’s explore one more example: what if we add bigger alignment
+to <strong>__some_table</strong> without changing it’s type?</p>
+<div class="sourceCode" id="cb34"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)))</span> __attribute<span class="op">((</span>aligned<span class="op">(</span><span class="dv">8</span><span class="op">)));</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span> <span class="dt">long</span> v<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="kw">struct</span> s <span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>v<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb35"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>    .text</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>    .global end<span class="op">#</span></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">proc</span> end<span class="op">#</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a><span class="fu">end:</span></span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>    adds <span class="kw">r14</span> <span class="op">=</span> <span class="op">-</span><span class="dv">8</span><span class="op">,</span> <span class="kw">r14</span></span>
+<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
+<span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
+<p>Exactly as our original clean and fast example: single aligned
+load at offset <strong>-8</strong>.</p>
+<p>Now we have a simple workaround!</p>
+<p>What if we pass our array in a register instead of using a
+global reference? (effectively uninlining array address)</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span> <span class="dt">long</span> v<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">char</span> <span class="op">*</span> __some_table<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="kw">struct</span> s <span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>v<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb37"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>    .text</span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>    .global end<span class="op">#</span></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">proc</span> end<span class="op">#</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a><span class="fu">end:</span></span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>    adds r32 <span class="op">=</span> <span class="op">-</span><span class="dv">8</span><span class="op">,</span> r32</span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span>r32<span class="op">]</span></span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
+<p>Also works! Note how compiler promotes alignment after a type
+cast from 1 to 8.</p>
+<p>In this case a few things happen at the same time to trigger
+bad code generation:</p>
+<ul>
+<li>gcc infers that <strong>char __end_unwind[]</strong> is an array literal
+with alignment 1</li>
+<li>gcc inlines <strong>__end_unwind</strong> into <strong>init_unwind_table</strong> and
+demotes alignment from 8 (<strong>const struct unw_table_entry</strong>) to 1 (<strong>extern char []</strong>)</li>
+<li>gcc assumes that <strong>__end_unwind</strong> can’t have negative
+subscript and generates invalid (and inefficient) code</li>
+</ul>
+<h1 id="workarounds-aka-hacks-time">Workarounds (aka hacks) time!</h1>
+<p>We can workaround corner-case conditions above in a
+few different ways:</p>
+<ul>
+<li>[hack] forbid inlining of <strong>init_unwind_table()</strong>: <a href="https://lkml.org/lkml/2018/3/9/976">lkml patch v1</a></li>
+<li>[better fix] expose real alignment of <strong>__end_unwind</strong>:
+<a href="https://lkml.org/lkml/2018/2/2/914">lkml patch v2</a></li>
+</ul>
+<p>Fix is still not perfect as negative subscript it used. But at
+least the load is aligned.</p>
+<p>Note that <strong>void __init unw_init()</strong> is called early in kernel
+startup sequence even before console is initialized.</p>
+<p>This code generation bug causes either garbage read from some
+memory location or kernel crash trying to access unmapped
+memory.</p>
+<p>That is the <strong>strace</strong> breakage mechanics.</p>
+<h1 id="parting-words">Parting words</h1>
+<ul>
+<li>Task switch on <strong>x86_64</strong> and on <strong>ia64</strong> is fun :)</li>
+<li>On <strong>x86_64</strong> implementation of <strong>ptrace(PTRACE_GETREGS, …)</strong>
+is very straightforward: almost a memcpy from predefined
+location.</li>
+<li>On <strong>ia64</strong> <strong>ptrace(PTRACE_GETREGS, …)</strong> requires many
+moving parts:
+<ul>
+<li>call stack unwinder for kernel (involving linker
+scripts to define <strong>__end_unwind</strong> and <strong>__start_unwind</strong>)</li>
+<li>bytecode generator and bytecode interpreter to speedup
+unwinding for every <strong>ptrace()</strong> call</li>
+</ul></li>
+<li>Unaligned load of register-sized value is a tricky and fragile
+business</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on August  4, 2018 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
