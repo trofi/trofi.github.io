@@ -7,8 +7,152 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Wed, 01 Jun 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sat, 11 Jun 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>NixOS 22.05 release</title>
+    <link>http://trofi.github.io/posts/247-NixOS-22.05-release.html</link>
+    <description><![CDATA[<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: NixOS 22.05 release</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>NixOS 22.05 release</h1>
+
+            <p>Last month NixOS-22.05 release <a href="https://nixos.org/blog/announcements.html#nixos-22.05">came out</a>.
+If you never seent it you should give it a try: <a href="https://nixos.org/download.html#nixos-iso" class="uri">https://nixos.org/download.html#nixos-iso</a>.</p>
+<p>I took the release event as a good excude to share a few tips.</p>
+<h1 id="nicer-logs">Nicer logs</h1>
+<p>Nix is full of boring paths with long prefixes like
+<strong>/nix/store/xk0rdw0sj3ysnjyh90z85mlx3w0kab5s-coreutils-full-9.1/bin/ls</strong>.
+It’s a lot longer than <strong>/usr/bin/ls</strong>. But with all the noise it contains
+useful hint that <strong>ls</strong> comes from <strong>coreutils</strong> package.</p>
+<pre><code>$ ls -l /run/current-system/sw/bin/ls
+lrwxrwxrwx 9 root root 69 Jan  1  1970 /run/current-system/sw/bin/ls -&gt; /nix/store/xk0rdw0sj3ysnjyh90z85mlx3w0kab5s-coreutils-full-9.1/bin/ls</code></pre>
+<p>To save some space and keep useful detail I’m using <strong>~/bin/unnix</strong> one-liner:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sed</span> <span class="at">-r</span> <span class="st">'s@/nix/store/[0-9a-z]{32}-@/&lt;&lt;NIX&gt;&gt;/@g'</span></span></code></pre></div>
+<p>It leaves out hashes but not package names or versions:</p>
+<pre><code>$ ls -l /run/current-system/sw/bin/ls |&amp; unnix
+lrwxrwxrwx 9 root root 69 Jan  1  1970 /run/current-system/sw/bin/ls -&gt; /&lt;&lt;NIX&gt;&gt;/coreutils-full-9.1/bin/ls</code></pre>
+<p>I frequently use <strong>unnix</strong> to compare build logs from different environments.</p>
+<h1 id="running-binaries-from-arbitrary-nixpkgs-commits">Running binaries from arbitrary nixpkgs commits</h1>
+<p>Normally you can pull in a program in your environment by installing
+it. Or by running it directly:</p>
+<pre><code>$ nix run nixpkgs#re2c -- --version
+re2c 3.0</code></pre>
+<p>But sometimes it’s useful to run a program from a specific commit
+of a repository. Flake syntax allows you to do it as is:</p>
+<pre><code>$ nix run github:NixOS/nixpkgs/4a7f99d55d299453a9c2397f90b33d1120669775#re2c -- --version
+re2c 1.3</code></pre>
+<p>With GitHub’s synthetic branches you can even run tools right from yet unmerged
+PRs against <strong>nixpkgs</strong>:</p>
+<pre><code># Use firefox from (then) yet unmerged PR: https://github.com/NixOS/nixpkgs/pull/175618
+$ nix run github:NixOS/nixpkgs/pull/175618/merge#firefox</code></pre>
+<p>Be careful to review the commit first. You are running something that is not yet a
+part of <strong>nixpkgs</strong> proper.</p>
+<h1 id="pulling-cross-compiler-environments-with-pkgscross">Pulling cross-compiler environments with pkgsCross</h1>
+<p><strong>nixpkgs</strong> has a <strong>pkgsCross.*</strong> package prefix with a ton of cross-compilers available.
+It makes portability related work a breeze. We can pull the cross-compiler in with
+a simple <strong>nix develop</strong> run:</p>
+<pre><code>$ nix develop nixpkgs#pkgsCross.mingw32.re2c
+$ dev&gt;LANG=C i686-w64-mingw32-gcc -v |&amp; unnix
+Using built-in specs.
+COLLECT_GCC=/&lt;&lt;NIX&gt;&gt;/i686-w64-mingw32-stage-final-gcc-debug-10.3.0/bin/i686-w64-mingw32-gcc
+COLLECT_LTO_WRAPPER=/&lt;&lt;NIX&gt;&gt;/i686-w64-mingw32-stage-final-gcc-debug-10.3.0/libexec/gcc/i686-w64-mingw32/10.3.0/lto-wrapper
+Target: i686-w64-mingw32
+Configured with:
+Thread model: mcf
+Supported LTO compression algorithms: zlib
+gcc version 10.3.0 (GCC)</code></pre>
+<h1 id="mass-updates-for-maintained-packages">Mass updates for maintained packages</h1>
+<p>I have a bunch if local packages I occasionally update.
+<strong>nixpkgs</strong> has a script to update them automatically:</p>
+<pre><code># run from nixpkgs checkout:
+$ nix-shell maintainers/scripts/update.nix --argstr maintainer trofi --arg include-overlays true
+Going to be running update for following packages:
+ - CorsixTH-unstable-2022-05-23
+ - dwarffs-unstable-2022-03-06
+ - multitextor-unstable-2022-04-22
+ - seekwatcher-0.14
+ - ski-unstable-2022-04-18
+ - vcmi-unstable-2022-05-28
+
+Press Enter key to continue...
+
+Running update for:
+ - CorsixTH-unstable-2022-05-23: UPDATING ...
+ - dwarffs-unstable-2022-03-06: UPDATING ...
+ - multitextor-unstable-2022-04-22: UPDATING ...
+ - seekwatcher-0.14: UPDATING ...
+ - seekwatcher-0.14: DONE.
+ - ski-unstable-2022-04-18: UPDATING ...
+ - dwarffs-unstable-2022-03-06: DONE.
+ - vcmi-unstable-2022-05-28: UPDATING ...
+ - multitextor-unstable-2022-04-22: DONE.
+ - ski-unstable-2022-04-18: DONE.
+ - CorsixTH-unstable-2022-05-23: DONE.
+ - vcmi-unstable-2022-05-28: DONE.</code></pre>
+<p>Now all it takes is to build/run the packages to see if things still work.
+We got 2 updates ready to commit as is:</p>
+<pre><code>$ LANG=C git status
+On branch main
+Changes not staged for commit:
+  (use &quot;git add &lt;file&gt;...&quot; to update what will be committed)
+  (use &quot;git restore &lt;file&gt;...&quot; to discard changes in working directory)
+        modified:   corsix-th/default.nix
+        modified:   vcmi/default.nix
+
+$ nix build -f. corsix-th vcmi
+
+$ LANG=C ls -l | unnix
+...
+lrwxrwxrwx 1 slyfox users   72 Jun 11 19:06 result -&gt; /&lt;&lt;NIX&gt;&gt;/CorsixTH-unstable-2022-06-07
+lrwxrwxrwx 1 slyfox users   68 Jun 11 19:06 result-1 -&gt; /&lt;&lt;NIX&gt;&gt;/vcmi-unstable-2022-06-11
+
+$ ./result/bin/corsix-th
+$ ./result-1/bin/vcmiclient</code></pre>
+<p>Ready to be committed.</p>
+
+<div class="info">
+    Posted on June 11, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
+]]></description>
+    <pubDate>Sat, 11 Jun 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/247-NixOS-22.05-release.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>dropping disqus comments</title>
     <link>http://trofi.github.io/posts/246-dropping-disqus-comments.html</link>
     <description><![CDATA[<?xml version="1.0" encoding="UTF-8" ?>
@@ -9947,246 +10091,6 @@ require a fallback to C code or non-LTO build.</li>
 ]]></description>
     <pubDate>Tue, 19 May 2020 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/218-debugging-LTO-builds.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>mitigating bufferbloat</title>
-    <link>http://trofi.github.io/posts/217-mitigating%20bufferbloat.html</link>
-    <description><![CDATA[<?xml version="1.0" encoding="UTF-8" ?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
-    <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-        <title>trofi's blog: mitigating bufferbloat</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="header">
-            <a href="../">main :: IO ()</a>
-        </div>
-        <div id="navigation">
-            <a href="../">/root</a>
-            <a href="../archive.html">/archive</a>
-            <a href="../feed/atom.xml">/atom.xml</a>
-            <a href="../feed/rss.xml">/rss.xml</a>
-        </div>
-
-        <div id="content">
-            <h1>mitigating bufferbloat</h1>
-
-            <h1 id="tldr">Tl;DR</h1>
-<p>When I upload something large from my laptop my network latency increases
-from <strong>10 milliseconds</strong> up to <strong>2-4 seconds</strong>. That makes remote ssh, audio,
-video and even browsing quite a challenging task. I avoid latency increase
-and network congestion by aggressively throttling all my device with this
-simple command from
-<a href="https://www.bufferbloat.net/projects/codel/wiki/Cake/">CAKE howto</a>:</p>
-<pre class><code># tc qdisc del dev wl0 root
-# tc qdisc add dev wl0 root cake bandwidth 1mbit conservative</code></pre>
-<p>Done! Now I almost never notice latency increase even if I upload
-A Lot of stuff.</p>
-<h1 id="more-words">More words</h1>
-<p>If you are experiencing severe networking lags (<strong>10x</strong> latency increase)
-when network is congested then you probably experience a <a href="https://www.bufferbloat.net/projects/">bufferbloat effect</a>
-where networking devices keep your packets in their large software/hardware queues.</p>
-<p>These queues can hide anywhere: in your own networking card(!), in your
-wi-fi router, somewhere in the middle of The Internet.
-It is a bug in the implementation of those devices.</p>
-<p>Excessive buffering usually happens on a last mile of your device
-connected to <strong>ISP</strong>. <strong>ISP</strong>s usually have a lot more bandwidth and
-smarter devices to avoid that effect.</p>
-<h1 id="observing-bufferbloat">Observing bufferbloat</h1>
-<p>Before doing anything about it let’s check if we have a problem:</p>
-<pre class><code>$ ping 8.8.8.8
-64 bytes from 8.8.8.8: icmp_seq=1 ttl=54 time=8.53 ms
-64 bytes from 8.8.8.8: icmp_seq=2 ttl=54 time=18.1 ms
-64 bytes from 8.8.8.8: icmp_seq=3 ttl=54 time=9.47 ms
-64 bytes from 8.8.8.8: icmp_seq=4 ttl=54 time=14.1 ms
-...
-# in a second terminal start uploader
-$ scp /boot/vmlinuz slyfox@guppy.ia64.dev.gentoo.org:/tmp/my-kernel
-vmlinuz 99% 7968KB 119.1KB/s   00:00 ETA
-...
-# in the first terminal:
-64 bytes from 8.8.8.8: icmp_seq=100 ttl=54 time=116 ms
-64 bytes from 8.8.8.8: icmp_seq=101 ttl=54 time=141 ms
-64 bytes from 8.8.8.8: icmp_seq=102 ttl=54 time=192 ms
-64 bytes from 8.8.8.8: icmp_seq=103 ttl=54 time=188 ms
-64 bytes from 8.8.8.8: icmp_seq=104 ttl=54 time=182 ms
-64 bytes from 8.8.8.8: icmp_seq=105 ttl=54 time=218 ms
-64 bytes from 8.8.8.8: icmp_seq=166 ttl=54 time=223 ms
-64 bytes from 8.8.8.8: icmp_seq=167 ttl=54 time=230 ms
-64 bytes from 8.8.8.8: icmp_seq=168 ttl=54 time=232 ms
-64 bytes from 8.8.8.8: icmp_seq=169 ttl=54 time=8.66 ms &lt;--- recovered
-64 bytes from 8.8.8.8: icmp_seq=170 ttl=54 time=9.21 ms
-64 bytes from 8.8.8.8: icmp_seq=171 ttl=54 time=8.79 ms
-64 bytes from 8.8.8.8: icmp_seq=172 ttl=54 time=9.02 ms
-64 bytes from 8.8.8.8: icmp_seq=173 ttl=54 time=10.2 ms</code></pre>
-<p>You can notice where upload started and finished just by looking
-at the ping latency output.</p>
-<p>There is a nice interactive website where you can profile
-your network in a slightly more rigorous way: <a href="https://www.dslreports.com/speedtest">https://www.dslreports.com/speedtest</a></p>
-<p>My profile on default system: <a href="https://www.dslreports.com/speedtest/62838367">https://www.dslreports.com/speedtest/62838367</a></p>
-<p>We can see a bunch of things outright:</p>
-<ul>
-<li>16.5 mbit/s download and 0.96 mbit/s upload speed</li>
-<li>26ms of idle latency (to closest test server perhaps)</li>
-<li>latency increases a bit when I congest network with download: 26ms-&gt;70ms (100ms worst)</li>
-<li>latency increases A Lot when I congest network with upload: 26ms-&gt;~1s (~2.6s worst)</li>
-</ul>
-<p>These were my defaults during first test:</p>
-<pre class><code>$ tc qdisc show dev wl0
-qdisc mq 0: root
-qdisc fq_codel 0: parent :4 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-qdisc fq_codel 0: parent :3 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-qdisc fq_codel 0: parent :2 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-qdisc fq_codel 0: parent :1 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn</code></pre>
-<p>Now let’s artificially limit egress (outgoing) bandwidth:</p>
-<pre class><code># tc qdisc del dev wl0 root
-# tc qdisc add dev wl0 root cake bandwidth 1mbit conservative</code></pre>
-<p>and retest again: <a href="https://www.dslreports.com/speedtest/62838672">https://www.dslreports.com/speedtest/62838672</a></p>
-<p>Things changed:</p>
-<ul>
-<li>Speeds decreased slightly: 16.1 mbit/s upload, 0.811 mbit/s download.
-Mostly because I set <strong>conservative</strong> keyword to account for worst encapsulation overhead.
-You can experiment with more fine-grained values, but I don’t mind the result.</li>
-<li>Download congestion can still impact latency increase. For some reason
-it’s more pronounced now: 140ms worst.</li>
-<li>Upload congestion has almost no effect on latency! average is 34ms, worst is 70ms!</li>
-</ul>
-<p>Now let’s also try artificially limiting ingress:</p>
-<pre class><code>#### egress as before
-# tc qdisc del dev wl0 root
-# tc qdisc add dev wl0 root cake bandwidth 1mbit conservative
-
-#### ingress, a bit kludgy
-# ip link add name ifb4wl0 type ifb
-# tc qdisc del dev wl0 ingress
-# tc qdisc add dev wl0 handle ffff: ingress
-# tc qdisc del dev ifb4wl0 root
-# tc qdisc add dev ifb4wl0 root cake bandwidth 16mbit conservative
-# ip link set ifb4wl0 up
-# tc filter add dev wl0 parent ffff: protocol all prio 10 u32 match u32 0 0 flowid 1:1 action mirred egress redirect dev ifb4wl0</code></pre>
-<p>and retest again: <a href="https://www.dslreports.com/speedtest/62838933">https://www.dslreports.com/speedtest/62838933</a></p>
-<ul>
-<li>Speeds decreased even more: 11.27 mbit/s upload, 0.766 mbit/s download.
-I think the drastic drops upset TCP and it can’t recover faster.</li>
-<li>Download congestion did not become any better. That might
-be a sign of bufferbloat on ISP side.</li>
-<li>Upload congestion is still good.</li>
-</ul>
-<p>If you rerun the test you will notice that numbers will change from run to run
-in order of 10-20% (or more). This will not allow you to fine-tune the setup
-but is good enough to observe the effect.</p>
-<h1 id="more-fine-grained-testing">More fine-grained testing</h1>
-<p>To get better numbers bufferbloat.net project suggests using <a href="https://flent.org/intro.html#quick-start">flent</a>
-command line tool.</p>
-<p>For that you will need a peer host to talk to. I’m picking guppy.ia64.dev.gentoo.org
-140ms (half a globe) away from me.</p>
-<p>Here is the run on default <strong>qdisc</strong>:</p>
-<pre class><code>#### remotely
-guppy / # netserver -D
-
-#### locally
-localhost # tc qdisc show dev wl0
-qdisc mq 0: root
-qdisc fq_codel 0: parent :4 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-qdisc fq_codel 0: parent :3 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-qdisc fq_codel 0: parent :2 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-qdisc fq_codel 0: parent :1 limit 10240p flows 1024 quantum 1514 target 5.0ms interval 100.0ms memory_limit 32Mb ecn
-
-localhost # flent rrul -p all_scaled -l 60 -H guppy.ia64.dev.gentoo.org -t def-to-guppy -o def-filename.png
-Started Flent 1.0.1 using Python 3.6.10.
-Starting rrul test. Expected run time: 70 seconds.</code></pre>
-<p><a href="../posts.data/217-bufferbloat/def-filename.png"><img src="../posts.data/217-bufferbloat/def-filename.png" alt="image" /></a></p>
-<p>There are 3 graphs:</p>
-<ul>
-<li>download speed: jumps around 2.5-5 mbit/s.</li>
-<li>uplaod speed: very unstable, hard to say anything :)</li>
-<li>latency graph: almost always 750ms, sometimes touches 500ms</li>
-</ul>
-<p>Here is the run with <strong>cake</strong> both on ingress and egress:</p>
-<pre class><code>#### remotely
-guppy / # netserver -D
-
-#### locally
-localhost # tc qdisc show dev wl0
-qdisc cake 800f: root refcnt 5 bandwidth 1Mbit diffserv3 triple-isolate nonat nowash no-ack-filter split-gso rtt 100.0ms atm overhead 48
-qdisc ingress ffff: parent ffff:fff1 ----------------
-
-localhost # flent rrul -p all_scaled -l 60 -H guppy.ia64.dev.gentoo.org -t cake-to-guppy -o cake-filename.png
-Started Flent 1.0.1 using Python 3.6.10.
-Starting rrul test. Expected run time: 70 seconds.</code></pre>
-<p><a href="../posts.data/217-bufferbloat/cake-filename.png"><img src="../posts.data/217-bufferbloat/cake-filename.png" alt="image" /></a></p>
-<p>3 graphs again:</p>
-<ul>
-<li>download speed: jumps around 2-3 mbit/s.</li>
-<li>uplaod speed: looks like 0.1mbit/s?</li>
-<li>latency graph: most of the time 170ms, sometimes spikes up to 300ms</li>
-</ul>
-<p>Even though data is still quite noisy we can see that latency is lower
-in the second case.</p>
-<p>Picking closer host and running test for longer time might yield more
-precise data.</p>
-<p>Now you can tweak many more parameters to see what changes for better
-or worse: TCP congestion algorithms (I use <strong>bbr</strong>), many tweaks
-on <strong>man tc-cake</strong>’s side and many more.</p>
-<p>I suggest skimming through more resources at <a href="https://www.bufferbloat.net/projects/">https://www.bufferbloat.net/projects/</a>
-if you are interested in the topic.</p>
-<h1 id="final-test">Final test</h1>
-<p>Let’s get back to our original test (with ingress/egress <strong>cake</strong> enabled this time):</p>
-<pre class><code>$ ping 8.8.8.8
-64 bytes from 8.8.8.8: icmp_seq=1 ttl=54 time=9.31 ms
-64 bytes from 8.8.8.8: icmp_seq=2 ttl=54 time=9.20 ms
-64 bytes from 8.8.8.8: icmp_seq=3 ttl=54 time=8.37 ms
-64 bytes from 8.8.8.8: icmp_seq=4 ttl=54 time=10.6 ms
-...
-# in a second terminal start uploader
-$ scp /boot/vmlinuz slyfox@guppy.ia64.dev.gentoo.org:/tmp/my-kernel
-vmlinuz 99% 7968KB 104.6KB/s   00:00 ETA
-...
-# in the first terminal:
-64 bytes from 8.8.8.8: icmp_seq=178 ttl=54 time=16.5 ms
-64 bytes from 8.8.8.8: icmp_seq=179 ttl=54 time=14.8 ms
-64 bytes from 8.8.8.8: icmp_seq=180 ttl=54 time=15.4 ms
-64 bytes from 8.8.8.8: icmp_seq=181 ttl=54 time=10.0 ms
-64 bytes from 8.8.8.8: icmp_seq=182 ttl=54 time=20.3 ms
-64 bytes from 8.8.8.8: icmp_seq=183 ttl=54 time=9.16 ms
-64 bytes from 8.8.8.8: icmp_seq=184 ttl=54 time=9.71 ms
-64 bytes from 8.8.8.8: icmp_seq=185 ttl=54 time=17.5 ms
-64 bytes from 8.8.8.8: icmp_seq=186 ttl=54 time=13.0 ms
-64 bytes from 8.8.8.8: icmp_seq=224 ttl=54 time=19.9 ms
-64 bytes from 8.8.8.8: icmp_seq=225 ttl=54 time=42.3 ms
-64 bytes from 8.8.8.8: icmp_seq=226 ttl=54 time=13.3 ms
-64 bytes from 8.8.8.8: icmp_seq=227 ttl=54 time=8.39 ms
-64 bytes from 8.8.8.8: icmp_seq=230 ttl=54 time=11.4 ms
-64 bytes from 8.8.8.8: icmp_seq=231 ttl=54 time=8.84 ms &lt;--- recovered
-64 bytes from 8.8.8.8: icmp_seq=232 ttl=54 time=8.63 ms
-64 bytes from 8.8.8.8: icmp_seq=233 ttl=54 time=8.49 ms</code></pre>
-<p>Latency increased a bit from 10ms to ~20ms. But it does not get to 300ms. Yay!</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on April 26, 2020 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-
-        </div>
-        <div id="footer">
-            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
-        </div>
-    </body>
-</html>
-]]></description>
-    <pubDate>Sun, 26 Apr 2020 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/217-mitigating%20bufferbloat.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
