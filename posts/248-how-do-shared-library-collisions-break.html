@@ -1,0 +1,608 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: How do shared library collisions break?</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="header">
+            <a href="../">main :: IO ()</a>
+        </div>
+        <div id="navigation">
+            <a href="../">/root</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom.xml</a>
+            <a href="../feed/rss.xml">/rss.xml</a>
+        </div>
+
+        <div id="content">
+            <h1>How do shared library collisions break?</h1>
+
+            <h1 id="background">background</h1>
+<p>Shared libraries are fun. The concept is simple in theory: we move a
+piece of code out of the main application into a separate (dynamically
+loadable) binary and nothing changes:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-1.svg" /></p>
+<p>In practice we get two moving parts where each could be updated
+separately. People still don’t agree if shared libraries are a net win
+or a net loss as a concept :)</p>
+<p>When you maintain both application and library as a single code base the
+difference does not really matter. Things get interesting when library
+starts it’s own life as a separate project and gets it’s own dependencies
+over time.</p>
+<p>What if we want to use two different versions of the same library project
+within a single application. Say, use <strong>gtk-2</strong> and <strong>gtk-3</strong> together or
+<strong>ffmpeg-4</strong> and <strong>ffmpeg-5</strong>.</p>
+<p>You might even do it by accident by including two dependencies that rely
+on different <strong>ffmpeg</strong> versions:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-2.svg" /></p>
+<p>Is it a safe combination? Can we just link against both versions of a
+library and be done with it? Let’s try!</p>
+<h1 id="toy-example">toy example</h1>
+<p>We’ll need an executable and two libraries to play with. Library API
+provides a single function to tell us it’s name:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat lib.h</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> lib_name <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span></code></pre></div>
+<p>Library sources implement the API by returning pointer to source file name:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat lib1.c</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;lib.h&quot;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> lib_name <span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span>  <span class="cf">return</span> __FILE__<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat lib2.c</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;lib.h&quot;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> lib_name <span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span>  <span class="cf">return</span> __FILE__<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<p>Main program:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat main.c</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdlib.h&gt;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;unistd.h&gt;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;lib.h&quot;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* important part: */</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;lib_name() = %s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> lib_name<span class="op">());</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* library loading introspection: */</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;My address space:</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> cmd<span class="op">[</span><span class="dv">1000</span><span class="op">];</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* search for code segments (should be at most one per loaded ELF) */</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    snprintf<span class="op">(</span>cmd<span class="op">,</span> <span class="kw">sizeof</span> <span class="op">(</span>cmd<span class="op">),</span> <span class="st">&quot;grep 'r-x' /proc/%u/maps&quot;</span><span class="op">,</span> getpid<span class="op">());</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    system<span class="op">(</span>cmd<span class="op">);</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The important bit here is <strong>fprintf (stderr, “lib_name() = %s”, lib_name());</strong>.
+The rest is convenience debugging to see what libraries are loaded
+into address space.</p>
+<p>What happens if we link <strong>main.c</strong> dynamically against both <strong>lib1.c</strong> and
+<strong>lib2.c</strong> together as external shared libraries?</p>
+<p><img src="../posts.data/248-shlib-clash/fig-3.svg" /></p>
+<p>Would linker complain? Would it pick first library? Or maybe the second one? It depends!</p>
+<p>Let’s build shared libraries the simplest way possible and link
+our program against them:</p>
+<pre><code>$ mkdir -p l1 l2
+
+# no SONAME
+
+$ gcc -fPIC -shared lib1.c -o l1/libl1.so
+$ gcc -fPIC -shared lib2.c -o l2/libl2.so
+
+$ gcc main.c -o main1 -Ll1 -Ll2 -ll1 -ll2 -Wl,-rpath,'$ORIGIN/l1' -Wl,-rpath,'$ORIGIN/l2'
+$ gcc main.c -o main2 -Ll1 -Ll2 -ll2 -ll1 -Wl,-rpath,'$ORIGIN/l1' -Wl,-rpath,'$ORIGIN/l2'</code></pre>
+<p>Quiz question: what would these <strong>./main1</strong> and
+<strong>./main2</strong> programs print when executed?</p>
+<p>Now let’s compare the results:</p>
+<pre><code>$ ./main1 | unnix
+lib_name() = lib1.c
+My address space:
+00401000-00402000 r-xp 00001000 00:1b 1404344872                         /home/slyfox/dev/c/shared-libs/main1
+7f994d9e2000-7f994db4c000 r-xp 00028000 00:1b 1350927183                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+7f994dbb9000-7f994dbba000 r-xp 00001000 00:1b 1404344871                 /home/slyfox/dev/c/shared-libs/l2/libl2.so
+7f994dbbe000-7f994dbbf000 r-xp 00001000 00:1b 1404344870                 /home/slyfox/dev/c/shared-libs/l1/libl1.so
+7f994dbc5000-7f994dbea000 r-xp 00001000 00:1b 1350927176                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+7fff98b52000-7fff98b54000 r-xp 00000000 00:00 0                          [vdso]
+
+$ ./main2 | unnix
+lib_name() = lib2.c
+My address space:
+00401000-00402000 r-xp 00001000 00:1b 1404344873                         /home/slyfox/dev/c/shared-libs/main2
+7f95c8773000-7f95c88dd000 r-xp 00028000 00:1b 1350927183                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+7f95c894a000-7f95c894b000 r-xp 00001000 00:1b 1404344870                 /home/slyfox/dev/c/shared-libs/l1/libl1.so
+7f95c894f000-7f95c8950000 r-xp 00001000 00:1b 1404344871                 /home/slyfox/dev/c/shared-libs/l2/libl2.so
+7f95c8956000-7f95c897b000 r-xp 00001000 00:1b 1350927176                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+7ffdbb255000-7ffdbb257000 r-xp 00000000 00:00 0                          [vdso]</code></pre>
+<p>Note: <strong>lib_name()</strong> returns two very different results. And that is for
+a program that is linked against the same set of libraries and headers
+in both cases!</p>
+<p>A few more observations:</p>
+<ul>
+<li><strong>ld</strong> did not complain about <strong>lib_name()</strong> presence in both
+<strong>libl1.so</strong> and <strong>libl2.so</strong>.</li>
+<li>Both libraries are loaded into address space (visible in address space
+dumps).</li>
+<li><strong>./main{1,2}</strong> also did not complain about <strong>lib_name()</strong> presence in
+both <strong>libl1.so</strong> and <strong>libl2.so</strong>.</li>
+<li>Libraries happen to be loaded in order specified by <strong>-l</strong> options.</li>
+</ul>
+<p>Now let’s pretend that <strong>libl1.so</strong> and <strong>libl2.so</strong> don’t have material
+difference and implement identical ABI and semantics. On <strong>ELF</strong> platforms
+<strong>ABI</strong> and semantics are usualy reflected by a <strong>DT_SONAME</strong> tag attached
+to a library. We can assign <strong>SONAME</strong> to built library with
+<strong>-Wl,-soname,…</strong> flag. Let’s specify identical <strong>SONAME</strong> to both
+libraries (I also had to create symlinks to <strong>SONAME</strong> name):</p>
+<pre><code>$ mkdir -p l1 l2
+
+# same SONAME
+
+$ gcc -fPIC -shared lib1.c -o l1/libl1.so -Wl,-soname,libname.so.1
+$ ln -s libl1.so l1/libname.so.1
+$ gcc -fPIC -shared lib2.c -o l2/libl2.so -Wl,-soname,libname.so.1
+$ ln -s libl2.so l2/libname.so.1
+
+$ gcc main.c -o main1 -Ll1 -Ll2 -ll1 -ll2 -Wl,-rpath,'$ORIGIN/l1' -Wl,-rpath,'$ORIGIN/l2'
+$ gcc main.c -o main2 -Ll1 -Ll2 -ll1 -ll2 -Wl,-rpath,'$ORIGIN/l2' -Wl,-rpath,'$ORIGIN/l1'</code></pre>
+<p>Quiz question: how would these result differ compared to previous run?</p>
+<p>Comparing the results again:</p>
+<pre><code>$ ./main1 | unnix
+lib_name() = lib1.c
+My address space:
+00401000-00402000 r-xp 00001000 00:1b 1404345186                         /home/slyfox/dev/c/shared-libs/main1
+7f3bf33c3000-7f3bf352d000 r-xp 00028000 00:1b 1350927183                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+7f3bf359a000-7f3bf359b000 r-xp 00001000 00:1b 1404345184                 /home/slyfox/dev/c/shared-libs/l1/libl1.so
+7f3bf35a1000-7f3bf35c6000 r-xp 00001000 00:1b 1350927176                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+7ffcb5934000-7ffcb5936000 r-xp 00000000 00:00 0                          [vdso]
+
+$ ./main2 | unnix
+lib_name() = lib2.c
+My address space:
+00401000-00402000 r-xp 00001000 00:1b 1404345187                         /home/slyfox/dev/c/shared-libs/main2
+7f2c1a48d000-7f2c1a5f7000 r-xp 00028000 00:1b 1350927183                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+7f2c1a664000-7f2c1a665000 r-xp 00001000 00:1b 1404345185                 /home/slyfox/dev/c/shared-libs/l2/libl2.so
+7f2c1a66b000-7f2c1a690000 r-xp 00001000 00:1b 1350927176                 /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+7ffd7c1ba000-7ffd7c1bc000 r-xp 00000000 00:00 0                          [vdso]</code></pre>
+<p>Note:</p>
+<ul>
+<li>Only one example of a library with a specified <strong>SONAME</strong> is loaded into
+memory: either <strong>libl1.so</strong> or <strong>libl2.so</strong>, but never both.</li>
+<li>First library is loaded as specified by <strong>DT_RUNPATH</strong> tag (not by
+<strong>-l</strong> option).</li>
+</ul>
+<p>Library order matters materially only if a symbol is present
+in multiple shared libraries (a symbol collision is present). Otherwise
+you don’t have to worry about it.</p>
+<p>Another important assumption here is that <strong>lib.h</strong> is identical for both
+<strong>libl1.so</strong> and <strong>libl2.so</strong>. It’s not always the case for more complex
+scenarios: <strong>ffmpeg</strong> and <strong>gtk</strong> certainly change their API and data
+structures across major releases (or even in different build configurations
+for the same library release).</p>
+<h1 id="diamond-dependency-trees">diamond dependency trees</h1>
+<p>Is it a frequent problem to get a mix of libraries like that in a single
+process? Or it’s a purely hypothetical problem not worth worrying about?</p>
+<p>Let’s pick <strong>gdb</strong> executable (command line debugger) as an example.</p>
+<p>Quiz question: how many libraries does <strong>gdb</strong> use as dependencies. Should it be just <strong>libc</strong>?
+Maybe <strong>ncurses</strong> as well?</p>
+<p><strong>ELF</strong> files have <strong>DT_NEEDED</strong> entries in <strong>.dynamic</strong> section. Those
+list all immediate shared library dependencies. We can dump
+<strong>DT_NEEDED</strong> entries with tools like <strong>objdump</strong>, <strong>readelf</strong>, <strong>scanelf</strong>,
+<strong>patchelf</strong> and many others. I’ll use <strong>patchelf</strong>:</p>
+<pre><code>$ patchelf --print-needed `which gdb` | nl
+     1  libreadline.so.8
+     2  libz.so.1
+     3  libncursesw.so.6
+     4  libpython3.9.so.1.0
+     5  libdl.so.2
+     6  libcrypt.so.1
+     7  libm.so.6
+     8  libexpat.so.1
+     9  libipt.so.2
+    10  libmpfr.so.6
+    11  libgmp.so.10
+    12  libsource-highlight.so.4
+    13  libboost_regex.so.1.77.0
+    14  libstdc++.so.6
+    15  libgcc_s.so.1
+    16  libpthread.so.0
+    17  libc.so.6
+    18  ld-linux-x86-64.so.2</code></pre>
+<p>18 immediate libraries! Some of them have their own dependencies.
+We can dump the whole tree with <strong>lddtree</strong>:</p>
+<pre><code>$ lddtree `which gdb` | unnix | nl
+lddtree `which gdb` | unnix | nl
+     1  gdb =&gt; /run/current-system/sw/bin/gdb (interpreter =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2)
+     2      libreadline.so.8 =&gt; /&lt;&lt;NIX&gt;&gt;/readline-8.1p2/lib/libreadline.so.8
+     3      libz.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/zlib-1.2.12/lib/libz.so.1
+     4      libncursesw.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/ncurses-6.3-p20220507/lib/libncursesw.so.6
+     5      libpython3.9.so.1.0 =&gt; /&lt;&lt;NIX&gt;&gt;/python3-3.9.13/lib/libpython3.9.so.1.0
+     6      libdl.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libdl.so.2
+     7      libcrypt.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libcrypt.so.1
+     8      libm.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libm.so.6
+     9      libexpat.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/expat-2.4.8/lib/libexpat.so.1
+    10      libipt.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/libipt-2.0.4/lib/libipt.so.2
+    11      libmpfr.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/mpfr-4.1.0/lib/libmpfr.so.6
+    12      libgmp.so.10 =&gt; /&lt;&lt;NIX&gt;&gt;/gmp-with-cxx-6.2.1/lib/libgmp.so.10
+    13      libsource-highlight.so.4 =&gt; /&lt;&lt;NIX&gt;&gt;/source-highlight-3.1.9/lib/libsource-highlight.so.4
+    14      libboost_regex.so.1.77.0 =&gt; /&lt;&lt;NIX&gt;&gt;/boost-1.77.0/lib/libboost_regex.so.1.77.0
+    15          librt.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/librt.so.1
+    16          libicudata.so.71 =&gt; /&lt;&lt;NIX&gt;&gt;/icu4c-71.1/lib/libicudata.so.71
+    17          libicui18n.so.71 =&gt; /&lt;&lt;NIX&gt;&gt;/icu4c-71.1/lib/libicui18n.so.71
+    18          libicuuc.so.71 =&gt; /&lt;&lt;NIX&gt;&gt;/icu4c-71.1/lib/libicuuc.so.71
+    19      libstdc++.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/gcc-11.3.0-lib/lib/libstdc++.so.6
+    20      libgcc_s.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libgcc_s.so.1
+    21      libpthread.so.0 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libpthread.so.0
+    22      libc.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+    23      ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2</code></pre>
+<p>Just 4 more libraries added by <strong>boost</strong> internals: <strong>libboost_regex.so.1.77.0</strong> -&gt; <strong>librt.so.1</strong>, <strong>libicudata.so.71</strong>, <strong>libicui18n.so.71</strong>,
+<strong>libicuuc.so.71</strong>.</p>
+<p>From <strong>lddtree</strong> output it might look like it’s a rare occasion when shared libraries
+have their owne dependencies. That is misleading: <strong>lddtree</strong> hides already printed
+entries by default.</p>
+<p>Quiz question: guess how many dependencies does <strong>gdb</strong> have if we consider all the
+duplicates.</p>
+<p>We’ll use <strong>lddtree -a</strong> option to answer that question:</p>
+<pre><code>$ lddtree -a `which gdb` | unnix | nl
+     1  gdb =&gt; /run/current-system/sw/bin/gdb (interpreter =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2)
+     2      libreadline.so.8 =&gt; /&lt;&lt;NIX&gt;&gt;/readline-8.1p2/lib/libreadline.so.8
+     3          libncursesw.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/ncurses-6.3-p20220507/lib/libncursesw.so.6
+     4              libc.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+     5                  ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+     6          libc.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+     7              ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+     8      libz.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/zlib-1.2.12/lib/libz.so.1
+     9          libc.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+    10              ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+    11      libncursesw.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/ncurses-6.3-p20220507/lib/libncursesw.so.6
+    12          libc.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+    13              ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+    14      libpython3.9.so.1.0 =&gt; /&lt;&lt;NIX&gt;&gt;/python3-3.9.13/lib/libpython3.9.so.1.0
+    15          libdl.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libdl.so.2
+    16              libc.so.6 =&gt; not found
+    17          libcrypt.so.1 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libcrypt.so.1
+    18              libc.so.6 =&gt; not found
+...
+   263      libc.so.6 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6
+   264          ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2
+   265      ld-linux-x86-64.so.2 =&gt; /&lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/ld-linux-x86-64.so.2</code></pre>
+<p>265! It’s more than 10x compared to the output without duplicates. A thing
+to note here is that <strong>libc.so.6</strong> is a frequent guest here. The 265 number
+is also inflated as many subtrees repeat multiple times here.</p>
+<p>If we use something more heavyweight like <strong>i3</strong> window manager we’ll
+get even bigger dependency tree:</p>
+<pre><code>$ lddtree `which i3` | wc -l
+61
+$ lddtree -a `which i3` | wc -l
+1528</code></pre>
+<p>Let’s draw <strong>gdb</strong> dependencies as a graph. I find the result less scary:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-4.svg" /></p>
+<p>OK, it’s still unreadable.</p>
+<p>Let’s remove all the <strong>glibc</strong> and <strong>gcc</strong> dependencies. They are
+present almost everywhere and clutter our graph. Here is the result
+of graph with noise removed:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-5.svg" /></p>
+<p>Now it should be more obvious what <strong>gdb</strong> usually uses.</p>
+<p><strong>Diamond dependencies</strong> are the ones that have more than one input arrow:
+they cause dependency graph to be a <strong>graph</strong> instead of a <strong>tree</strong>.</p>
+<p>Another way to look at it applied to library dependencies: <strong>diamond
+dependencies have more than one path in the graph from dependency
+root</strong>.</p>
+<p>For example <strong>libncursesw.so.6</strong> can be reached via two distinct paths:</p>
+<ul>
+<li><strong>gdb</strong> -&gt; <strong>libncursesw.so.6</strong> (direct dependency)</li>
+<li><strong>gdb</strong> -&gt; <strong>libreadline.so.8</strong> -&gt; <strong>libncursesw.so.6</strong> (indirect dependency)</li>
+</ul>
+<p>From the toy example above we know that the same library does not
+get loaded multiple times if the absolute library path is the same.</p>
+<p>Problems happen when such a diamond dependency is slightly different
+in two branches. There are many ways to break this diamond by accident.
+The most popular one is to have slightly different <strong>SONAMEs</strong> in two
+branches:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-6.svg" /></p>
+<p>To make it work at all <strong>libfoo.so.1</strong> and <strong>libfoo.so.2</strong> need to
+have no colliding symbols or make this mix and match work via other
+means. Most <strong>C</strong> libraries don’t handle such coexistence. They assume
+that everyone can update to <strong>libfoo.so.2</strong> and <strong>libfoo.so.1</strong> would
+never compete with it:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-7.svg" /></p>
+<h1 id="example-failures">Example failures</h1>
+<p>Unfortunately nothing prevents such inconsistent diamonds with a
+library version mix to appear. We just did it ourselves in our toy
+example. How come do we not get into that state all the time? Or
+maybe we do?</p>
+<p>Normally distributions try hard to avoid such version mix by not
+providing two versions of a library at any point in time: there
+are no two <strong>glibc</strong> version installed, no two <strong>ffmpeg</strong> versions
+present and so on.</p>
+<p>But to each rule there is an exception: not all applications have
+migrated from <strong>python2</strong> to <strong>python3</strong>, some applications are
+still on <strong>gtk-2</strong>, most on <strong>gtk-3</strong> and some are already on
+<strong>gtk-4</strong>. In these cases you might find all these libraries in
+your system. Their presence might create false confidence that it’s
+a safe setup. It is not.</p>
+<p>Here are a few examples I saw the past:</p>
+<h2 id="gdb-and-tinfotinfow">gdb and tinfo/tinfow</h2>
+<p>This example is based on <a href="https://bugs.gentoo.org/669096" class="uri">https://bugs.gentoo.org/669096</a> where <strong>gdb</strong>
+crashed at start. <strong>ncurses</strong> provides a few flavours of roughtly the
+same library with slightly different APIs: <strong>ncurses</strong> (no unicode
+support) and <strong>ncursesw</strong> (has unicode support). Sometimes distributions
+also enable split-library version of <strong>ncurses</strong>: <strong>ncursesw.so</strong>+<strong>tinfow.so</strong>
+and <strong>ncurses.so</strong>+<strong>tinfo.so</strong>.</p>
+<p>In 2022 you would normally use <strong>ncursesw</strong> library everywhere (or
+<strong>ncursesw.so</strong>+<strong>tinfow.so</strong> everywhere in distributions with split
+setup).</p>
+<p>Due to a minor <strong>configure.ac</strong> glitch <strong>gdb</strong> managed to pull in the
+following library dependency graph:</p>
+<pre><code>  $ lddtree /usr/bin/gdb
+  /usr/bin/gdb (interpreter =&gt; /lib64/ld-linux-x86-64.so.2)
+    libtinfo.so.6 =&gt; /lib64/libtinfo.so.6
+    libreadline.so.7 =&gt; /lib64/libreadline.so.7
+        libncurses.so.6 =&gt; /lib64/libncurses.so.6
+    libncursesw.so.6 =&gt; /lib64/libncursesw.so.6
+        libtinfow.so.6 =&gt; /lib64/libtinfow.so.6
+    ...</code></pre>
+<p>See the problem already? Picture form might help a bit:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-8.svg" /></p>
+<p>I see two problems:</p>
+<ul>
+<li>unicode and non-unicode flavors are both present: <strong>ncurses.so</strong> + <strong>ncursesw.so</strong></li>
+<li>unicode and non-unicode parts: <strong>ncursesw.so</strong> + <strong>tinfo.so</strong> (or <strong>ncursesw.so</strong> + <strong>tinfow.so</strong>)</li>
+</ul>
+<p><strong>libncursesw.so.6</strong> and <strong>libncurses.so.6</strong> export
+the same symbol names. That on it’s own might work. But ABI assumptions
+around private data structures in <strong>w</strong> and non-<strong>w</strong> librarues are
+different. For example <strong>WINDOWLIST</strong> structure has different size and
+has extra fields:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Somewhere in ncurses/curses.priv.h</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> _win_list <span class="op">{</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> _win_list <span class="op">*</span>next<span class="op">;</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>        SCREEN <span class="op">*</span>screen<span class="op">;</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>        WINDOW win<span class="op">;</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    <span class="pp">#if NCURSES_WIDECHAR</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>        <span class="dt">char</span> addch_work<span class="op">[(</span>MB_LEN_MAX <span class="op">*</span> <span class="dv">9</span><span class="op">)</span> <span class="op">+</span> <span class="dv">1</span><span class="op">];</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> addch_used<span class="op">;</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">int</span> addch_x<span class="op">;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>        <span class="dt">int</span> addch_y<span class="op">;</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    <span class="pp">#endif</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p>If such a structure would be allocated in <strong>libncurses.so</strong> (without
+<strong>NCURSES_WIDECHAR</strong>) and be used as <strong>libncursesw.so</strong> there will
+likely be data corruption in an attempt to write to non-existent tail
+of structure (fields <strong>addch_work</strong>, <strong>addch_used</strong>, <strong>addch_x</strong>,
+<strong>addch_y</strong> don’t get allocated in <strong>libncurses.so</strong>).</p>
+<p>The fix was to update <strong>gdb</strong> to always link to <strong>tinfow</strong> if
+<strong>ncursesw</strong> is present. And to fix <strong>readline</strong> to link to <strong>ncursesw</strong>
+to match the default of the rest of distribution.</p>
+<p>Case of <strong>readline</strong> is especially worrying: if <strong>libreadline.so.7</strong> -&gt;
+<strong>libncurses.so.6</strong> was a conscious decision by <strong>readline</strong> packagers
+then <strong>gdb</strong>
+would have to inspect it’s dependency first to match it’s defaults when
+picking the <strong>ncurses</strong> flavor at <strong>gdb</strong> build time. Nobody analyzes
+transitive dependencies in C land and assumes that build environment
+provides consistent and unambiguous
+environment: there should be just one library of <strong>ncurses</strong> discoverable
+via <strong>pkgconfig</strong> (or similar) and that version should be used when building
+both <strong>readline</strong> and <strong>gdb</strong>.</p>
+<p>I would say that providing both <strong>libncurses.so</strong> and <strong>libncursesw.so</strong>
+in the same system is proven to be dangerous. Perhaps providing just
+<strong>SONAMEs</strong> like <strong>libncurses.so.6</strong> would be slightly less prone to
+accidental linkage of unintended library.</p>
+<h2 id="binutils-and-multitarget">binutils and multitarget</h2>
+<p>Another example from Gentoo’s bugzilla: <a href="https://bugs.gentoo.org/666100" class="uri">https://bugs.gentoo.org/666100</a>.</p>
+<p>It starts off very similar to <strong>ncurses</strong>: Gentoo provides a way to
+install multiple versions of <strong>libbfd.so</strong> library:</p>
+<ul>
+<li>via <strong>sys-devel/binutils</strong> package, install target is <strong>/usr/lib64/binutils/x86_64-pc-linux-gnu/2.38/libbfd-2.38.so</strong></li>
+<li>via <strong>sys-libs/binutils-libs</strong> package, install target is <strong>/usr/lib64/libbfd-2.38.so</strong></li>
+</ul>
+<p>Gentoo allows multiple parallel major versions of <strong>sys-devel/binutils</strong>
+to be present in the system at the same time. And allows only one version of
+<strong>sys-libs/binutils-libs</strong>. The split
+is needed for limitations of package manager library handling. The idea
+is that <strong>sys-devel/binutils</strong> libraries will ever be used only by
+<strong>sys-devel/binutils</strong> itself: <strong>strip</strong>, <strong>ld</strong> and friends will use
+private library. While external users (like <strong>perf</strong> or <strong>ghc</strong>) will
+never use it and will always pull in <strong>sys-libs/binutils-libs</strong> library:</p>
+<ul>
+<li><strong>strip-2.38</strong> -&gt; <strong>/usr/lib64/binutils/x86_64-pc-linux-gnu/2.38/libbfd-2.38.so</strong> (<strong>SONAME=libbfd-2.38.so</strong>)</li>
+<li><strong>ld-2.38</strong> -&gt; <strong>/usr/lib64/binutils/x86_64-pc-linux-gnu/2.38/libbfd-2.38.so</strong> (<strong>SONAME=libbfd-2.38.so</strong>)</li>
+<li><strong>ld-2.37</strong> -&gt; <strong>/usr/lib64/binutils/x86_64-pc-linux-gnu/2.37/libbfd-2.37.so</strong> (<strong>SONAME=libbfd-2.37.so</strong>)</li>
+<li><strong>perf</strong> -&gt; <strong>/usr/lib64/libbfd-2.38.so</strong> (<strong>SONAME=libbfd-2.38.so</strong>)</li>
+</ul>
+<p>Or the same in pictures:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-9.svg" /></p>
+<p>The sets are seemingly disjoint. It should be fine, right? Wrong.</p>
+<p>The problem happens when some build system decides to use <strong>LD_LIBRARY_PATH=/usr/lib</strong>
+override (like <strong>firefox</strong> <a href="https://bugs.gentoo.org/645222">one</a>). It
+looks cosmetic as <strong>/usr/lib</strong> is already a default library search path. It should not
+hurt. But in practice it redirects <strong>libbfd-2.38.so</strong> from:</p>
+<ul>
+<li><strong>ld-2.38</strong> -&gt; <strong>/usr/lib64/binutils/x86_64-pc-linux-gnu/2.38/libbfd-2.38.so</strong></li>
+</ul>
+<p>to:</p>
+<ul>
+<li><strong>ld-2.38</strong> -&gt; <strong>/usr/lib64/libbfd-2.38.so</strong></li>
+</ul>
+<p>After the redirect effective runtime dependency graph looks as:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-10.svg" /></p>
+<p>Is it a big deal? Shouldn’t these libraries already be identical?
+They share <strong>SONAME=libbfd-2.38.so</strong> after all.</p>
+<p>Unfortunately, no.: <strong>binutils</strong> can be built in a few different incompatible
+modes that affect library <strong>ABI</strong> compatibility:</p>
+<ol type="1">
+<li>default mode: support only current target and use default file offsets
+(32-bit offsets on 32-bit systems, 64-bit offsets on 64-bit systems).</li>
+<li>64-bit mode (<strong>--enable-64-bit-bfd</strong>): support only current target
+and use 64-bit file offsets</li>
+<li>multi-target mode (<strong>--enable-targets=all</strong>): support multiple target
+architectures and use 64-bit file offsets.</li>
+</ol>
+<p>All these 3 modes produce the same <strong>SONAME=libbfd-2.38.so</strong>, but
+it’s ABIs differ quite a bit: 64-bit mode switches public API from
+<strong>typedef unsigned long bfd_vma;</strong> to <strong>typedef uint64_t bfd_size_type</strong>.
+This breaks global <strong>_bfd_std_section</strong> array size and breaks ABI similar
+to <a href="../posts/195-dynamic-linking-ABI-is-hard.html">nettle ABI breakage</a>.</p>
+<p>As a result attempt to force <strong>LD_LIBRARY_PATH=/usr/lib</strong> on 32-bit systems
+fails as:</p>
+<pre><code>$ LD_LIBRARY_PATH=/usr/lib ld --eh-frame-hdr -m elf_i386 -dynamic-linker /lib/ld-linux.so.2 -o z /usr/lib/Scrt1.o
+ld: internal error /dev/shm/portage/sys-devel/binutils-2.38/work/binutils-2.38/ld/ldlang.c 6635</code></pre>
+<p>The fix (or workaround) was straightforward: change <strong>SONAME=libbfd-2.38.so</strong>
+to something that depends on the configuration: <strong>SONAME=libbfd-2.38-64-bit.so</strong>
+or similar:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-11.svg" /></p>
+<p>Mike also suggested another fix: use <strong>DT_RPATH</strong> <strong>ELF</strong> tags in <strong>binutils</strong>
+binaries instead of <strong>DT_RUNPATH</strong> to get higher precedence over <strong>LD_LIBRARY_PATH</strong>:
+<a href="https://en.wikipedia.org/wiki/Rpath" class="uri">https://en.wikipedia.org/wiki/Rpath</a>.</p>
+<p>I think this bug is a good example why you should try hard to avoid multiple
+libraries in the system with the same <strong>SONAME</strong>: seemingly uncontroversial
+<strong>LD_LIBRARY_PATH</strong> can cause so much trouble.</p>
+<h2 id="mpfrmpc-version-mismatch">mpfr/mpc version mismatch</h2>
+<p>Another case is <a href="https://wiki.gentoo.org/wiki/Mpfr4-update-guide" class="uri">https://wiki.gentoo.org/wiki/Mpfr4-update-guide</a>.</p>
+<p>In a steady state <strong>gcc</strong> and it’s <strong>mpc</strong> dependency both depend on <strong>mpfr</strong>.
+All three are distinct packages in Gentoo and can only be updated one at a time
+on a live system.</p>
+<p>Once <strong>mpfr</strong> is updated it brings into the system a new library: <strong>libmpfr.so.4</strong>.
+On it’s own it’s fine as <strong>gcc</strong> and <strong>mpc</strong> still refer to <strong>libmpfr.so.3</strong> (which
+does not get deleted as long as there are referrers to it).</p>
+<p>The problem happens when we try to update <strong>mpc</strong>: we introduce a
+broken diamond dependency as two versions of <strong>mpfr</strong> get pulled into <strong>gcc</strong>:</p>
+<p><img src="../posts.data/248-shlib-clash/fig-12.svg" /></p>
+<p>By luck it did not render <strong>gcc</strong> broken as <strong>gcc</strong> was able to recompile itself.
+Otherwise user would have to redownload broken compiler. Or an ad-hoc upgrade
+tool would have to be written just for this case.</p>
+<p>I wonder how other distributions solve this class of lockstep upgrade problems
+in their build systems.</p>
+<h1 id="does-nix-magically-solve-diamond-dependency-problem">does nix magically solve diamond dependency problem?</h1>
+<p>The short answer is: no, it does not fundamentally prevent such
+relations from happening. It is even more prone to accidentally
+inconsistent diamonds as it allows you to install multiple versions
+of the same library in parallel (say, <strong>glibc</strong> or <strong>ncurses</strong>)
+and be pulled in both as a dependency.</p>
+<p>The typical example would be an incorrect attempt to enable debugging
+mode for some popular dependency. Say, <strong>ncurses</strong> for <strong>gdb</strong>:</p>
+<pre><code># DO NOT USE IT AS IS
+$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; gdb.override { ncurses = ncurses.overrideAttrs(oa: { NIX_CFLAGS_COMPILE = &quot;-O0&quot;; }); }'</code></pre>
+<p>Looks benign, isn’t it? We pass slightly modified unoptimised
+<strong>ncurses</strong> dependency to <strong>gdb</strong>.</p>
+<p>Unfortunately <strong>gdb</strong>’s <strong>readline</strong> dependency also uses <strong>ncurses</strong>.
+And in this case it uses unmodified version of <strong>ncurses</strong>. We
+can see it in the resulting binary:</p>
+<pre><code>lddtree -a ./result/bin/gdb |&amp; fgrep -B1 ncurses
+    libreadline.so.8 =&gt; /nix/store/87g044p2zq221fvjzyrqyrkzxxayy1p9-readline-8.1p2/lib/libreadline.so.8
+        libncursesw.so.6 =&gt; /nix/store/7ji068smnymqz2lg2fd42hjnjd5czbl6-ncurses-6.3-p20220507/lib/libncursesw.so.6
+--
+            ld-linux-x86-64.so.2 =&gt; /nix/store/fz33c1mfi2krpg1lwzizfw28kj705yg0-glibc-2.34-210/lib/ld-linux-x86-64.so.2
+    libncursesw.so.6 =&gt; /nix/store/3hwz3archcn9z8y93b2qdnkrgdf7g5jb-ncurses-6.3-p20220507/lib/libncursesw.so.6</code></pre>
+<p>To be fair this output is slightly misleading as both
+<strong>libncursesw.so.6</strong> shold be loaded by <strong>DT_RUNPTH</strong> and would probably
+end up being pulled in from the same location. There would be no
+double-load. But it’s hard to predict which of the two would win.</p>
+<p>To sidestep this kind of problems <strong>nixpkgs</strong> tries hard to use a
+single version of a library throughout the tree. As a result the
+whole system you build will use the same <strong>ncurses</strong> library.
+And it does not have to be the same <strong>ncurses</strong> you used for
+older version of your system.</p>
+<p>The less incorrect way to achieve the <strong>-O0</strong> effect for <strong>ncurses</strong>
+would be to override the <strong>ncurses</strong> attribute itself and let
+all the packages (up to <strong>gdb</strong>) use it. One way to do it
+is via <a href="https://nixos.wiki/wiki/Overlays" class="uri">https://nixos.wiki/wiki/Overlays</a>:</p>
+<pre><code># slightly better
+$ nix build --impure --expr 'with import &lt;nixpkgs&gt; { overlays = [(final: prev: { ncurses = prev.ncurses.overrideAttrs(oa: { NIX_CFLAGS_COMPILE = &quot;-O0&quot;; }); })]; }; gdb'
+[2/0/33 built, 5 copied (0.8/0.8 MiB), 0.2 MiB DL] building readline-8.1p2 (buildPhase): mv search.o search.so
+...</code></pre>
+<p>Note: this command attepts to rebuild 33 packages:</p>
+<pre><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; { overlays = [(final: prev: { ncurses = prev.ncurses.overrideAttrs(oa: { NIX_CFLAGS_COMPILE = &quot; -O0&quot;; }); })]; }; gdb' --dry-run |&amp; unnix
+these 34 derivations will be built:
+  /&lt;&lt;NIX&gt;&gt;/ncurses-6.3-p20220507.drv
+  /&lt;&lt;NIX&gt;&gt;/readline-6.3p08.drv
+  /&lt;&lt;NIX&gt;&gt;/python3-3.9.13.drv
+  /&lt;&lt;NIX&gt;&gt;/hook.drv
+  /&lt;&lt;NIX&gt;&gt;/audit-2.8.5.drv
+  /&lt;&lt;NIX&gt;&gt;/linux-pam-1.5.2.drv
+  /&lt;&lt;NIX&gt;&gt;/libxml2-2.9.14.drv
+  /&lt;&lt;NIX&gt;&gt;/itstool-2.0.6.drv
+  /&lt;&lt;NIX&gt;&gt;/libxslt-1.1.35.drv
+  /&lt;&lt;NIX&gt;&gt;/shadow-4.11.1.drv
+  /&lt;&lt;NIX&gt;&gt;/util-linux-minimal-2.37.4.drv
+  /&lt;&lt;NIX&gt;&gt;/re2c-3.0.drv
+  /&lt;&lt;NIX&gt;&gt;/asciidoc-9.1.0.drv
+  /&lt;&lt;NIX&gt;&gt;/ninja-1.10.2.drv
+  /&lt;&lt;NIX&gt;&gt;/setuptools-setup-hook.drv
+  /&lt;&lt;NIX&gt;&gt;/pip-install-hook.drv
+  /&lt;&lt;NIX&gt;&gt;/setuptools-61.2.0-sdist.tar.gz.drv
+  /&lt;&lt;NIX&gt;&gt;/python3.9-bootstrapped-pip-22.0.4.drv
+  /&lt;&lt;NIX&gt;&gt;/python-imports-check-hook.sh.drv
+  /&lt;&lt;NIX&gt;&gt;/python3.9-setuptools-61.2.0.drv
+  /&lt;&lt;NIX&gt;&gt;/python-catch-conflicts-hook.drv
+  /&lt;&lt;NIX&gt;&gt;/python3.9-wheel-0.37.1.drv
+  /&lt;&lt;NIX&gt;&gt;/setuptools-setup-hook.drv
+  /&lt;&lt;NIX&gt;&gt;/python3.9-pip-22.0.4.drv
+  /&lt;&lt;NIX&gt;&gt;/pip-install-hook.drv
+  /&lt;&lt;NIX&gt;&gt;/meson-0.61.2.drv
+  /&lt;&lt;NIX&gt;&gt;/fuse-3.10.5.drv
+  /&lt;&lt;NIX&gt;&gt;/fuse-2.9.9.drv
+  /&lt;&lt;NIX&gt;&gt;/e2fsprogs-1.46.5.drv
+  /&lt;&lt;NIX&gt;&gt;/libarchive-3.6.1.drv
+  /&lt;&lt;NIX&gt;&gt;/cmake-3.22.3.drv
+  /&lt;&lt;NIX&gt;&gt;/libipt-2.0.4.drv
+  /&lt;&lt;NIX&gt;&gt;/readline-8.1p2.drv
+  /&lt;&lt;NIX&gt;&gt;/gdb-12.1.drv</code></pre>
+<p>Now we can verify that all <strong>libncursesw.so.6</strong> instances are pulled in from a single path:</p>
+<pre><code>$ lddtree -a ./result/bin/gdb |&amp; fgrep -B1 ncurses
+    libreadline.so.8 =&gt; /nix/store/k8p8sj27cgblad8f0zavpzwwyvv5gn0d-readline-8.1p2/lib/libreadline.so.8
+        libncursesw.so.6 =&gt; /nix/store/3hwz3archcn9z8y93b2qdnkrgdf7g5jb-ncurses-6.3-p20220507/lib/libncursesw.so.6
+--
+            ld-linux-x86-64.so.2 =&gt; /nix/store/fz33c1mfi2krpg1lwzizfw28kj705yg0-glibc-2.34-210/lib/ld-linux-x86-64.so.2
+    libncursesw.so.6 =&gt; /nix/store/3hwz3archcn9z8y93b2qdnkrgdf7g5jb-ncurses-6.3-p20220507/lib/libncursesw.so.6</code></pre>
+<h1 id="allowed-symbol-collisions">allowed symbol collisions</h1>
+<p>There are a few cases when it is natural to have symbol collisions:</p>
+<ul>
+<li><p>when final executable wants to override function implementation from a library it can
+define the function with the same prototype. I’ll carefully ignore details of <strong>hidden</strong>
+visibility symbols here.</p></li>
+<li><p>when executable or library wants to provide a fallback function in case it’s not
+present anywhere else it can use weak symbol: <a href="https://en.wikipedia.org/wiki/Weak_symbol" class="uri">https://en.wikipedia.org/wiki/Weak_symbol</a></p></li>
+</ul>
+<p>If you use neither of the above you still can load libraries with
+clashing symbols. You would have to use <strong>dlopen(“path/to/lib.so”, RTLD_LOCAL)</strong>
+/ <strong>dlsym()</strong> to extract symbols under non-ambiguous names. Plugins frequently
+use this technique to avoid namespace pollution and to simplify plugin unloading.</p>
+<p>Typical examples of <strong>LD_PRELOAD</strong> users that rely on runtime symbol overload are:</p>
+<ul>
+<li><strong>jemalloc</strong>: <a href="https://github.com/jemalloc/jemalloc/wiki/Getting-Started" class="uri">https://github.com/jemalloc/jemalloc/wiki/Getting-Started</a> (overrides <strong>malloc()</strong> and friends)</li>
+<li><strong>tcmalloc</strong>: <a href="https://gperftools.github.io/gperftools/tcmalloc.html" class="uri">https://gperftools.github.io/gperftools/tcmalloc.html</a> (overrides <strong>malloc()</strong> and friends)</li>
+<li><strong>tsocks</strong>: <a href="https://linux.die.net/man/8/tsocks" class="uri">https://linux.die.net/man/8/tsocks</a> (overrides <strong>socket()</strong> and friends)</li>
+<li><strong>fakeroot</strong>: <a href="https://linux.die.net/man/1/fakeroot-tcp" class="uri">https://linux.die.net/man/1/fakeroot-tcp</a> (overrides file APIs)</li>
+<li><strong>sandbox</strong>: <a href="https://github.com/gentoo/sandbox/blob/master/README.md" class="uri">https://github.com/gentoo/sandbox/blob/master/README.md</a> (overrides file APIs)</li>
+<li><strong>libeatmydata</strong>: <a href="https://www.flamingspork.com/projects/libeatmydata/" class="uri">https://www.flamingspork.com/projects/libeatmydata/</a> (overrides <strong>fsync()</strong> API)</li>
+</ul>
+<h1 id="parting-words">parting words</h1>
+<p>Symbol clashes are nasty. They are most frequent to appear when multiple
+versions of the same library are loaded into the program over different
+dependency paths.</p>
+<p>Default toolchain support does not help much in catching duplicate symbols.
+You might have to resort to local hacks to detect such cases. Or you can add
+a feature to your favorite linker!</p>
+<p>Luckily there is a simple rule to follow to avoid it most if the time:
+try hard not to expose more than one version of a library in your depgraph.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on June 18, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
