@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>trofi's blog: nixpkgs cross-compilation improvements</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>nixpkgs cross-compilation improvements</h1>
+
+            <h2 id="tldr">TL;DR</h2>
+<p><code>gcc</code> cross-compilers are now stripped!
+For example <a href="https://github.com/NixOS/nixpkgs/pull/182513">nixpkgs/182513</a>
+decreases <code>wine</code> closure (or any other <code>pkgsCross.*.stdenv</code>)
+by a ~1GB.</p>
+<p><a href="https://github.com/NixOS/nixpkgs/pull/182513">nixpkgs/182513</a> also fixes
+stripping of static libraries. You can now remove existing <code>dontStrip = true;</code>
+workarounds in <code>nixpkgs</code> if you had to put them in to restore linkage.
+For example <a href="https://github.com/NixOS/nixpkgs/pull/183484">nixpkgs/183484</a>
+decreases <code>mingw</code> closure by 200MB.</p>
+<p>With <a href="https://github.com/NixOS/nixpkgs/pull/181943">nixpkgs/181943</a> <code>gcc</code>
+cross-compilers and cross-built <code>gcc</code>s now enable expected features based
+on target’s libc headers. Previously libc headers were not passed correctly.
+That caused cross-<code>gcc</code> and cross-build <code>gcc</code> to assume too conservative
+assumptions about libc like use of <code>libssp</code> on targets or use of executable
+stack support.</p>
+<h2 id="story-mode">Story mode</h2>
+<p>I like cross-compilation. It’s a great way to peek at other
+CPU architectures’ properties without having to deal with
+real hardware.</p>
+<p>Cross-compilation is fundamentally just a compilation. The compiler
+should emit code for that one CPU type. Should be a solved problem by
+now, right? If you ever tried to cross-compile something large you
+probably already know the complications that usually arise from it.</p>
+<h2 id="the-problem">The problem</h2>
+<p>Scrolling through open <code>nixpkgs</code> PRs I stopped on this one:
+<a href="https://github.com/NixOS/nixpkgs/pull/181802">stdenv: lib{gmp,mpc,mpfr,isl}-stage3: isPower64 -&gt; no -fstack-protector</a>.
+It looked like something I could review. A few month ago I fiddled with
+<a href="../posts/240-nixpkgs-bootstrap-intro.html">stdenv bootstrap</a> when I dealt
+with <code>glibc-2.35</code> update. If nothing else I knew <code>stdenv</code> is a bit hard
+to reason about when it comes to figuring out bootstrap dependency tower.</p>
+<p>In the PR Adam Joseph shared the problem he was trying to address. Somewere
+at bootstrap time on <code>powerpc64le-linux</code> platform one of the intermediate
+<code>gcc</code> builds failed to link as:</p>
+<pre><code>/tmp/nix-build-gcc-10.3.0.drv-0/build/./prev-gcc/xg++ \
+    -o cc1plus \
+    cp/cp-lang.o ... main.o ... ../libdecnumber/libdecnumber.a ... -lz
+/&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld: /&lt;&lt;NIX&gt;&gt;/mpfr-4.1.0/lib/libmpfr.a(mpfr-gmp.o):
+  (.toc+0x8): undefined reference to `__stack_chk_guard'
+/&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld: /&lt;&lt;NIX&gt;&gt;/mpfr-4.1.0/lib/libmpfr.a(mpfr-gmp.o):
+  (.toc+0x8): undefined reference to `__stack_chk_guard'
+...</code></pre>
+<p>Adam suggested disabling stack protector just for a few bootstrap
+packages (<code>mpfr</code> and the similar) to get past the errro. While it probably
+gets the job done it also flags an assumption incompatibility between
+compilers. It should not normally happen.</p>
+<h2 id="what-is-libssp">What is libssp?</h2>
+<p>What is that <code>__stack_chk_guard</code> thing anyway? What is supposed to
+provide it?</p>
+<p>It has something to do with <code>-fstack-protector*</code> set of options in
+<code>gcc</code>. Let’s pick a trivial <code>void wr(char * p, char v){ *p = v; }</code>
+function and build it with and without stack protector to get a
+feel of it:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>$ printf <span class="st">&quot;void wr(long * p, long v){ *p = v; }&quot;</span> <span class="op">|</span> gcc <span class="op">-</span>S <span class="op">-</span>x c <span class="op">-</span> <span class="op">-</span>o <span class="op">-</span> <span class="op">-</span>fno<span class="op">-</span>stack<span class="op">-</span>protector <span class="op">-</span>O2</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">file</span>   <span class="st">&quot;&lt;stdin&gt;&quot;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>        .text</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>        .p2align <span class="dv">4</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        .globl  wr</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>        .type   wr<span class="op">,</span> <span class="fu">@f</span>unction</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="fu">wr:</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFB0:</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        .cfi_startproc</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rsi</span><span class="op">,</span> <span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>       <span class="co">; Our `*p = v;` code</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>        .cfi_endproc</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFE0:</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>        .size   wr<span class="op">,</span> <span class="op">.-</span>wr</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        .ident  <span class="st">&quot;GCC: (GNU) 12.1.0&quot;</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>        .<span class="bu">section</span>        <span class="op">.</span>note<span class="op">.</span>GNU<span class="op">-</span>stack<span class="op">,</span><span class="st">&quot;&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span></code></pre></div>
+<p>The actual code takes 1 line here: <code>movq    %rsi, (%rdi)</code>. It stores
+64-bit value at <code>%rsi</code> register (<code>long v</code> parameter) to memory pointed
+by <code>%rdi</code> (<code>long * p</code> parameter). The rest is a bit of metadata to get
+the code placed properly into the <code>ELF</code> file.</p>
+<p>Now let’s add stack protector code to it with <code>-fstack-protector-all</code>
+option:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>$ printf <span class="st">&quot;void wr(long * p, long v){ *p = v; }&quot;</span> <span class="op">|</span> gcc <span class="op">-</span>S <span class="op">-</span>x c <span class="op">-</span> <span class="op">-</span>o <span class="op">-</span> <span class="op">-</span>fstack<span class="op">-</span>protector<span class="op">-</span>all <span class="op">-</span>O2</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">file</span>   <span class="st">&quot;&lt;stdin&gt;&quot;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>        .text</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        .p2align <span class="dv">4</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        .globl  wr</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        .type   wr<span class="op">,</span> <span class="fu">@f</span>unction</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="fu">wr:</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFB0:</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        .cfi_startproc</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        subq    <span class="op">$</span><span class="bn">24</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span>          <span class="co">; allocated a bit of space for canary on stack</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>        .cfi_def_cfa_offset <span class="dv">32</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">fs</span><span class="op">:</span><span class="dv">40</span><span class="op">,</span> <span class="op">%</span><span class="kw">rax</span>       <span class="co">; canary = %fs:40</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rax</span><span class="op">,</span> <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span>      <span class="co">; store canary on stack</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span>         <span class="co">; clean registers up</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rsi</span><span class="op">,</span> <span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>       <span class="co">; initial `*p = v;` code</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rax</span>      <span class="co">; load canary value back from stack</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        subq    <span class="op">%</span><span class="kw">fs</span><span class="op">:</span><span class="dv">40</span><span class="op">,</span> <span class="op">%</span><span class="kw">rax</span>       <span class="co">; compare to the reference value</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>        <span class="cf">jne</span>     <span class="op">.</span>L5                <span class="co">; exit if canary comparison failed</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        addq    <span class="op">$</span><span class="bn">24</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>        .cfi_remember_state</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        .cfi_def_cfa_offset <span class="dv">8</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span>                        <span class="co">; exit `wr()`</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a><span class="fu">.L5:</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>        .cfi_restore_state</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">call</span>    __stack_chk_fail   <span class="co">; handle failure</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>        .cfi_endproc</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFE0:</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>        .size   wr<span class="op">,</span> <span class="op">.-</span>wr</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>        .ident  <span class="st">&quot;GCC: (GNU) 12.1.0&quot;</span></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>        .<span class="bu">section</span>        <span class="op">.</span>note<span class="op">.</span>GNU<span class="op">-</span>stack<span class="op">,</span><span class="st">&quot;&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span></code></pre></div>
+<p>Now our original code was diluted with 9(!) extra instructions related
+to stack protector checks. To make the checking work the compiler uses
+<code>%fs:40</code> thread-local memory location as a canary value. At start of
+each function code places canary on stack (with <code>movq %rax, 8(%rsp)</code>)
+and at the end of function code reads the canary value back from the
+same location (with <code>movq 8(%rsp), %rax</code>) and checks if it was unchanged
+(with <code>subq %fs:40, %rax</code> and <code>jne .L5</code>). If the canary check
+failed then <code>__stack_chk_fail()</code> is called.</p>
+<p>If we generalize the above to pseudo-code <code>gcc</code> turned our program to
+something like:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> wr<span class="op">(</span><span class="dt">long</span> <span class="op">*</span> p<span class="op">,</span> <span class="dt">long</span> v<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> canary <span class="op">=</span> __stack_chk_guard<span class="op">;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>p <span class="op">=</span> v<span class="op">;</span> <span class="co">// original code</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>canary <span class="op">!=</span> __stack_chk_guard<span class="op">)</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        __stack_chk_fail<span class="op">();</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Something has to provide that <code>__stack_chk_fail()</code> function. In case
+of <code>glibc</code> that function is provided by <code>libc.so.6</code> library starting
+from <code>2.4</code> version:</p>
+<pre><code>$ nm -D &lt;&lt;NIX&gt;&gt;/glibc-2.34-210/lib/libc.so.6  | fgrep __stack
+0000000000116de0 T __stack_chk_fail@@GLIBC_2.4</code></pre>
+<p>Something also has to arrange addressable <code>%fs:40</code> memory. In case of
+<code>glibc</code> that value is placed by <code>glibc</code>
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=csu/libc-start.c;h=543560f36c33b07a1fbe1b7e4578374fe8007b1f;hb=da3b9f445195bdbe77e66e4fc137a5732637b85f#l311">itself</a>
+in the early startup code. <code>%fs</code> is a <code>TLS</code> segment register for a
+segment maintained by kernel: kernel changes the segment address
+on thread switch.</p>
+<p>Thus the above assembly code generated by <code>gcc</code> implies presence of
+operating system and supporting libc.</p>
+<p>Not all architectures have a way to address thread-local data in that
+fashion. For targets without <code>TLS</code> <code>glibc</code> emulates a bit of stack
+protection with a global variable <code>uintptr_t __stack_chk_guard attribute_relro;</code>.</p>
+<p>Turns out it’s not the only implementation of stack protector prologue
+and epilogue even on <code>x86_64</code>. What happens on <code>glibc-2.0</code>? Or on other
+libcs or kernels?</p>
+<p>The implementation we saw above was the default case of <code>--disable-libssp</code>
+mode of <code>gcc</code>. We can also build <code>gcc</code> in <code>--enable-libssp</code>. In this
+case we get a bit different code:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a># Locally built <span class="op">`</span>gcc<span class="op">`</span> build with <span class="op">`./</span>configure <span class="op">--</span>enable<span class="op">-</span>libssp<span class="op">`:</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>$ printf <span class="st">&quot;void wr(long * p, long v){ *p = v; }&quot;</span> <span class="op">|</span> gcc<span class="op">/</span>xgcc <span class="op">-</span>Bgcc <span class="op">-</span>S <span class="op">-</span>x c <span class="op">-</span> <span class="op">-</span>o <span class="op">-</span> <span class="op">-</span>fstack<span class="op">-</span>protector<span class="op">-</span>all <span class="op">-</span>O2</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">file</span>   <span class="st">&quot;&lt;stdin&gt;&quot;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>        .text</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>        .p2align <span class="dv">4</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>        .globl  wr</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>        .type   wr<span class="op">,</span> <span class="fu">@f</span>unction</span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="fu">wr:</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFB0:</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>        .cfi_startproc</span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>        subq    <span class="op">$</span><span class="bn">24</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span>                       <span class="co">; allocated a bit of space for canary on stack</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>        .cfi_def_cfa_offset <span class="dv">32</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    __stack_chk_guard<span class="op">(%</span>rip<span class="op">),</span> <span class="op">%</span><span class="kw">rax</span>   <span class="co">; canary = __stack_chk_guard</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rax</span><span class="op">,</span> <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span>                   <span class="co">; store canary on stack</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>        xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span>                      <span class="co">; clean registers up</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rsi</span><span class="op">,</span> <span class="op">(%</span><span class="kw">rdi</span><span class="op">)</span>                    <span class="co">; initial `*p = v;` code</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rax</span>                   <span class="co">; load canary value back from stack</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>        subq    __stack_chk_guard<span class="op">(%</span>rip<span class="op">),</span> <span class="op">%</span><span class="kw">rax</span>   <span class="co">; compare to the reference value</span></span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">jne</span>     <span class="op">.</span>L5                             <span class="co">; exit if canary comparison failed</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>        addq    <span class="op">$</span><span class="bn">24</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>        .cfi_remember_state</span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>        .cfi_def_cfa_offset <span class="dv">8</span></span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span>                                     <span class="co">; exit `wr()`</span></span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a><span class="fu">.L5:</span></span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>        .cfi_restore_state</span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>        <span class="cf">call</span>    __stack_chk_fail                <span class="co">; handle failure</span></span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a>        .cfi_endproc</span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a><span class="fu">.LFE0:</span></span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>        .size   wr<span class="op">,</span> <span class="op">.-</span>wr</span>
+<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>        .ident  <span class="st">&quot;GCC: (GNU) 13.0.0 20220724 (experimental)&quot;</span></span>
+<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a>        .<span class="bu">section</span>        <span class="op">.</span>note<span class="op">.</span>GNU<span class="op">-</span>stack<span class="op">,</span><span class="st">&quot;&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span></code></pre></div>
+<p>The assembly code is very close to <code>--disable-libssp</code> case. The
+difference is how canary is read:
+instead of using thread-local <code>%fs:40</code> location <code>gcc</code> now resorts
+to using a global <code>__stack_chk_guard</code> variable.</p>
+<p>Note that <code>glibc</code> does not provde <code>__stack_chk_guard</code> symbol. In <code>gcc</code>’s
+case expected to come from <code>libssp</code> library we just enabled. <code>gcc</code>’s spec
+files add <code>-lssp</code> (or equivalent) to all link commands.</p>
+<p>This means that binaries produced by <code>--enable-libssp</code> and by
+<code>--disable-libssp</code> are slightly incompatible: the final result needs
+to be linked by <code>--enable-libssp</code> <code>gcc</code>. Otherwise we’ll get linker
+failures:</p>
+<pre><code>$ printf &quot;void wr(long * p, long v){ *p = v; }&quot; | gcc/xgcc -Bgcc -c -x c - -fPIC -o a.o -fstack-protector-all -O2
+$ gcc -shared a.o -o liba.so -Wl,-no-undefined
+&lt;&lt;NIX&gt;&gt;/binutils-2.38/bin/ld: a.o: in function `wr':
+&lt;stdin&gt;:(.text+0x7): undefined reference to `__stack_chk_guard'
+collect2: error: ld returned 1 exit status</code></pre>
+<p>Looks familiar? That’s exactly the same failure we started with.</p>
+<h2 id="so-why-do-we-get-a-mix-of-gcc-flavours">So why do we get a mix of gcc flavours?</h2>
+<p>Not all libc versions provide stack protector infrastructure. <code>gcc</code>
+tries to guess at <code>./configure</code> time by
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/configure.ac;h=446747311a6aec3c810ad6aa4190f7bd383b94f7;hb=HEAD#l6734">peeking</a>
+at target libc’s headers:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode m4"><code class="sourceCode m4"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>[if test <span class="ch">-</span>f $target_header_dir<span class="ch">/</span>features.h \</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="ch">&amp;&amp;</span> glibc_version_major_define<span class="ch">=</span>`$EGREP '<span class="ch">^</span>[     ]<span class="ch">*</span><span class="co">#[    ]*define[       ]+__GLIBC__[</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>   ]<span class="ch">+</span>[<span class="dv">0</span><span class="ch">-</span><span class="dv">9</span>]' $target_header_dir<span class="ch">/</span>features.h` \</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="ch">&amp;&amp;</span> glibc_version_minor_define<span class="ch">=</span>`$EGREP '<span class="ch">^</span>[     ]<span class="ch">*</span><span class="co">#[    ]*define[       ]+__GLIBC_MIN</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>OR__[   ]<span class="ch">+</span>[<span class="dv">0</span><span class="ch">-</span><span class="dv">9</span>]' $target_header_dir<span class="ch">/</span>features.h`; then</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  glibc_version_major<span class="ch">=</span>`echo &quot;$glibc_version_major_define&quot; <span class="ch">|</span> sed <span class="ch">-</span>e 's<span class="ch">/</span>.<span class="ch">*</span>__GLIBC__[</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>     ]<span class="ch">*//</span>'`</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>  glibc_version_minor<span class="ch">=</span>`echo &quot;$glibc_version_minor_define&quot; <span class="ch">|</span> sed <span class="ch">-</span>e 's<span class="ch">/</span>.<span class="ch">*</span>__GLIBC_MINOR</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>__[     ]<span class="ch">*//</span>'`</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>fi]</span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>...</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="co"># Test for stack protector support in target C library.</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>AC_CACHE_CHECK<span class="ch">(</span>__stack_chk_fail in target C library<span class="ch">,</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>  gcc_cv_libc_provides_ssp<span class="ch">,</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>  [gcc_cv_libc_provides_ssp<span class="ch">=</span>no</span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>    ...</span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>    case &quot;$target&quot; in</span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>       <span class="ch">*-*-</span>musl<span class="ch">*)</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>         <span class="co"># All versions of musl provide stack protector</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>         gcc_cv_libc_provides_ssp<span class="ch">=</span>yes;;</span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>       <span class="ch">*-*-</span>linux<span class="ch">*</span> <span class="ch">|</span> <span class="ch">*-*-</span>kfreebsd<span class="ch">*-</span>gnu<span class="ch">)</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>      <span class="co"># glibc 2.4 and later provides __stack_chk_fail and</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>      <span class="co"># either __stack_chk_guard, or TLS access to stack guard canary.</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>      GCC_GLIBC_VERSION_GTE_IFELSE<span class="ch">(</span>[<span class="dv">2</span>]<span class="ch">,</span> [<span class="dv">4</span>]<span class="ch">,</span> [gcc_cv_libc_provides_ssp<span class="ch">=</span>yes]<span class="ch">,</span> [</span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>      ...</span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>       <span class="ch">*)</span> gcc_cv_libc_provides_ssp<span class="ch">=</span>no ;;</span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>    esac</span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>  fi]<span class="ch">)</span></span></code></pre></div>
+<p>Here <code>configure.ac</code> just greps <code>glibc</code>’s <code>features.h</code> header for library
+version. It does not do usual linking probing as bootstrap frequently
+starts from <code>gcc</code> and <code>glibc</code> headers alone.</p>
+<p>In <code>nixpkgs</code>’s case <code>gcc</code> build in <code>cross-compile</code> case
+(<code>host != target</code>) was looking at a wrong directory location by
+attempting to add sysroot
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/configure.ac;h=446747311a6aec3c810ad6aa4190f7bd383b94f7;hb=HEAD#l2438">prefix</a>:</p>
+<pre><code>if test x$host != x$target || test &quot;x$TARGET_SYSTEM_ROOT&quot; != x ||
+   test x$build != x$host || test &quot;x$with_build_sysroot&quot; != x; then
+  if test &quot;x$with_build_sysroot&quot; != x; then
+    BUILD_SYSTEM_HEADER_DIR=$with_build_sysroot'$${sysroot_headers_suffix}$(NATIVE_SYSTEM_HEADER_DIR)'
+  else
+    BUILD_SYSTEM_HEADER_DIR='$(CROSS_SYSTEM_HEADER_DIR)'
+  fi
+
+  if test x$host != x$target
+  then
+    CROSS=&quot;-DCROSS_DIRECTORY_STRUCTURE&quot;
+    ALL=all.cross
+    SYSTEM_HEADER_DIR=$BUILD_SYSTEM_HEADER_DIR
+  elif test &quot;x$TARGET_SYSTEM_ROOT&quot; != x; then
+    SYSTEM_HEADER_DIR='$(CROSS_SYSTEM_HEADER_DIR)'
+  fi
+
+  if test &quot;x$with_build_sysroot&quot; != &quot;x&quot;; then
+    target_header_dir=&quot;${with_build_sysroot}${native_system_header_dir}&quot;
+  elif test &quot;x$with_sysroot&quot; = x; then
+    target_header_dir=&quot;${test_exec_prefix}/${target_noncanonical}/sys-include&quot;
+  elif test &quot;x$with_sysroot&quot; = xyes; then
+    target_header_dir=&quot;${test_exec_prefix}/${target_noncanonical}/sys-root${native_system_header_dir}&quot;
+  else
+    target_header_dir=&quot;${with_sysroot}${native_system_header_dir}&quot;
+  fi
+else
+  target_header_dir=${native_system_header_dir}
+fi</code></pre>
+<p>Note how hard <code>gcc</code> tries:</p>
+<ul>
+<li><code>${buildsysroot}/${native_system_header_dir}</code></li>
+<li><code>${exec_prefix}/${target}/sys-include</code></li>
+<li><code>${exec_prefix}/${target}/sys-root${native_system_header_dir}</code></li>
+<li><code>${sysroot}${native_system_header_dir}</code></li>
+</ul>
+<p><code>nixpkgs</code> provided none of these directories and build was falling back
+to outdated <code>glibc-0.0</code> assumption.</p>
+<p>Thus initial fix was simple: just add <code>--with-build-sysroot=/</code> option to
+<code>gcc</code>’s <code>./configure</code> to trick it to use <code>/${native_system_header_dir}</code> path.</p>
+<p>One-liner change! This allowed me to cross-build <code>gcc</code> for
+<code>powerpc64le-linux</code> and make sure stack protector is using <code>glibc</code>
+support code. Are we done?</p>
+<h2 id="pandoras-box">Pandora’s box</h2>
+<p>The <code>--with-build-sysroot=/</code> now started enabling all sorts of
+libc-specific features. That should be fine on it’s own, but for
+<code>nixpkgs</code> cross-build (<code>build != host == target</code>) case it was
+like that for the first time.</p>
+<p>Varios linux targets just worked with the fix. Mostly because
+we are compiling from <code>glibc</code> to <code>glibc</code>. Or from <code>glibc</code> to <code>musl</code>.
+It’s usually not that bad to miss a feature or two.</p>
+<p>I was confident of the fix, but <a href="https://github.com/NixOS/ofborg">ofborg</a>
+presubmit test told me that I broke <code>x86_64-darwin</code> <code>gcc</code> build:</p>
+<pre><code>impure path `//' used in link
+collect2: error: ld returned 1 exit status</code></pre>
+<p>After a bit of debugging I found it to be just a false positive check
+failure in <code>nixpkgs</code>-specific <code>ld</code> wrapper script. Wrapper complained
+that <code>-syslibroot //</code> refers outside <code>/nix/store</code> path and thus breaks
+the sandboxing. But in reality it’s a no-op flag. Thus I just skipped
+this specific path in the wrapper.</p>
+<p>I tried to cross-build <code>gcc</code>. It failed again. This time <code>ofborg</code> was
+still unhappy and complained about missing <code>sys/sdt.h</code> header~</p>
+<p>That was surprising: <code>darwin's</code> libc does provide <code>sys/sdt.h</code>,
+while <code>glibc</code> does not. Why does it even try to use that header?
+Normally <code>gcc</code>’s <code>configure.ac</code> <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/configure.ac;h=446747311a6aec3c810ad6aa4190f7bd383b94f7;hb=HEAD#l6807">probes it</a>
+as a target header as well:</p>
+<pre class="shell"><code># Test for &lt;sys/sdt.h&gt; on the target.
+GCC_TARGET_TEMPLATE([HAVE_SYS_SDT_H])
+AC_MSG_CHECKING(sys/sdt.h in the target C library)
+have_sys_sdt_h=no
+if test -f $target_header_dir/sys/sdt.h; then
+  have_sys_sdt_h=yes
+  AC_DEFINE(HAVE_SYS_SDT_H, 1,
+            [Define if your target C library provides sys/sdt.h])
+fi
+AC_MSG_RESULT($have_sys_sdt_h)</code></pre>
+<p>The answer was straightforward: <code>nixpkgs</code> incorrectly used host’s
+headers as target headers!</p>
+<p>After I sorted this failure yet another failure came up: <code>pkgsLLVM</code>
+bootstrap was broken because <code>gcc</code> enables corss-compilation mode
+for <code>build != host || host != target</code> case. But <code>nixpkgs</code> uses
+<code>x86_64-unknown-linux-gnu</code> for both <code>gcc</code> (host) and <code>llvm</code>
+(target) toolchains and bootstraps it as a proper cross-compiler.
+That was easy to fix with <a href="https://github.com/NixOS/nixpkgs/pull/182666">nixpkgs/182666</a>.</p>
+<p>Is that it? I’m not sure. I think we have a few more workarounds
+buried in <code>nixpkgs</code> that stemmed from the fact that we used wrong
+headers. One bug at a time.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nixpkgs</code> makes it trivial to try various cross-compilers with a
+single command. <code>darwin</code> port was very useful to expose two bugs
+in generic include layour scheme <code>nixpkgs</code> was using.</p>
+<p>Reproducible environment made it possible to debug early stage of
+<code>gcc</code> bootstrap when libc is not yet present for target. When I did
+a similar work on Gentoo’s <code>crossdev</code> I was frequently tricked by
+the fact that building initiall cross-toolchain frequently results
+in a different result than after a <code>crossdev</code> rerun.</p>
+<p><code>gcc</code>’s <code>./configure</code> is surprisingly resilient to all the invalid
+configurations you throw at it. It always manages to produce something
+that mostly works and gets you going as an initial porting effort.
+I think it’s a good thing in the toolchain world as target environments
+are so diverse. But it takes some time to debug it efficiently.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on July 30, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
