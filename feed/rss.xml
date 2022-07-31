@@ -7,8 +7,165 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sat, 30 Jul 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sun, 31 Jul 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>nixpkgs overlay nano howto</title>
+    <link>http://trofi.github.io/posts/252-nixpkgs-overlay-nano-howto.html</link>
+    <description><![CDATA[<p><code>nixpkgs</code> is a huge repository of various packages. But what if you want
+to package a tiny package and don’t plan to share it with anyone. Is it
+hard? How would you go about it?</p>
+<p>There are many ways to do it: maintain a <code>nixpkgs</code> fork, use
+<code>packageOverrides</code>, <code>overlays</code>, <code>flakes</code> and many others methods.</p>
+<p>I’ll focus here only on <code>overlays</code> method as it feels to me like the
+simplest way to write packages readily copyable to (or from) <code>nixpkgs</code>.</p>
+<h2 id="nixpkgs-stucture">nixpkgs stucture</h2>
+<p>before we start with an example let’s have a look at <code>nixpkgs</code>
+“schema”. <code>nixpkgs</code> provides a <code>pkgs</code> map (“attribute set”) from package
+name to package definition (it’s nested in a few places):</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>pkgs = <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">callPackage</span> <span class="op">=</span> <span class="va">pkgPath</span><span class="op">:</span> ...somehow<span class="op">-</span>load<span class="op">-</span>the<span class="op">-</span>package<span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="co"># unnested examples:</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">glibc</span> <span class="op">=</span> callPackage <span class="ss">../development/libraries/glibc</span> <span class="op">{</span> <span class="op">...</span> <span class="op">};</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">re2c</span> <span class="op">=</span> callPackage <span class="ss">../development/tools/parsing/re2c</span> <span class="op">{</span> <span class="op">};</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># ...</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="co"># nested examples:</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="va">python39Packages</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>      <span class="co"># the name is slightly changed for clarity</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>      <span class="va">callPythonPackage</span> <span class="op">=</span> <span class="va">pkgPath</span><span class="op">:</span> ...somehow<span class="op">-</span>load<span class="op">-</span>python<span class="op">-</span>package<span class="op">;</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>      <span class="va">black</span> <span class="op">=</span> callPackage <span class="ss">../development/python-modules/black</span> <span class="op">{</span> <span class="op">};</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>      <span class="va">blessed</span> <span class="op">=</span> callPackage <span class="ss">../development/python-modules/blessed</span> <span class="op">{</span> <span class="op">};</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>      <span class="co"># ...</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>;</span></code></pre></div>
+<p>Our goal here is to inject something very simple into top-level
+<code>pkgs = { ... };</code> sturcture. We’ll ignore nested attributes.</p>
+<p><code>overlays</code> allow us to override existing attributes in <code>pkgs</code> or
+introduce the existing ones. Until you get familiar with the way
+attributes interact with one another I suggest adding only new
+attributes.</p>
+<h2 id="an-example">an example</h2>
+<p>Our running example will be <a href="https://github.com/trofi/ski">ski</a> package.
+It’s an <code>autotools</code>-based package with very conventional dependencies.
+Let’s package it!</p>
+<p>I’ll do 3 things below:</p>
+<ol type="1">
+<li>create <code>/tmp/overlay/ski/default.nix</code> expression ready to be included
+into <code>nixpkgs</code> repository</li>
+<li>create <code>/tmp/overlay/local-packages.nix</code> expression ready to be used
+in <code>/etc/nixos/configuration.nix</code> and/or in <code>~/.config/nixpkgs/overlays/</code>.</li>
+<li>add our overlay to <code>/etc/nixos/configuration.nix</code>.</li>
+</ol>
+<p>Here is a simple <code>/tmp/overlay/ski/default.nix</code> expression enough to
+build it:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /tmp/overlay/ski/default.nix</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">lib</span> <span class="op">,</span> <span class="va">stdenv</span> <span class="op">,</span> <span class="va">fetchFromGitHub</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">autoconf</span><span class="op">,</span> <span class="va">automake</span><span class="op">,</span> <span class="va">bison</span><span class="op">,</span> <span class="va">flex</span><span class="op">,</span> <span class="va">gperf</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">libtool</span><span class="op">,</span> <span class="va">pkg-config</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">elfutils</span><span class="op">,</span> <span class="va">libbfd</span><span class="op">,</span> <span class="va">libiberty</span> <span class="op">,</span> <span class="va">ncurses</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>:</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>stdenv.mkDerivation <span class="kw">rec</span> <span class="op">{</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  <span class="va">pname</span> <span class="op">=</span> <span class="st">&quot;ski&quot;</span><span class="op">;</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  <span class="va">version</span> <span class="op">=</span> <span class="st">&quot;unstable-2022-07-07&quot;</span><span class="op">;</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>  <span class="va">src</span> <span class="op">=</span> fetchFromGitHub <span class="op">{</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="va">owner</span> <span class="op">=</span> <span class="st">&quot;trofi&quot;</span><span class="op">;</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    <span class="va">repo</span> <span class="op">=</span> <span class="st">&quot;ski&quot;</span><span class="op">;</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="va">rev</span> <span class="op">=</span> <span class="st">&quot;568efd789fab1f932aa926b1db86dcb75e9c115c&quot;</span><span class="op">;</span></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="va">sha256</span> <span class="op">=</span> <span class="st">&quot;sha256-dwHccL89bXzsjDr8O1DmVHlBQQ6aHgNLEaHJCJqHG9w=&quot;</span><span class="op">;</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">postPatch</span> <span class="op">=</span> <span class="st">''</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="st">    ./autogen.sh</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="st">  ''</span><span class="op">;</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>  <span class="va">nativeBuildInputs</span> <span class="op">=</span> <span class="op">[</span> autoconf automake</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    bison flex gperf libtool pkg-config <span class="op">];</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  <span class="va">buildInputs</span> <span class="op">=</span> <span class="op">[</span> elfutils libbfd libiberty ncurses <span class="op">];</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>  <span class="va">meta</span> <span class="op">=</span> <span class="kw">with</span> lib<span class="op">;</span> <span class="op">{</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>    <span class="va">description</span> <span class="op">=</span> <span class="st">&quot;ia64 (Itanium) instruction set simulator.&quot;</span><span class="op">;</span></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>    <span class="va">homepage</span> <span class="op">=</span> <span class="st">&quot;https://github.com/trofi/ski&quot;</span><span class="op">;</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>    <span class="va">license</span> <span class="op">=</span> licenses.gpl2Only<span class="op">;</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    <span class="va">platforms</span> <span class="op">=</span> platforms.linux<span class="op">;</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Now we need to create an actual overlay expression. I’ll put it in a
+separate <code>/tmp/overlay/local-packages.nix</code> file as well:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /tmp/overlay/local-packages.nix</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="va">final</span><span class="op">:</span> <span class="va">prev</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="co"># we create new 'ski' attribute here!</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">ski</span> <span class="op">=</span> final.callPackage <span class="ss">./ski</span> <span class="op">{};</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="co"># add more packages below:</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Now we are ready to use the overlay in our
+<code>/etc/nixos/configuration.nix</code>:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">config</span><span class="op">,</span> <span class="va">pkgs</span><span class="op">,</span> <span class="op">...</span> <span class="op">}</span>:</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Add an overlay to augment existing 'pkgs' map.</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">nixpkgs</span>.<span class="va">overlays</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span><span class="bu">import</span> <span class="ss">/tmp/overlay/local-packages.nix</span><span class="op">)</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">];</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  <span class="co"># use augmented 'pkgs':</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  <span class="va">environment</span>.<span class="va">systemPackages</span> <span class="op">=</span> <span class="kw">with</span> pkgs<span class="op">;</span> <span class="op">[</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    ski</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>  <span class="op">];</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Now we can get <code>ski</code> installed into our system:</p>
+<pre><code>$ sudo nixos-rebuild switch
+$ ski -help
+Options:
+    -help        Display command-line options
+    -i &lt;file&gt;    Process initialization file at startup
+    -rest &lt;file&gt; Restore simulation state from &lt;file&gt;
+    -nonet       Disable networking feature
+    -srcroot     Source Root Directory
+    -forceuser   Force user-level simulation
+    -forcesystem Force system-level simulation
+    -strace      Trace system call execution
+    -simroot     Simulated root directory
+    -conslog &lt;file&gt; Log the console output to the specified file
+    -palen &lt;n&gt;      Implemented physical address bits.  Default: 63
+    -valen &lt;n&gt;      Implemented virtual address bits.  Default: 61
+    -ridlen &lt;n&gt;     Implemented RR.rid bits.  Default: 24
+    -keylen &lt;n&gt;     Implemented PKR.key bits.  Default: 24
+    -grfile &lt;n&gt;     GR file size.  Default: 128</code></pre>
+<p>Seems to work!</p>
+<p>We can also get the packages pulled into user’s <code>&lt;nixpkgs&gt;</code> expression:</p>
+<pre><code>$ mkdir -p ~/.config/nixpkgs/overlays/
+$ ln -s /tmp/overlay/local-packages.nix ~/.config/nixpkgs/overlays/</code></pre>
+<p>Now we can use it as a <code>nixpkgs</code> attribute:</p>
+<pre><code>$ nix-build '&lt;nixpkgs&gt;' -A ski
+/nix/store/rpb5iikr6p0x49zkpw5cjwp9lg8lnl7d-ski-unstable-2022-07-07</code></pre>
+<p>A few relevant links:</p>
+<ul>
+<li><a href="https://nixos.org/manual/nixpkgs/stable/#sec-overlays-install">overlays in nixpkgs manual</a></li>
+<li><a href="https://nixos.wiki/wiki/Overlays">overlays in nixos.wiki</a></li>
+</ul>
+<p>Done!</p>
+
+<div class="info">
+    Posted on July 31, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Sun, 31 Jul 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/252-nixpkgs-overlay-nano-howto.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>nixpkgs cross-compilation improvements</title>
     <link>http://trofi.github.io/posts/251-nixpkgs-cross-compilation-improvements.html</link>
     <description><![CDATA[<h2 id="tldr">TL;DR</h2>
@@ -9003,32 +9160,6 @@ assumptions about instructions with delay slots.</p>
 ]]></description>
     <pubDate>Sat, 27 Feb 2021 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/223-delay-slots-strike-back.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>readline config</title>
-    <link>http://trofi.github.io/posts/222-readline-config.html</link>
-    <description><![CDATA[<p><strong>bash</strong> and a few other tools use <strong>readline</strong> library to implement
-interactive coommandline interface with history support, tab completion
-and text editing capabilities like copy/paste buffers and even macro
-commands.</p>
-<p>Here is my tiny <strong>~/.inputrc</strong> to enable a bit more completion color:</p>
-<pre class><code># cat ~/.inputrc
-set colored-completion-prefix on
-set page-completions off
-set colored-stats on
-set show-all-if-ambiguous on
-set blink-matching-paren on</code></pre>
-<p>These all are minor visual and minor tab repeat changes.</p>
-
-<div class="info">
-    Posted on December 12, 2020 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Sat, 12 Dec 2020 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/222-readline-config.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
