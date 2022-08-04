@@ -7,8 +7,36 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 31 Jul 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Thu, 04 Aug 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>one-liner to fix CSS on phones</title>
+    <link>http://trofi.github.io/posts/253-one-liner-to-fix-css-on-phones.html</link>
+    <description><![CDATA[<p>I noticed that this blog was unreadable on the phones: main text was
+readable, but code snippets had 2.5x smaller fonts and required manual
+zooming in to see anything at all.</p>
+<p>Apparently it was happening because on small screens browsers try to
+be smart and scale some UI elements up. But not all of the HTML
+tags get the same treatment. As a result you get size inconsistencies
+where none were before.</p>
+<p>Apparently you can (and need) to opt out of that behaviour! The
+magic <code>HTML5</code> one-liner is:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode html"><code class="sourceCode html"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">&lt;meta</span> <span class="er">name</span><span class="ot">=</span><span class="st">&quot;viewport&quot;</span> <span class="er">content</span><span class="ot">=</span><span class="st">&quot;width=device-width, initial-scale=1.0&quot;</span><span class="kw">&gt;</span></span></code></pre></div>
+<p>There are many other subtleties one needs to account for, like scaling
+pictures accordingly or handling sidebars to overflow in a neat way.
+The set of techniquest are called <code>HTML Responsive Web Design</code>.</p>
+<p>Luckily I don’t need to care about any of that.</p>
+
+<div class="info">
+    Posted on August  4, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Thu, 04 Aug 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/253-one-liner-to-fix-css-on-phones.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>nixpkgs overlay nano howto</title>
     <link>http://trofi.github.io/posts/252-nixpkgs-overlay-nano-howto.html</link>
     <description><![CDATA[<p><code>nixpkgs</code> is a huge repository of various packages. But what if you want
@@ -8797,369 +8825,6 @@ to give it a try as well :)</p>
 ]]></description>
     <pubDate>Sun, 07 Mar 2021 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/224-a-year-on-gcc-from-git.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>Delay Slots strike back</title>
-    <link>http://trofi.github.io/posts/223-delay-slots-strike-back.html</link>
-    <description><![CDATA[<p>Jeroen found another problem on <strong>hppa</strong> (<strong>PA-RISC</strong>) after switch
-to <strong>gcc-10</strong>: <strong>Python-3.9.0b3</strong> started crashing at build time:</p>
-<pre class><code>$ ./configure ... --host=hppa2.0-unknown-linux-gnu ...
-$ make
-...
-
-if test $? -ne 0 ; then \
-echo &quot;generate-posix-vars failed&quot; ; \
-rm -f ./pybuilddir.txt ; \
-exit 1 ; \
-fi
-Python path configuration:
-  PYTHONHOME = (not set)
-  PYTHONPATH = (not set)
-  program name = './python'
-  isolated = 0
-  environment = 0
-  user site = 1
-  import site = 0
-  sys._base_executable = '/var/tmp/portage/dev-lang/python-3.9.0_beta3/work/Python-3.9.0b3/python'
-  sys.base_prefix = '/usr'
-  sys.base_exec_prefix = '/usr'
-  sys.platlibdir = 'lib'
-  sys.executable = '/var/tmp/portage/dev-lang/python-3.9.0_beta3/work/Python-3.9.0b3/python'
-  sys.prefix = '/usr'
-  sys.exec_prefix = '/usr'
-  sys.path = [
-    '/usr/lib/python39.zip',
-    '/var/tmp/portage/dev-lang/python-3.9.0_beta3/work/Python-3.9.0b3/Lib',
-    '/var/tmp/portage/dev-lang/python-3.9.0_beta3/work/Python-3.9.0b3/none\n',
-  ]
-Fatal Python error: init_fs_encoding: failed to get the Python codec of the filesystem encoding
-Python runtime state: core initialized
-Traceback (most recent call last):
-  File &quot;&lt;frozen importlib._bootstrap&gt;&quot;, line 1007, in _find_and_load
-  File &quot;&lt;frozen importlib._bootstrap&gt;&quot;, line 161, in __exit__
-  File &quot;&lt;frozen importlib._bootstrap&gt;&quot;, line 116, in release
-RuntimeError: cannot release un-acquired lock
-generate-posix-vars failed
-make: *** [Makefile:611: pybuilddir.txt] Error 1</code></pre>
-<p>We have two strange errors here:</p>
-<ol type="1">
-<li><strong>Fatal Python error: init_fs_encoding: failed to get the Python codec of the filesystem encoding</strong></li>
-<li><strong>RuntimeError: cannot release un-acquired lock</strong></li>
-</ol>
-<p>Both errors seem unrelated. They signal internal inconsistency in the interpreter.</p>
-<h1 id="debugging">Debugging</h1>
-<p>Is it a <strong>gcc</strong> bug? I usually assume it’s not and try to find inconsisyency
-in the program. If it’s luck I’ll find the bug in the program. Otherwise I’ll
-get a small reproducer to fix the compiler.</p>
-<p>First, I double-checked it’s a <strong>gcc-10 -O2</strong>:</p>
-<pre class><code># on hppa host
-# CC=gcc-10.1.0 CFLAGS=-O2 emerge -v1 dev-lang/python:3.9
-&lt;fails&gt;
-# CC=gcc-10.1.0 CFLAGS=-O1 emerge -v1 dev-lang/python:3.9
-&lt;works&gt;
-# CC=gcc-9.3.0 CFLAGS=-O2 emerge -v1 dev-lang/python:3.9
-&lt;works&gt;</code></pre>
-<p>The bug is reproducible. Assuming it’s an obscure python bug I tried
-<strong>AddressSanitizer</strong> and <strong>valigrind</strong> on <strong>amd64</strong>. Neither reported
-any relevant errors. <strong>valgrind</strong> found a seemingly legitimate
-<strong>use-after-free</strong>: <a href="https://bugs.gentoo.org/729570#c8">https://bugs.gentoo.org/729570#c8</a>.</p>
-<p><strong>–with-valgrind</strong> makes that <strong>valgrind</strong> report go away.
-It also makes original bug away. Which is not very useful. I expected
-some diagnostic that would report heap corruption.</p>
-<p>Falling back to original setup. We need to find a function where input
-is the same but the output is different.</p>
-<p>After much <strong>printf</strong> poking I found simple way to observe the problem:</p>
-<pre class><code>$ git init .; git add .; git commit -m &quot;initial state&quot;
-$ ./configure ... --host=hppa2.0-unknown-linux-gnu ...
-$ make regen-importlib
-$ git diff
---- a/Python/importlib_external.h
-+++ b/Python/importlib_external.h
-@@ -172,7 +172,7 @@ const unsigned char _Py_M__importlib_bootstrap_external[] = {
-     83,0,113,44,100,3,124,0,102,2,83,0,41,4,122,32,
-     82,101,112,108,97,99,101,109,101,110,116,32,102,111,114,32,
-     111,115,46,112,97,116,104,46,115,112,108,105,116,40,41,46,
--    233,1,0,0,0,41,1,90,8,109,97,120,115,112,108,105,
-+    114,15,0,0,0,41,1,90,8,109,97,120,115,112,108,105,
-     116,218,0,41,6,114,23,0,0,0,114,31,0,0,0,218,
-     10,114,112,97,114,116,105,116,105,111,110,114,35,0,0,0,
-     218,8,114,101,118,101,114,115,101,100,218,6,114,115,112,108,
-...</code></pre>
-<p>This output means that freshly built interpreter generates bytecode
-slightly different from already pre-generated. The diff is not expected
-as building python with <strong>-O1</strong> produces no diff on the same test.</p>
-<p>This is a simple enough test to move debugging from debugging on
-<strong>hppa</strong> host to <strong>amd64</strong> host. With <strong>binfmt_misc</strong> wrappers I
-was able to use exatly the same build commands on <strong>amd64</strong> to get
-the same bytecode diff.</p>
-<h1 id="shrinking-the-delta-down">Shrinking the delta down</h1>
-<p>To narrow down on the trigger I wanted to find smallest piece of code
-to build with <strong>-O1</strong> to see the bug disappear (while rest of code is
-built with <strong>-O2</strong>).</p>
-<p>Python build system outputs exact commands used to generate everything.
-I dumped all commands and tweaked <strong>-O2</strong> to <strong>-O1</strong> in a binary search
-fashion:</p>
-<pre class><code>$ make clean
-$ make | tee build.sh
-hppa2.0-unknown-linux-gnu-gcc -c -Wno-unused-result -Wsign-compare -DNDEBUG  -O2 -fdelayed-branch -frecord-gcc-switches -fwrapv   -std=c99 -Wextra -Wno-unused-result -Wno-unused-parameter -Wno-missing-field-initializers -Werror=implicit-function-declaration -fvisibility=hidden  -I./Include/internal  -I. -I./Include -I/usr/include/ncursesw  -fPIC -DPy_BUILD_CORE -o Programs/python.o ./Programs/python.c
-hppa2.0-unknown-linux-gnu-gcc -c -Wno-unused-result -Wsign-compare -DNDEBUG  -O2 -fdelayed-branch -frecord-gcc-switches -fwrapv   -std=c99 -Wextra -Wno-unused-result -Wno-unused-parameter -Wno-missing-field-initializers -Werror=implicit-function-declaration -fvisibility=hidden  -I./Include/internal  -I. -I./Include -I/usr/include/ncursesw  -fPIC -DPy_BUILD_CORE -o Parser/acceler.o Parser/acceler.c
-...
-./Programs/_freeze_importlib zipimport \
-./Lib/zipimport.py \
-./Python/importlib_zipimport.h.new
-python3.9 ./Tools/scripts/update_file.py ./Python/importlib_zipimport.h ./Python/importlib_zipimport.h.new</code></pre>
-<p>Now I can just edit <strong>build.sh</strong> slightly and rerun it. To avoid
-recompilation impact I used <strong>ccache</strong> shadows for <strong>hppa2.0-unknown-linux-gnu-gcc</strong>:</p>
-<pre class><code>$ which hppa2.0-unknown-linux-gnu-gcc
-/usr/lib/ccache/bin/hppa2.0-unknown-linux-gnu-gcc</code></pre>
-<p>That way our “full rebuild” is as cheap as incremental rebuild:</p>
-<pre class><code>$ time bash build.sh
-real 0m2,258s
-user 0m1,673s
-sys  0m0,595s</code></pre>
-<p>2.5 seconds on my 10 years old machine. That gives us very
-interactive debugging environment.</p>
-<p>After a bit of poking I found that rebuilding <strong>Objects/longobject.c</strong>
-with <strong>-O1</strong> is enough to make bug disappear:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/build.sh</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/build.sh</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -39 +39 @@ hppa2.0-unknown-linux-gnu-gcc -c -Wno-unused-result -Wsign-compare -DNDEBUG  -O2</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="st">-hppa2.0-unknown-linux-gnu-gcc ... -O2 ... Objects/longobject.c</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="va">+hppa2.0-unknown-linux-gnu-gcc ... -O1 ... Objects/longobject.c</span></span></code></pre></div>
-<p>Now we can use advanced pragmas and attributes to re-enable <strong>-O2</strong>
-only for subset of <strong>Objects/longobject.c</strong>. The tools are:</p>
-<ol type="1">
-<li><strong>#pragma GCC push_options</strong> / <strong>#pragma GCC optimize(2)</strong> / <strong>#pragma GCC pop_options</strong>:
-change optimization level only for a subset of functions in a file to narrow down the code
-which triggers problematic behaviour.</li>
-<li><strong>__attribute__((noipa))</strong>: make a function
-opaque to inliner as if it was in a separate compilation unit. Useful when shrinking test
-example down to a single file.</li>
-</ol>
-<p>Usage example looks like that:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/Objects/longobject.c</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/Objects/longobject.c</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,3 +1,5 @@</span></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="va">+#pragma GCC push_options</span></span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="va">+#pragma GCC optimize(2)</span></span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a> /* Long (arbitrary precision) integer object implementation */</span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a> /* XXX The functional organization of this file is terrible */</span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -3009,6 +3011,7 @@ PyLong_AsDouble(PyObject *v)</span></span>
-<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    if a == b, return 0</span>
-<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>    if a &gt; b, return a positive number */</span>
-<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a> static Py_ssize_t</span>
-<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a> long_compare(PyLongObject *a, PyLongObject *b)</span>
-<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a> {</span>
-<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -3027,6 +3030,8 @@ long_compare(PyLongObject *a, PyLongObject *b)</span></span>
-<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>     return sign;</span>
-<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a> }</span>
-<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a><span class="va">+static PyObject *</span></span>
-<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a><span class="va">+long_richcompare(PyObject *self, PyObject *other, int op) __attribute__((noipa));</span></span>
-<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a> static PyObject *</span>
-<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a> long_richcompare(PyObject *self, PyObject *other, int op)</span>
-<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a> {</span>
-<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -5807,3 +5812,4 @@ _PyLong_Fini(PyThreadState *tstate)</span></span>
-<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>     }</span>
-<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a> }</span>
-<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a><span class="va">+#pragma GCC pop_options</span></span></code></pre></div>
-<p>With the above tricks I arrived at <strong>long_richcompare()</strong>. I could not see the immediate
-bug in the code. It looks very clean and simple.</p>
-<h1 id="shrinking-down-test-example">Shrinking down test example</h1>
-<p><strong>long_richcompare()</strong> implements a comparison operator for ‘int’
-class (arbitrary precision integer) in python. It’s a simple
-mathematical operation.</p>
-<p>I added a few <strong>printf()</strong> statements to extract exact exact inputs/outputs
-where <strong>long_richcompare()</strong> changes it’s behaviour. It was <strong>long_richcompare(0xFFFFffff, 1, EQ)</strong>.</p>
-<p>The full extracted example was:</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="co">   The test is extracted from Python-3.9.0 miscompilation</span></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="co">   on hppa2.0: https://bugs.gentoo.org/729570</span></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="co">   Original bug happens as an invalid bytecode generation</span></span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="co">   due to bad results from 'long_richcompare(0xFFFFffff, 1, EQ)' calls.</span></span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="co">Failure example:</span></span>
-<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="co">  $ hppa2.0-unknown-linux-gnu-gcc -lm -Wsign-compare -Wall -O1 bug_test.c -o good-bug</span></span>
-<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="co">  $ hppa2.0-unknown-linux-gnu-gcc -lm -Wsign-compare -Wall -O2 bug_test.c -o bad-bug</span></span>
-<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="co">  $ ./good-bug</span></span>
-<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="co">  long_richcompare(2, 1, EQ) = FALSE (expect FALSE)</span></span>
-<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a><span class="co">  $ ./bad-bug</span></span>
-<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a><span class="co">  long_richcompare(2, 1, EQ) = TRUE (expect FALSE)</span></span>
-<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a><span class="co">*/</span></span>
-<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="co">// We use '__attribute__((noipa));' aggressively to simulate</span></span>
-<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a><span class="co">// unavailable function definitions from outside translation units.</span></span>
-<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> cmp<span class="op">(</span><span class="dt">int</span> <span class="op">*</span>lhs<span class="op">,</span> <span class="dt">int</span> <span class="op">*</span>rhs<span class="op">)</span></span>
-<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> sign <span class="op">=</span> <span class="op">*</span>lhs <span class="op">-</span> <span class="op">*</span>rhs<span class="op">;</span></span>
-<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    <span class="co">// semantically this should be 'return 0;' but this condition is not</span></span>
-<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    <span class="co">// supposed to trigger on our input data.</span></span>
-<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>sign <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> sign<span class="op">;</span></span>
-<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> yes<span class="op">(</span><span class="dt">void</span><span class="op">)</span> __attribute__<span class="op">((</span>noipa<span class="op">));</span></span>
-<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> yes<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span> <span class="op">}</span></span>
-<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> long_richcompare<span class="op">(</span><span class="dt">int</span> <span class="op">*</span>self<span class="op">,</span> <span class="dt">int</span> <span class="op">*</span>other<span class="op">,</span> <span class="dt">int</span> op<span class="op">)</span> __attribute__<span class="op">((</span>noipa<span class="op">));</span></span>
-<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> long_richcompare<span class="op">(</span><span class="dt">int</span> <span class="op">*</span>self<span class="op">,</span> <span class="dt">int</span> <span class="op">*</span>other<span class="op">,</span> <span class="dt">int</span> op<span class="op">)</span></span>
-<span id="cb9-37"><a href="#cb9-37" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> result<span class="op">;</span></span>
-<span id="cb9-39"><a href="#cb9-39" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-40"><a href="#cb9-40" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>yes<span class="op">()</span> <span class="op">||</span> <span class="op">!</span>yes<span class="op">())</span></span>
-<span id="cb9-41"><a href="#cb9-41" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb9-42"><a href="#cb9-42" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-43"><a href="#cb9-43" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>self <span class="op">==</span> other<span class="op">)</span></span>
-<span id="cb9-44"><a href="#cb9-44" aria-hidden="true" tabindex="-1"></a>        result <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb9-45"><a href="#cb9-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span></span>
-<span id="cb9-46"><a href="#cb9-46" aria-hidden="true" tabindex="-1"></a>        result <span class="op">=</span> cmp<span class="op">(</span>self<span class="op">,</span> other<span class="op">);</span></span>
-<span id="cb9-47"><a href="#cb9-47" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-48"><a href="#cb9-48" aria-hidden="true" tabindex="-1"></a>    <span class="co">// has to force jump table</span></span>
-<span id="cb9-49"><a href="#cb9-49" aria-hidden="true" tabindex="-1"></a>    <span class="cf">switch</span> <span class="op">(</span>op<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb9-50"><a href="#cb9-50" aria-hidden="true" tabindex="-1"></a>        <span class="co">// only 0 case is used on actual data</span></span>
-<span id="cb9-51"><a href="#cb9-51" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="dv">0</span><span class="op">:</span> <span class="cf">return</span> <span class="op">(</span>result <span class="op">==</span> <span class="dv">0</span><span class="op">);</span></span>
-<span id="cb9-52"><a href="#cb9-52" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-53"><a href="#cb9-53" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="dv">1</span><span class="op">:</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb9-54"><a href="#cb9-54" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="dv">3</span><span class="op">:</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb9-55"><a href="#cb9-55" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="dv">5</span><span class="op">:</span> <span class="cf">if</span> <span class="op">(</span>result <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span> <span class="cf">else</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb9-56"><a href="#cb9-56" aria-hidden="true" tabindex="-1"></a>        <span class="cf">default</span><span class="op">:</span></span>
-<span id="cb9-57"><a href="#cb9-57" aria-hidden="true" tabindex="-1"></a>            __builtin_unreachable<span class="op">();</span></span>
-<span id="cb9-58"><a href="#cb9-58" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb9-59"><a href="#cb9-59" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb9-60"><a href="#cb9-60" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-61"><a href="#cb9-61" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb9-62"><a href="#cb9-62" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-63"><a href="#cb9-63" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb9-64"><a href="#cb9-64" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> l <span class="op">=</span> <span class="dv">2</span><span class="op">;</span></span>
-<span id="cb9-65"><a href="#cb9-65" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> r <span class="op">=</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb9-66"><a href="#cb9-66" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-67"><a href="#cb9-67" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> res <span class="op">=</span> long_richcompare<span class="op">(&amp;</span>l<span class="op">,</span> <span class="op">&amp;</span>r<span class="op">,</span> <span class="dv">0</span><span class="op">);</span></span>
-<span id="cb9-68"><a href="#cb9-68" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;long_richcompare(2, 1, EQ) = %s (expect FALSE)</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> res <span class="op">?</span> <span class="st">&quot;TRUE&quot;</span> <span class="op">:</span> <span class="st">&quot;FALSE&quot;</span><span class="op">);</span></span>
-<span id="cb9-69"><a href="#cb9-69" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Note: it’s not a real comparison anymore. <strong>cmp()</strong> is an elaborate no-op.
-This file is very easy to trace through and verify that it has no problems
-related to undefined behaviour.</p>
-<p>I asked <strong>GCC</strong> developers for help in <a href="https://gcc.gnu.org/PR96015">https://gcc.gnu.org/PR96015</a> and Eric
-immediately suggested trying <strong>-fno-delayed-branch</strong> to see if it makes a
-difference. It did!</p>
-<p>Using <strong>-fno-delayed-branch</strong> allowed me to simplify the example even further
-with <strong>cvise</strong>. It produced the following example:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> b<span class="op">,</span> c<span class="op">;</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> a<span class="op">()</span> __attribute__<span class="op">((</span>noipa<span class="op">));</span></span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> a<span class="op">(</span><span class="dt">int</span> <span class="op">*</span>d<span class="op">,</span> <span class="dt">int</span> <span class="op">*</span>f<span class="op">,</span> <span class="dt">int</span> g<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int</span> e<span class="op">;</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>d <span class="op">==</span> f<span class="op">)</span></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    e <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> <span class="co">// never gets here on our input data</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">else</span></span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    e <span class="op">=</span> <span class="dv">1</span><span class="op">;</span> <span class="co">// always gets here on our input data</span></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> <span class="op">(</span>g<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="dv">0</span><span class="op">:</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> e<span class="op">;</span> <span class="co">// 'return 1'; always gets here on our input data</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="dv">1</span><span class="op">:</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="dv">3</span><span class="op">:</span></span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">case</span> <span class="dv">5</span><span class="op">:</span></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>e<span class="op">)</span></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="dv">10</span><span class="op">;</span></span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="cf">default</span><span class="op">:</span></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>    __builtin_unreachable<span class="op">();</span></span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> a<span class="op">(&amp;</span>b<span class="op">,</span> <span class="op">&amp;</span>c<span class="op">,</span> <span class="dv">0</span><span class="op">);</span> <span class="op">}</span></span></code></pre></div>
-<pre class><code>$ hppa2.0-unknown-linux-gnu-gcc -O2 bug_test.c -o bad; ./bad; echo $?
-0
-$ hppa2.0-unknown-linux-gnu-gcc -O2 bug_test.c -o good -fno-delayed-branch; ./good; echo $?
-1</code></pre>
-<h1 id="generated-code">Generated code</h1>
-<p>Let’s peek at generated code in this example:</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; hppa2.0-unknown-linux-gnu-gcc -O2 -S ../bug_test.c -o bug.S</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>        bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; ret = 0; return ret;</span></span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>         ldi <span class="dv">0</span><span class="op">,%</span>r28 <span class="co">; delayed slot for 'ret = 0'</span></span></code></pre></div>
-<p>This is very short and wrong ‘return 0’ code.</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; hppa2.0-unknown-linux-gnu-gcc -O2 -S ../bug_test.c -o bug.S -fno-delayed-branch</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>        comclr<span class="op">,&lt;&gt;</span> <span class="op">%</span>r26<span class="op">,%</span>r25<span class="op">,%</span>r0 <span class="co">; compare d == f</span></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>        b<span class="op">,</span>n <span class="op">.</span>L11                <span class="co">; if (d == f) goto .L11 else no-op;</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>        <span class="bu">nop</span></span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="fu">.L4:</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="fu">.L12:</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>        ldil L<span class="st">'.L6,%r28</span></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>        ldo R<span class="st">'.L6(%r28),%r28    ; load address of jump table at .L6</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>        ldwx<span class="op">,</span>s <span class="op">%</span>r24<span class="op">(%</span>r28<span class="op">),%</span>r28  <span class="co">; fetch .L6[g(arg2)] target address</span></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        bv<span class="op">,</span>n <span class="op">%</span>r0<span class="op">(%</span>r28<span class="op">)</span>          <span class="co">; goto at .L6[g(arg2)]</span></span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="fu">.L6:</span></span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        .begin_brtab</span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">word</span> <span class="op">.</span>L8 <span class="co">; 'case 0:' code (our case)</span></span>
-<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">word</span> <span class="op">.</span>L5 <span class="co">; 'case 1:' code</span></span>
-<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">word</span> <span class="op">.</span>L4 <span class="co">; 'case 2:' code</span></span>
-<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">word</span> <span class="op">.</span>L5 <span class="co">; 'case 3:' code</span></span>
-<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">word</span> <span class="op">.</span>L4 <span class="co">; 'case 4:' code</span></span>
-<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>        .<span class="dt">word</span> <span class="op">.</span>L5 <span class="co">; 'case 5:' code</span></span>
-<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>        .end_brtab</span>
-<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="fu">.L5:</span></span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>        ldi <span class="dv">10</span><span class="op">,%</span>r28   <span class="co">; ret = 10</span></span>
-<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>        bv<span class="op">,</span>n <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; return ret;</span></span>
-<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="fu">.L11:</span></span>
-<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>        ldi <span class="dv">0</span><span class="op">,%</span>r28    <span class="co">; ret = 0</span></span>
-<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>        bv<span class="op">,</span>n <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; return ret;</span></span>
-<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a><span class="fu">.L8:</span></span>
-<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>        ldi <span class="dv">1</span><span class="op">,%</span>r28    <span class="co">; ret = 1</span></span>
-<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>        bv<span class="op">,</span>n <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; return ret;</span></span></code></pre></div>
-<p>This is somewhat long and correct code.</p>
-<p>So what is so special about <strong>-fno-delayed-branch</strong>? Why does it turn things upside down?</p>
-<h1 id="delay-slots">Delay slots</h1>
-<p>Delay slot (<a href="https://en.wikipedia.org/wiki/Delay_slot">https://en.wikipedia.org/wiki/Delay_slot</a>) is a simple concept: on simple
-architectures some instructions take not unual one clock but two clock cycles. Instead of
-stalling the CPU pipeline for extra cycle CPU just executes next instruction (or a few of those)
-following such heavyweight instruction (wat?). Such place in code is called a
-a “delay slot”.</p>
-<p>Simple example on <strong>hppa</strong>:</p>
-<pre class><code>a:
-    bv %r0(%r2) ; 'return ret' ; takes 2 cycles
-     ldi 0,%r28 ; 'ret = 0'    ; takes 1 cycle, executes in parallel to 'bv'
-; total execution time: 2 cycles</code></pre>
-<p>Here <strong>bv</strong> (branch vectored) takes clock 2 cycles and CPU always
-executes one instruction after it. The actual execution sequence
-is equivalent to:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    ldi <span class="dv">0</span><span class="op">,%</span>r28  <span class="co">; takes 1 cycle</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; takes 2 cycles</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>     <span class="bu">nop</span>        <span class="co">; takes 1 cycle; executes in parallel to 'bv'</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="co">; total execution time: 3 cycles</span></span></code></pre></div>
-<p>It sounds like a simple transformation. But it’s full of fancy corner cases:</p>
-<div class="sourceCode" id="cb16"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; invalid</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span>  <span class="co">; 'return ret' ; takes 2 cycles</span></span>
-<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>     bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; 'return ret' ; takes 2 cycles, overlaps with previous</span></span>
-<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>      <span class="bu">nop</span>        <span class="co">; does it get executed?</span></span></code></pre></div>
-<p>Thankfuly <strong>hppa</strong> forbids putting branch instructions themselves into delay slot.</p>
-<p>A few other architectures that use delay slot are: <strong>mips</strong>,
-<strong>superh</strong>, <strong>sparc</strong>. But not <strong>arm</strong>, not <strong>powerpc</strong> and not <strong>riscv</strong>.</p>
-<p>Having slightly tweaked my example I managed to reproduce the
-same bug on <strong>sh4</strong>(<strong>superh</strong>): <a href="https://gcc.gnu.org/PR96015#c27">https://gcc.gnu.org/PR96015#c27</a>.</p>
-<p>The bug ended up being in gcc’s <strong>reporg</strong> pass: a late pass that handles
-instruction reordering to pick the better sequence. It made incorrect
-assumptions about instructions with delay slots.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on February 27, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Sat, 27 Feb 2021 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/223-delay-slots-strike-back.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
