@@ -8,8 +8,405 @@
         <name>Sergei Trofimovich</name>
         <email>slyich@gmail.com</email>
     </author>
-    <updated>2022-09-04T00:00:00Z</updated>
+    <updated>2022-09-16T00:00:00Z</updated>
     <entry>
+    <title>GNU make's 'Secondary Expansion' feature</title>
+    <link href="http://trofi.github.io/posts/258-gnu-make-s-secondary-expansion-feature.html" />
+    <id>http://trofi.github.io/posts/258-gnu-make-s-secondary-expansion-feature.html</id>
+    <published>2022-09-16T00:00:00Z</published>
+    <updated>2022-09-16T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>People occasionally ask me when
+<a href="http://trofi.github.io/posts/238-new-make-shuffle-mode.html">make --shuffle</a> feature will
+be released. The short answer is: I don’t know. I would like to have it
+released sooner but I also understand that stabilization requires real
+work to get the release out.</p>
+<p>But fear not, not all is lost! Paul sent out
+<a href="https://lists.gnu.org/archive/html/bug-make/2022-09/msg00003.html">an announcement</a>
+a few days ago that the new release is in the works!</p>
+<p>To get some confidence that <code>make --shuffle</code> is not completely broken I
+gave current <code>master</code> a go.</p>
+<p>The setup was straightforward as usual: I added current <code>make</code> snapshot
+locally into <code>nixpkgs</code> and tried to build my desktop system with it
+using <code>nix build -f. nixos system</code>.</p>
+<p>Quiz question: did <code>make --shuffle</code> still work? :)</p>
+<p>Let’s find out.</p>
+<h2 id="autoconf">autoconf</h2>
+<p>A few seconds into the build the first failed package was
+<code>autoconf-2.71</code> (and <code>autoconf-2.69</code> slightly later). The symptom
+was the following suspicious build failure:</p>
+<pre><code>$ make
+...
+bash: line 1: env: command not found
+make  all-am
+bash: line 1: make: command not found
+make: *** [Makefile:928: all] Error 127</code></pre>
+<p><code>make: command not found</code> suggested something broke the <code>PATH</code>
+environment variable. Grepping <code>automake</code>s source for <code>PATH</code> I was lucky
+to find this code snippet:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># In cfg.mk:</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dv">export PATH = $(shell echo &quot;`pwd`/tests:</span><span class="ch">$$</span><span class="dt">PATH&quot;)</span></span></code></pre></div>
+<p>Until then I had no idea about <code>export</code> keyword in <code>GNU make</code>! This keyword
+exports <code>make</code>-level variables to child sub-processes. Mostly
+intended for sub-<code>make</code>. But <code>$(shell ...)</code> calls work as well.</p>
+<p>If you are not very familiar with <code>GNU make</code> the code above might not look
+tricky. Let’s talk a bit about various variable assignments.
+<code>GNU make</code> has that many:</p>
+<pre><code>     IMMEDIATE = DEFERRED
+     IMMEDIATE ?= DEFERRED
+     IMMEDIATE := IMMEDIATE
+     IMMEDIATE ::= IMMEDIATE
+     IMMEDIATE :::= IMMEDIATE-WITH-ESCAPE
+     IMMEDIATE += DEFERRED or IMMEDIATE
+     IMMEDIATE != IMMEDIATE</code></pre>
+<p>Yeah, it’s 7 types of them. We use deferred one in the example
+above. From what I understand <code>POSIX</code> defines only the first
+<code>IMMEDIATE = DEFERRED</code>.</p>
+<p>I’ll quote <code>info make</code> here for details:</p>
+<pre><code>3.7 How 'make' Reads a Makefile
+===============================
+
+GNU 'make' does its work in two distinct phases.  During the first phase
+it reads all the makefiles, included makefiles, etc.  and internalizes
+all the variables and their values and implicit and explicit rules, and
+builds a dependency graph of all the targets and their prerequisites.
+During the second phase, 'make' uses this internalized data to determine
+which targets need to be updated and run the recipes necessary to update
+them.
+
+   It's important to understand this two-phase approach because it has a
+direct impact on how variable and function expansion happens; this is
+often a source of some confusion when writing makefiles.  Below is a
+summary of the different constructs that can be found in a makefile, and
+the phase in which expansion happens for each part of the construct.
+
+   We say that expansion is &quot;immediate&quot; if it happens during the first
+phase: 'make' will expand that part of the construct as the makefile is
+parsed.  We say that expansion is &quot;deferred&quot; if it is not immediate.
+Expansion of a deferred construct part is delayed until the expansion is
+used: either when it is referenced in an immediate context, or when it
+is needed during the second phase.</code></pre>
+<p>The main ones I’ll focus on here are <code>:=</code> (immediate) vs <code>=</code> (deferred).</p>
+<p>Here is one possible example that illustrates the difference:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">AI </span><span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">AD  </span><span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;AI=</span><span class="ch">$(</span><span class="dt">AI</span><span class="ch">)</span><span class="st"> BI=</span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span><span class="st">&quot;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;AD=</span><span class="ch">$(</span><span class="dt">AD</span><span class="ch">)</span><span class="st"> BD=</span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span><span class="st">&quot;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="dt">BI </span><span class="ch">:=</span><span class="st"> BI-val</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="dt">BD  </span><span class="ch">=</span><span class="st"> BD-val</span></span></code></pre></div>
+<p>Running:</p>
+<pre><code>$ make
+AI= BI=BI-val
+AD=BD-val BD=BD-val</code></pre>
+<p>Here <code>AI</code> refers to <code>BI</code> value before <code>BI</code> is defined. While <code>AD</code> refers
+to <code>BD</code> value after <code>BD</code> is defined. <code>:=</code> is very useful for cases when
+right hand side is computationally non-trivial and thus should not be
+duplicated.</p>
+<p>Typical deferred assignment error is an accidental recursion:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">C </span><span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">C</span><span class="ch">)</span><span class="st"> also-bar</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;C=</span><span class="ch">$(</span><span class="dt">C</span><span class="ch">)</span><span class="st">&quot;</span></span></code></pre></div>
+<p>Running:</p>
+<pre><code>$ LANG=C make
+Makefile:1: *** Recursive variable 'C' references itself (eventually).  Stop.</code></pre>
+<p>Going back to our initial example of <code>export PATH = $(shell echo $$(pwd)/tests:$$PATH")</code>
+here <code>export</code> attempts to export a <code>PATH</code> make variable as environment
+for ran subprocesses like <code>$(shell ...)</code> call in this example. It also
+tries to base the new <code>PATH</code> value on existing shell-defined <code>PATH</code>
+value. So what happens first? Variable export before <code>shell</code> call?
+Or variable definition after <code>shell</code> call? If <code>:=</code> were to be used
+instead then it would be more straightforward: export would probably
+happen after.</p>
+<p>The answer is … <code>make</code> did change the actual behaviour recently. To
+quote the <a href="https://git.savannah.gnu.org/cgit/make.git/commit/NEWS?id=98da874c43035a490cdca81331724f233a3d0c9a">NEWS file</a>:</p>
+<pre><code>* WARNING: Backward-incompatibility!
+  Previously makefile variables marked as export were not exported to commands
+  started by the $(shell ...) function.  Now, all exported variables are
+  exported to $(shell ...).
+  To detect this change search for 'shell-export' in the .FEATURES variable.</code></pre>
+<p>To avoid this ambiguity <code>autoconf</code> was trivially fixed with
+<a href="https://git.savannah.gnu.org/cgit/autoconf.git/commit/?id=31f673434ee402258b45e958c88acc8725d82b1a">the following patch</a>
+upstream:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/cfg.mk</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/cfg.mk</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -20,2 +20,3 @@</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a> # Build with our own versions of these tools, when possible.</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="st">-export PATH = $(shell echo &quot;`pwd`/tests:$$PATH&quot;)</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="va">+export PATH := $(or $(PWD),$(shell pwd))/tests:$(PATH)</span></span></code></pre></div>
+<p>Meanwhile <code>GNU make</code> also
+<a href="https://git.savannah.gnu.org/cgit/make.git/commit/?id=70ba0357a080f72b9f5912f16b3ffc095db381e6">added gracefull fallback</a>
+to this case as exporting empty variable is probably not very useful.
+Thus existing <code>autoconf</code> releases should still compile successfully
+with <code>GNU make</code> from <code>master</code>.</p>
+<p>Phew. This failure was not related to <code>--shuffle</code>.</p>
+<h2 id="glibc">glibc</h2>
+<p>Once <code>autoconf</code> was fixed I resumed world rebuild. The next failure was
+in <code>glibc</code>:</p>
+<pre><code>    $ make --shuffle
+    ...
+    make  -C localedata install-locales
+    make: invalid shuffle mode: '1662724426r'</code></pre>
+<p><code>GNU make</code> complains at unexpected <code>r</code> trailing letter in
+<code>--shuffle=1662724426r</code> parameter. That suffix comes from … <code>glibc</code>’s
+own <code>Makefile</code>:</p>
+<pre><code># In glibc/Makerules:
+# Don't define any builtin rules.
+MAKEFLAGS := $(MAKEFLAGS)r</code></pre>
+<p>Normally <code>MAKEFLAGS</code> contains options passed to <code>make</code>:</p>
+<pre><code>$ make printf 'all:; @echo MAKEFLAGS=$(MAKEFLAGS)' | make -f -
+MAKEFLAGS=
+$ printf 'all:; @echo MAKEFLAGS=$(MAKEFLAGS)' | make -f - -s
+MAKEFLAGS=s
+$ printf 'all:; @echo MAKEFLAGS=$(MAKEFLAGS)' | make -f - -s -r
+MAKEFLAGS=rs
+$ printf 'all:; @echo MAKEFLAGS=$(MAKEFLAGS)' | make -f - -s -r --shuffle
+MAKEFLAGS=rs --shuffle=1663776045</code></pre>
+<p>Note that <code>MAKEFLAGS</code> value does not contain dashes in potion names.</p>
+<p><code>GNU make</code> also allows extending <code>MAKEFLAGS</code> from within <code>Makefile</code>:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="dt">MAKEFLAGS </span><span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">MAKEFLAGS</span><span class="ch">)</span><span class="st"> --no-builtin-rules</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo MAKEFLAGS=</span><span class="ch">$(</span><span class="dt">MAKEFLAGS</span><span class="ch">)</span></span></code></pre></div>
+<p>Running:</p>
+<pre><code>$ make
+MAKEFLAGS=r
+$ make --no-builtin-variables
+MAKEFLAGS=rR
+$ make --no-builtin-variables --no-print-directory
+MAKEFLAGS=rR --no-print-directory</code></pre>
+<p>Note how short single-letter options get globbed togeted in the first
+word while long options (without short option requivalent) are passed
+separately. <code>NEWS</code> file tells us it’s another recent behaviour change:</p>
+<pre><code>* WARNING: Backward-incompatibility!
+  Previously only simple (one-letter) options were added to the MAKEFLAGS
+  variable that was visible while parsing makefiles.  Now, all options
+  are available in MAKEFLAGS.</code></pre>
+<p><a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=2d7ed98add14f75041499ac189696c9bd3d757fe">The fix</a>
+exceeded 1 liner bucket as <code>glibc</code> also introspected <code>MAKEFLAGS</code> in
+other places for <code>-s</code> (<code>--silent</code>) option presence. Relevant part of
+the fix:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/Makerules</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/Makerules</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -796,2 +796,2 @@ endif</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a> # Don't define any builtin rules.</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="st">-MAKEFLAGS := $(MAKEFLAGS)r</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a><span class="va">+MAKEFLAGS := $(MAKEFLAGS) -r</span></span></code></pre></div>
+<p>No complications here.</p>
+<p>Again, not exactly <code>--shuffle</code>-specific bug as use of any long option
+would break <code>glibc</code> build.</p>
+<h2 id="ghc">ghc</h2>
+<p>At this point <code>autoconf</code> and <code>glibc</code> fixes above unblocked many other
+package builds. Most other projects’ <code>Makefile</code>s are not that
+complicated and don’t rely on <code>GNU make</code> extensions. They usually limit
+themselves to <code>POSIX make</code> features. <code>glibc</code> is a notable exception.
+That makes it a good project to test new <code>GNU make</code> versions.</p>
+<p>Believe it or not there is even heavier user of <code>GNU make</code>! It is
+<code>ghc</code> (the <code>Glasgow Haskell Compiler</code>)! The small caveat is that it
+migrates off <code>GNU make</code> to own <code>haskell</code>-based <code>hadrian</code> build system.
+Many distributions still package previous versions of <code>ghc</code> and use
+<code>GNU make</code> to build it.</p>
+<p>In case of <code>ghc</code> <code>GNU make</code> itself managed to <code>SIGSEGV</code> itself:</p>
+<pre><code>$ make --shuffle
+...
+Configuring ghc-bin-9.0.2...
+Warning: 'data-dir: ..' is a relative path outside of the source tree. This
+will not work when generating a tarball with 'sdist'.
+&quot;rm&quot; -f utils/deriveConstants/dist/build/.depend.haskell.tmp
+&quot;rm&quot; -f utils/deriveConstants/dist/build/.depend.c_asm.tmp
+&quot;rm&quot; -f utils/genprimopcode/dist/build/.depend.c_asm.tmp
+make: *** [Makefile:124: all] Segmentation fault (core dumped) shuffle=1663318833
+make: INTERNAL: Exiting with 14 jobserver tokens available; should be 16!</code></pre>
+<p>It might not be obvious, but <code>Segmentation fault</code> happens within
+<code>GNU make</code> itself, not just some tool it runs. Jobserver token loss
+is another sign of things went wrong with <code>make</code> process itself.</p>
+<p>This time crash happened only if I used <code>make --shuffle</code> option.</p>
+<p>I was not able to craft a simple crashing example. I spent some time in
+<code>gdb</code> to understand the failures mode I found that it has something to
+do with another fun <code>GNU make</code> extension: <code>Secondary Expansion</code>. I’ll
+quote another bit of <code>GNU make</code> manual entry:</p>
+<pre><code>3.9 Secondary Expansion
+=======================
+
+Previously we learned that GNU 'make' works in two distinct phases: a
+read-in phase and a target-update phase (*note How 'make' Reads a
+Makefile: Reading Makefiles.).  GNU make also has the ability to enable
+a _second expansion_ of the prerequisites (only) for some or all targets
+defined in the makefile.  In order for this second expansion to occur,
+the special target '.SECONDEXPANSION' must be defined before the first
+prerequisite list that makes use of this feature.</code></pre>
+<p>I’ll start from non-working example to describe an intent for typical
+use of <code>Secondary Expansion</code>. Supose you want to use the list of
+prerequisites dynamically read from external command (<code>ghc</code> for example
+parses <code>.cabal</code> build files to extract prerequisites). I will emulate
+external command with a simple <code>$(shell echo i1 i2 i3)</code> call.</p>
+<p>Naive non-working approach to achieve would look like that:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> </span><span class="ch">$(</span><span class="dt">ALL_INPUTS</span><span class="ch">)</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo Inputs: </span><span class="ch">$^</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="dv">i%:</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>	: <span class="co"># no-op</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Has to go after rule defined above. In ghc it's based on external</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a><span class="co"># command that dynamically builds a list of prerequisites:</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a><span class="dt">ALL_INPUTS </span><span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="kw">shell</span><span class="st"> echo i1 i2 i3</span><span class="ch">)</span></span></code></pre></div>
+<p>Running:</p>
+<pre><code>$ make
+Inputs:</code></pre>
+<p>The example above attempted to get <code>i1 i2 i3</code> as a dynamic input and
+failed. <code>$(ALL_INPUTS)</code> is expanded to an empty string. <code>GNU make</code>
+allows this style of dependencies when <code>.SECONDEXPANSION:</code> phony
+target is present in the <code>Makefile</code>:</p>
+<p>Here is a working example closer to what <code>ghc</code> uses:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="ot">.SECONDEXPANSION:</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> </span><span class="ch">$$</span><span class="dt">(ALL_INPUTS)</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo Inputs: </span><span class="ch">$^</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="dv">i%:</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>	: <span class="co"># $@ no-op</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Has to go after rule defined above. In ghc it's based on external</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a><span class="co"># command that dynamically builds a list of prerequisites:</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a><span class="dt">ALL_INPUTS </span><span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="kw">shell</span><span class="st"> echo i1 i2 i3</span><span class="ch">)</span></span></code></pre></div>
+<p>Running:</p>
+<pre><code>$ make
+: # i1 no-op
+: # i2 no-op
+: # i3 no-op
+Inputs: i1 i2 i3</code></pre>
+<p>Now we get our dynamic input as expected.</p>
+<p>The magic happens around <code>$$(ALL_INPUTS)</code> expression: first it is
+expanded to <code>$(ALL_INPUTS)</code> and on second expansion it uses already
+available result. There are other simpler ways to get the same effect
+(like moving variable assignment earlier). But that’s what <code>ghc</code> decided
+to use.</p>
+<p>While this simple example did not crash <code>GNU make</code> it did show me a
+symptom of the problem. <code>make --shuffle</code> had no effect on prerequisite
+praversal order:</p>
+<pre><code>$ make --shuffle
+: # i1 no-op
+: # i2 no-op
+: # i3 no-op
+Inputs: i1 i2 i3
+
+$ make --shuffle
+: # i1 no-op
+: # i2 no-op
+: # i3 no-op
+Inputs: i1 i2 i3
+
+$ make --shuffle
+: # i1 no-op
+: # i2 no-op
+: # i3 no-op
+Inputs: i1 i2 i3</code></pre>
+<p>Prerequisites were never reordered. But they were supposed to! Yet again
+<code>NEWS</code> entry hinted at why it started happening only recently:</p>
+<pre><code>* GNU make was performing secondary expansion of all targets, even targets
+  which didn't need to be considered during the build.  In this release
+  only targets which are considered will be secondarily expanded.</code></pre>
+<p>In other words before the change order of events was:</p>
+<ol type="1">
+<li>read</li>
+<li>expand</li>
+<li><em>second expand (of everything)</em></li>
+<li><em>shuffle</em></li>
+<li>execute</li>
+</ol>
+<p>After the change:</p>
+<ol type="1">
+<li>read</li>
+<li>expand</li>
+<li><strong>shuffle</strong></li>
+<li><strong>second expand (of built targets only)</strong></li>
+<li>execute</li>
+</ol>
+<p>The bug mechanics: <code>shuffle</code> step assumed no changes in prerequisite
+lists would happen after. Moving <code>second expand</code> step behind it broke
+that assumptions: it cancelled shuffling effect (minor problem)
+and introduced dangling references to freed memory (major problem).</p>
+<p>Once understod the fix was trivial: refresh shuffle data if prerequisite
+list was changed. The patch is
+<a href="https://git.savannah.gnu.org/cgit/make.git/commit/?id=ca4234c4b550618df2194e0617c43bb12524f820">a few-liner</a>:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/file.c</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/file.c</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -576,6 +577,7 @@ expand_deps (struct file *f)</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>   struct dep **dp;</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>   const char *fstem;</span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>   int initialized = 0;</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  int changed_dep = 0;</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a> </span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>   if (f-&gt;snapped)</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>     return;</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -664,6 +666,7 @@ expand_deps (struct file *f)</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>       if (new == 0)</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>         {</span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>           *dp = d-&gt;next;</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a><span class="va">+          changed_dep = 1;</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a>           free_dep (d);</span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a>           d = *dp;</span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>           continue;</span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -672,6 +675,7 @@ expand_deps (struct file *f)</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>       /* Add newly parsed prerequisites.  */</span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>       fstem = d-&gt;stem;</span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>       next = d-&gt;next;</span>
+<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a><span class="va">+      changed_dep = 1;</span></span>
+<span id="cb26-24"><a href="#cb26-24" aria-hidden="true" tabindex="-1"></a>       free_dep (d);</span>
+<span id="cb26-25"><a href="#cb26-25" aria-hidden="true" tabindex="-1"></a>       *dp = new;</span>
+<span id="cb26-26"><a href="#cb26-26" aria-hidden="true" tabindex="-1"></a>       for (dp = &amp;new, d = new; d != 0; dp = &amp;d-&gt;next, d = d-&gt;next)</span>
+<span id="cb26-27"><a href="#cb26-27" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -688,6 +692,12 @@ expand_deps (struct file *f)</span></span>
+<span id="cb26-28"><a href="#cb26-28" aria-hidden="true" tabindex="-1"></a>       *dp = next;</span>
+<span id="cb26-29"><a href="#cb26-29" aria-hidden="true" tabindex="-1"></a>       d = *dp;</span>
+<span id="cb26-30"><a href="#cb26-30" aria-hidden="true" tabindex="-1"></a>     }</span>
+<span id="cb26-31"><a href="#cb26-31" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb26-32"><a href="#cb26-32" aria-hidden="true" tabindex="-1"></a><span class="va">+    /* Shuffle mode assumes '-&gt;next' and '-&gt;shuf' links both traverse the same</span></span>
+<span id="cb26-33"><a href="#cb26-33" aria-hidden="true" tabindex="-1"></a><span class="va">+       dependencies (in different sequences).  Regenerate '-&gt;shuf' so we don't</span></span>
+<span id="cb26-34"><a href="#cb26-34" aria-hidden="true" tabindex="-1"></a><span class="va">+       refer to stale data.  */</span></span>
+<span id="cb26-35"><a href="#cb26-35" aria-hidden="true" tabindex="-1"></a><span class="va">+    if (changed_dep)</span></span>
+<span id="cb26-36"><a href="#cb26-36" aria-hidden="true" tabindex="-1"></a><span class="va">+      shuffle_deps_recursive (f-&gt;deps);</span></span>
+<span id="cb26-37"><a href="#cb26-37" aria-hidden="true" tabindex="-1"></a> }</span>
+<span id="cb26-38"><a href="#cb26-38" aria-hidden="true" tabindex="-1"></a> </span>
+<span id="cb26-39"><a href="#cb26-39" aria-hidden="true" tabindex="-1"></a> /* Add extra prereqs to the file in question.  */</span></code></pre></div>
+<p>We track all the places wnet prerequisite list is modified and then
+rebuild shuffle list if any chages happened to the list.</p>
+<p>The fix resored shuffling property and fixed <code>SIGSEGV</code> when building
+<code>ghc</code>:</p>
+<pre><code>$ make --shuffle
+: # i2 no-op
+: # i3 no-op
+: # i1 no-op
+Inputs: i1 i2 i3
+
+$ make --shuffle
+: # i1 no-op
+: # i3 no-op
+: # i2 no-op
+Inputs: i1 i2 i3</code></pre>
+<p>This one was clearly <code>--shuffle</code>-related bug.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Trying out a pre-release was totally worth it. I found out about
+existence of <code>export</code> and <code>Secondary Expansion</code> extensions.</p>
+<p>The test
+uncovered two bugs in upstream projects. Upstreams were very quick to
+accept fixes. The bugs happened in somewhat obscure parts of <code>GNU make</code>
+specific extensions: environment variable exports, <code>MAKEFLAGS</code> variable
+update (and introspection).</p>
+<p>The test also exposed a bug in <code>make --shuffle</code> implementation for an
+advanced <code>Secondary Expansion</code> feature which was also an easy one to
+fix.</p>
+<p>After the fixes above I did not find any other related breakages.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on September 16, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>A year on NixOS</title>
     <link href="http://trofi.github.io/posts/257-a-year-on-nixos.html" />
     <id>http://trofi.github.io/posts/257-a-year-on-nixos.html</id>
@@ -8198,476 +8595,6 @@ of <strong>nixpkgs</strong> repository and many more.</p>
 
 <div class="info">
     Posted on October 11, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>Bisects all the way down</title>
-    <link href="http://trofi.github.io/posts/228-bisects-all-the-way-down.html" />
-    <id>http://trofi.github.io/posts/228-bisects-all-the-way-down.html</id>
-    <published>2021-09-01T00:00:00Z</published>
-    <updated>2021-09-01T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>Bisect is a great tool to nail down regression in a project like
-<strong>linux</strong> where you usually have no slightest idea what broke
-your
-<a href="https://fa.linux.kernel.narkive.com/hk0pvpD8/bisected-regression-v3-6-rc1-resume-from-s2ram-does-not-restore-ata-piix-v3-5-worked">suspend</a>,
-<a href="https://www.spinics.net/lists/kernel/msg3840785.html">boot</a>,
-<a href="https://linux-kernel.vger.kernel.narkive.com/epI9yBFu/bisected-i915-linux-2-6-32-rc3-regression">video</a>,
-<a href="https://lore.kernel.org/lkml/YKUjvoaKKggAmpIR@sf/">more video</a>,
-<a href="http://yhbt.net/lore/all/20091225162528.5dbbbea0@mosly/">audio</a>,
-<a href="https://gitlab.freedesktop.org/pulseaudio/pulseaudio/-/issues/164">tcp</a>,
-<a href="https://linux-kernel.vger.kernel.narkive.com/v3qKMlzd/oops-2-6-31-rc1-tun">tun</a>,
-<a href="https://www.spinics.net/lists/kernel/msg3840823.html">toaster</a>
-and whatnot.</p>
-<p>Example of other complex projects are <strong>firefox</strong>, <strong>gcc</strong>, <strong>glibc</strong>
-and … complete linux distributions!</p>
-<p>Rolling release linux distributions tend to have frequent incremental
-updates where each update produces mostly working system. And when
-update breaks roll back is cheap and feedback loop to upstream is fast.</p>
-<p>The key for rolling release system to work is to be able to narrow down
-quickly on faulty component to be able to isolate it.</p>
-<p>A typical example of distribution regression would be Firefox failure to
-render fonts correctly. What package update caused the regression?
-Sometimes we might guess easily if font-related package updated recently
-and we might try rolling it back to verify.</p>
-<p>But sometimes it’s a compiler or even build environment bug (like bash
-<a href="https://gcc.gnu.org/PR88936">miscompilation</a> caused by a gcc bug).
-In that case it will take a while until we get to the culprit. Or it
-might be a <strong>glibc</strong> regression which is not trivial to rollback at all.</p>
-<p>Wouldn’t it be nice to mechanically bisect package repository the same
-way we do projects like linux?</p>
-<p>Today’s real world example is <a href="https://github.com/NixOS/nixpkgs">nixpkgs</a>
-repository. <strong>nixpkgs</strong> is a package tree available via <strong>nix</strong> tool.</p>
-<p>One of <strong>nix</strong>’s fancy features is the ability to install packages (and
-it’s dependencies) as an unprivileged user. Or even fetch the package
-into local cache for one-off use without installing it. Another feature
-is precise hermetic dependencies tracking.</p>
-<p>Example one-off package usage session:</p>
-<pre class><code># existing systemwide package (installed outside nixpkgs)
-$ re2c -v
-re2c 2.2
-
-# fetching version from nixpkgs:
-$ nix-shell -p re2c
-[nix-shell:~]$ re2c -v
-re2c 2.1.1</code></pre>
-<p><strong>nixpkgs</strong> repository has a few branches of different stabilities.
-Most frequently encountered are:</p>
-<ul>
-<li><strong>staging</strong>: things are truly bleeding edge there, no binary cache,
-very fresh versions</li>
-<li><strong>staging-next</strong>: things are being stabilized here to build and pass
-tests before merge to <strong>master</strong></li>
-<li><strong>master</strong>: things mostly build there and have binary cache of most
-packages</li>
-</ul>
-<p>More branching details are at <a href="https://github.com/NixOS/rfcs/blob/master/rfcs/0026-staging-workflow.md">https://github.com/NixOS/rfcs/blob/master/rfcs/0026-staging-workflow.md</a>.</p>
-<p>I was foolish enough to try building <strong>ccache</strong> out of <strong>staging</strong>
-branch (I planned to update it’s version there):</p>
-<pre class><code># fetch repository:
-$ cd /tmp
-$ git clone https://github.com/NixOS/nixpkgs.git
-$ cd nixpkgs
-$ git checkout staging
-
-# build ccache:
-$ nix-build -A ccache
-... &lt;a few minutes later&gt;
-make[1]: *** [Makefile:998: fig2dev/Makefile] Error 1
-make[1]: Leaving directory '/build/transfig.3.2.4'
-make: [Makefile:1006: Makefiles] Error 2 (ignored)
-make includes
-including in ./fig2dev...
-make[1]: Entering directory '/build/transfig.3.2.4/fig2dev'
-make[1]: *** No rule to make target 'includes'.  Stop.
-make[1]: Leaving directory '/build/transfig.3.2.4/fig2dev'
-make: *** [Makefile:1064: includes] Error 2
-error: builder for '/nix/store/149n49648mzf1c9g199jhq9qi6x35c9v-transfig-3.2.4.drv' failed with exit code 2;</code></pre>
-<p>Here we fetched git repository of the whole <strong>nixpkgs</strong> repo and tried
-to build <strong>ccache</strong> along with all it’s dependencies. One of them
-(<strong>transfig</strong>) failed to build.</p>
-<p><strong>transfig</strong> happens to use <strong>imake</strong> build system. I knew nothing
-about it and had no idea how to debug it. I looked at the generated
-<strong>Makefile</strong>s and still had no idea why (or if) things are wrong there.</p>
-<p>Having failed at understanding the failure mode I checked if <strong>master</strong>
-branch was able to build <strong>transfig</strong> (it’s normally expected to):</p>
-<pre class><code>$ git checkout master
-
-$ nix-build -A transfig
-/nix/store/pfzhccslyzgl0wl127yahrk902gj54xs-transfig-3.2.4
-
-$ nix-build -A transfig --check
-... &lt;build log&gt;
-/nix/store/pfzhccslyzgl0wl127yahrk902gj54xs-transfig-3.2.4</code></pre>
-<p>Built fine. <strong>--check</strong> forces local rebuild instead of using binary
-available in cache. I used it to get a build log from successful package
-and to make sure I don’t have something else horribly broken in my
-build environment.</p>
-<p>Now I could bisect against <strong>master</strong> and <strong>staging</strong> states:</p>
-<pre class><code>$ git bisect start staging master
-$ git bisect run nix-build -A transfig
-... &lt; a few minutes later&gt;
-commit 8675ca0e947f7e847d82828e6bfd4d08822c489c
-Date:   Wed Aug 4 08:29:53 2021 +0000
-
-  xorg.xorgcffiles: 1.0.6 -&gt; 1.0.7
-
-  https://lists.x.org/archives/xorg-announce/2021-August/003105.html</code></pre>
-<p>Just two shell commands and wer are there! The commit looks vaguely
-related to <strong>imake</strong>. Reverting:</p>
-<pre class><code>$ git bisect reset
-$ git checkout staging
-$ git revert 8675ca0e947f7e847d82828e6bfd4d08822c489c # minor conflict fix
-$ nix-build -A transfig
-...
-/nix/store/7z7q1a9176cy0adcs98l4dc8rh9ks4ki-transfig-3.2.4</code></pre>
-<p>Revert worked. I looked at the difference between <strong>1.0.6</strong> and
-<strong>1.0.7</strong> sources and found nothing obviously broken. I still had no
-idea what I was looking at.</p>
-<p>We can bisect <strong>xorg-cf-files</strong> project as well. For that we can repoint our
-<strong>xorg.xorgcffiles</strong> package to local checkout we could modify:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/servers/x11/xorg/overrides.nix</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/servers/x11/xorg/overrides.nix</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -841,6 +841,7 @@ self: super:</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>   });</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>   xorgcffiles = super.xorgcffiles.overrideAttrs (attrs: {</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="va">+    src = /tmp/cf; # added line</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>     postInstall = lib.optionalString stdenv.isDarwin ''</span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>       substituteInPlace $out/lib/X11/config/darwin.cf --replace &quot;/usr/bin/&quot; &quot;&quot;</span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>     '';</span></code></pre></div>
-<p>Let’s prepare source tree in <strong>/tmp/cf</strong> as if it was just from tarball:</p>
-<pre class><code>$ cd /tmp
-$ git clone https://gitlab.freedesktop.org/xorg/util/cf.git
-$ cd cf
-$ ./autogen.sh</code></pre>
-<p>Now we can build <strong>transfig</strong> against local checkout:</p>
-<pre class><code>$ nix-build /tmp/nixpkgs -A transfig
-... a few seconds later
-make: *** No rule to make target 'install'.  Stop.</code></pre>
-<p>Same problem.</p>
-<p><strong>nix</strong> will rebuild <strong>xorg-cf-files</strong> from local checkout and then will
-rebuild all dependencies that need to change automatically. No need to
-manually calculate the effect of the update. Sometimes it means a lot of
-rebuilds (say, if you bisect <strong>gcc</strong>). But in our case <strong>xorg-cf-files</strong>
-dependencies are just <strong>imake</strong> and <strong>transfig</strong>:</p>
-<pre class><code>$ nix why-depends -f . --derivation transfig xorg.xorgcffiles
-/nix/store/...-transfig-3.2.4.drv
-    → /nix/store/...-imake-1.0.8.drv
-        → /nix/store/...-xorg-cf-files-1.0.7.drv</code></pre>
-<p>Both are tiny packages. Bisecting:</p>
-<pre class><code>$ git bisect start xorg-cf-files-1.0.7 xorg-cf-files-1.0.6
-$ git bisect run nix-build /tmp/nixpkgs -A transfig
-... a second later
-commit d47131ed97ee491bb883c29ec0b106e8d5acfcd3
-Date:   Thu Jul 5 10:42:09 2018 -0400
-
-    linux: Update LinuxDistribution == LinuxRedHat section</code></pre>
-<p>That was simpler than I thought! But still very confusing :) The
-<a href="https://gitlab.freedesktop.org/xorg/util/cf/-/commit/d47131ed97ee491bb883c29ec0b106e8d5acfcd3">upstream commit</a>
-is literally a few defines under seemingly unrelated <strong>#if</strong>:</p>
-<div class="sourceCode" id="cb11"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/linux.cf</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/linux.cf</span></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -190,7 +190,13 @@ InstallNamedTargetNoClobber(install,file.ad,$(INSTAPPFLAGS),$(XAPPLOADDIR),class</span></span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a> #endif /* LinuxDebian */</span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a> #if LinuxDistribution == LinuxRedHat</span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="st">-#define FSUseSyslog		YES</span></span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="va">+# define FSUseSyslog		YES</span></span>
-<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="va">+# define BuildRman		NO</span></span>
-<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="va">+# define BuildHtmlManPages	NO</span></span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="va">+# define ProjectRoot		/usr</span></span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="va">+# define ManPath		/usr/share/man</span></span>
-<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="va">+# define XAppLoadDir		/usr/share/X11/app-defaults</span></span>
-<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="va">+# define ConfigDir		/usr/share/X11/config</span></span>
-<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a> #ifndef HasDevRandom</span></code></pre></div>
-<p><strong>nix</strong> does not use <strong>/usr</strong> host OS hierarchy (in my case host OS is
-Gentoo) and always uses <strong>/nix/store</strong> path instead. Thus I would expect
-<strong>LinuxDistribution</strong> to be something different from <strong>LinuxRedHat</strong>
-(unless it’s a way for <strong>cf</strong> to say “any linux”).</p>
-<p>Let’s check how <strong>LinuxDistribution</strong> gets defined. It’s hidden in
-<strong>imake</strong> itself. We can extract unpatched and patched <strong>imake</strong>
-right from <strong>nixpkgs</strong>:</p>
-<pre class><code>$ cd /tmp/nixpkgs
-$ nix-shell -A xorg.imake
-
-# unpack vanilla source:
-$$ unpackPhase
-  unpacking source archive /nix/store/dfjcsfxf15zxrbcw62ml1zbczm8zf7d0-imake-1.0.8.tar.bz2
-  source root is imake-1.0.8
-  setting SOURCE_DATE_EPOCH to timestamp 1552778797 of file imake-1.0.8/INSTALL
-
-# apply nixkpgs-specific patches:
-$$ cd imake-1.0.8
-$$ patchPhase
-  applying patch /nix/store/9hl5c2sg2n6yfia0hy06wdf7yiry4arq-imake.patch
-  patching file imake.c
-  applying patch /nix/store/kmhjr434iv05bgazd5xbzwygn59pl9k0-imake-cc-wrapper-uberhack.patch
-  patching file imake.c</code></pre>
-<p>Here is the unpatched bit of <strong>LinuxRedHat</strong> definition from <a href="https://gitlab.freedesktop.org/xorg/util/imake/-/blob/master/imake.c#L1046">https://gitlab.freedesktop.org/xorg/util/imake/-/blob/master/imake.c#L1046</a>:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined CROSSCOMPILE || defined linux || defined(__GLIBC__)</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>get_distrib<span class="op">(</span><span class="dt">FILE</span> <span class="op">*</span>inFile<span class="op">)</span></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> stat sb<span class="op">;</span></span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">const</span> <span class="dt">char</span><span class="op">*</span>   suse <span class="op">=</span> <span class="st">&quot;/etc/SuSE-release&quot;</span><span class="op">;</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">const</span> <span class="dt">char</span><span class="op">*</span> redhat <span class="op">=</span> <span class="st">&quot;/etc/redhat-release&quot;</span><span class="op">;</span></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">const</span> <span class="dt">char</span><span class="op">*</span> debian <span class="op">=</span> <span class="st">&quot;/etc/debian_version&quot;</span><span class="op">;</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxUnknown    0&quot;</span><span class="op">);</span></span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxSuSE       1&quot;</span><span class="op">);</span></span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxCaldera    2&quot;</span><span class="op">);</span></span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxCraftworks 3&quot;</span><span class="op">);</span></span>
-<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxDebian     4&quot;</span><span class="op">);</span></span>
-<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxInfoMagic  5&quot;</span><span class="op">);</span></span>
-<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxKheops     6&quot;</span><span class="op">);</span></span>
-<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxPro        7&quot;</span><span class="op">);</span></span>
-<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxRedHat     8&quot;</span><span class="op">);</span></span>
-<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxSlackware  9&quot;</span><span class="op">);</span></span>
-<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxTurbo      10&quot;</span><span class="op">);</span></span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxWare       11&quot;</span><span class="op">);</span></span>
-<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define LinuxYggdrasil  12&quot;</span><span class="op">);</span></span>
-<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a><span class="pp"># ifdef CROSSCOMPILE</span></span>
-<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>CrossCompiling<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a>      fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
-<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>           <span class="st">&quot;#define DefaultLinuxDistribution LinuxUnknown&quot;</span><span class="op">);</span></span>
-<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>      fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistName Unknown&quot;</span><span class="op">);</span></span>
-<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span><span class="op">;</span></span>
-<span id="cb13-31"><a href="#cb13-31" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb13-32"><a href="#cb13-32" aria-hidden="true" tabindex="-1"></a><span class="pp"># endif</span></span>
-<span id="cb13-33"><a href="#cb13-33" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>lstat <span class="op">(</span>suse<span class="op">,</span> <span class="op">&amp;</span>sb<span class="op">)</span> <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb13-34"><a href="#cb13-34" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistribution LinuxSuSE&quot;</span><span class="op">);</span></span>
-<span id="cb13-35"><a href="#cb13-35" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistName SuSE&quot;</span><span class="op">);</span></span>
-<span id="cb13-36"><a href="#cb13-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span><span class="op">;</span></span>
-<span id="cb13-37"><a href="#cb13-37" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb13-38"><a href="#cb13-38" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>lstat <span class="op">(</span>redhat<span class="op">,</span> <span class="op">&amp;</span>sb<span class="op">)</span> <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb13-39"><a href="#cb13-39" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistribution LinuxRedHat&quot;</span><span class="op">);</span></span>
-<span id="cb13-40"><a href="#cb13-40" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistName RedHat&quot;</span><span class="op">);</span></span>
-<span id="cb13-41"><a href="#cb13-41" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span><span class="op">;</span></span>
-<span id="cb13-42"><a href="#cb13-42" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb13-43"><a href="#cb13-43" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>lstat <span class="op">(</span>debian<span class="op">,</span> <span class="op">&amp;</span>sb<span class="op">)</span> <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb13-44"><a href="#cb13-44" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistribution LinuxDebian&quot;</span><span class="op">);</span></span>
-<span id="cb13-45"><a href="#cb13-45" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistName Debian&quot;</span><span class="op">);</span></span>
-<span id="cb13-46"><a href="#cb13-46" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* You could also try to get the version of the Debian distrib by looking</span></span>
-<span id="cb13-47"><a href="#cb13-47" aria-hidden="true" tabindex="-1"></a><span class="co">     * at the content of /etc/debian_version */</span></span>
-<span id="cb13-48"><a href="#cb13-48" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span><span class="op">;</span></span>
-<span id="cb13-49"><a href="#cb13-49" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb13-50"><a href="#cb13-50" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* what's the definitive way to tell what any particular distribution is? */</span></span>
-<span id="cb13-51"><a href="#cb13-51" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-52"><a href="#cb13-52" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistribution LinuxUnknown&quot;</span><span class="op">);</span></span>
-<span id="cb13-53"><a href="#cb13-53" aria-hidden="true" tabindex="-1"></a>  fprintf <span class="op">(</span>inFile<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="st">&quot;#define DefaultLinuxDistName Unknown&quot;</span><span class="op">);</span></span>
-<span id="cb13-54"><a href="#cb13-54" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* would like to know what version of the distribution it is */</span></span>
-<span id="cb13-55"><a href="#cb13-55" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Distribution flavour is defined by presence of <strong>/etc/redhat-release</strong>
-file on disk. But I dont have it! I should have gotten <strong>LinuxUnknown</strong>.</p>
-<p>The culprit is in that suspicious <strong>/nix/store/9hl5c2sg2n6yfia0hy06wdf7yiry4arq-imake.patch</strong>
-patch we see in <strong>patchPhase</strong> log. It turns the code above to the
-following:</p>
-<pre class><code>#if defined CROSSCOMPILE || defined linux || defined(__GLIBC__)
-static void
-get_distrib(FILE *inFile)
-{
-#if 0
-  struct stat sb;
-
-  static const char*   suse = &quot;/etc/SuSE-release&quot;;
-  static const char* redhat = &quot;/etc/redhat-release&quot;;
-  static const char* debian = &quot;/etc/debian_version&quot;;
-
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxUnknown    0&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxSuSE       1&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxCaldera    2&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxCraftworks 3&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxDebian     4&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxInfoMagic  5&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxKheops     6&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxPro        7&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxRedHat     8&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxSlackware  9&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxTurbo      10&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxWare       11&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxYggdrasil  12&quot;);
-
-# ifdef CROSSCOMPILE
-  if (CrossCompiling) {
-      fprintf (inFile, &quot;%s\n&quot;,
-               &quot;#define DefaultLinuxDistribution LinuxUnknown&quot;);
-      fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName Unknown&quot;);
-      return;
-  }
-# endif
-  if (lstat (suse, &amp;sb) == 0) {
-    fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxSuSE&quot;);
-    fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName SuSE&quot;);
-    return;
-  }
-  if (lstat (redhat, &amp;sb) == 0) {
-    fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxRedHat&quot;);
-    fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName RedHat&quot;);
-    return;
-  }
-  if (lstat (debian, &amp;sb) == 0) {
-    fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxDebian&quot;);
-    fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName Debian&quot;);
-    /* You could also try to get the version of the Debian distrib by looking
-     * at the content of /etc/debian_version */
-    return;
-  }
-#endif
-  /* what's the definitive way to tell what any particular distribution is? */
-
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxUnknown&quot;);
-  fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName Unknown&quot;);
-  /* would like to know what version of the distribution it is */
-}</code></pre>
-<p>Note now <strong>#if 0</strong> removes not just <strong>#define DefaultLinuxDistName LinuxRedHat</strong>
-but also <strong>#define LinuxUnknown 0</strong> and <strong>#define LinuxRedHat 8</strong>.</p>
-<p>Or in diff form imake’s output change is:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,3 +1 @@</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="st">-#define LinuxUnknown    0</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="st">-#define LinuxRedHat     8</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a> #define DefaultLinuxDistName Unknown</span></code></pre></div>
-<p>Is it a big deal? How does it change
-<strong>#if LinuxDistribution == LinuxRedHat</strong> condition? Let’s try two
-following examples:</p>
-<pre class><code>$ printf &quot;#define a 1\n#define b 2\n#if a == b\n    EQUAL\n#else\n    DIFFERENT\n#endif\n&quot;
-#define a 1
-#define b 2
-#if a == b
-    EQUAL
-#else
-    DIFFERENT
-
-$ printf &quot;#if a == b\n    EQUAL\n#else\n    DIFFERENT\n#endif\n&quot;
-#if a == b
-    EQUAL
-#else
-    DIFFERENT</code></pre>
-<p>Running the preprocessor:</p>
-<pre class><code>$ printf &quot;#define a 1\n#define b 2\n#if a == b\n    EQUAL\n#else\n    DIFFERENT\n#endif\n&quot; | gcc -E -
-    DIFFERENT
-
-$ printf &quot;#if a == b\n    EQUAL\n#else\n    DIFFERENT\n#endif\n&quot; | gcc -E -
-    EQUAL</code></pre>
-<p>According to great <strong>imake</strong> intro at <a href="http://www.snake.net/software/imake-stuff/config-X11R4.pdf">http://www.snake.net/software/imake-stuff/config-X11R4.pdf</a>
-it’s one of the common <strong>imake</strong> pitfalls: in integer evaluation
-contexts unknown symbols get turned onto zeros.</p>
-<pre class><code>$ printf &quot;#if undef == 0\n    ZERO\n#endif\n&quot;
-#if undef == 0
-    ZERO
-#endif
-$ printf &quot;#if undef == 0\n    ZERO\n#endif\n&quot; | gcc -E -
-    ZERO</code></pre>
-<p>Thus the fix is trivial: don’t omit any enum definition
-as other packages using <strong>imake</strong> actually rely on them being present.
-Possible fix:</p>
-<div class="sourceCode" id="cb19"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/imake.c</span></span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/imake.c</span></span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -998,121 +998,121 @@ get_libc_version(FILE *inFile)</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a> #if defined CROSSCOMPILE || defined linux || defined(__GLIBC__)</span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a> static void</span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a> get_distrib(FILE *inFile)</span>
-<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a> {</span>
-<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="st">-#if 0</span></span>
-<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>   struct stat sb;</span>
-<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>   static const char*   suse = &quot;/etc/SuSE-release&quot;;</span>
-<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>   static const char* redhat = &quot;/etc/redhat-release&quot;;</span>
-<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>   static const char* debian = &quot;/etc/debian_version&quot;;</span>
-<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxUnknown    0&quot;);</span>
-<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxSuSE       1&quot;);</span>
-<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxCaldera    2&quot;);</span>
-<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxCraftworks 3&quot;);</span>
-<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxDebian     4&quot;);</span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxInfoMagic  5&quot;);</span>
-<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxKheops     6&quot;);</span>
-<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxPro        7&quot;);</span>
-<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxRedHat     8&quot;);</span>
-<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxSlackware  9&quot;);</span>
-<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxTurbo      10&quot;);</span>
-<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxWare       11&quot;);</span>
-<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define LinuxYggdrasil  12&quot;);</span>
-<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a><span class="va">+#if 0</span></span>
-<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a> # ifdef CROSSCOMPILE</span>
-<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>   if (CrossCompiling) {</span>
-<span id="cb19-32"><a href="#cb19-32" aria-hidden="true" tabindex="-1"></a>       fprintf (inFile, &quot;%s\n&quot;,</span>
-<span id="cb19-33"><a href="#cb19-33" aria-hidden="true" tabindex="-1"></a>               &quot;#define DefaultLinuxDistribution LinuxUnknown&quot;);</span>
-<span id="cb19-34"><a href="#cb19-34" aria-hidden="true" tabindex="-1"></a>       fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName Unknown&quot;);</span>
-<span id="cb19-35"><a href="#cb19-35" aria-hidden="true" tabindex="-1"></a>       return;</span>
-<span id="cb19-36"><a href="#cb19-36" aria-hidden="true" tabindex="-1"></a>   }</span>
-<span id="cb19-37"><a href="#cb19-37" aria-hidden="true" tabindex="-1"></a> # endif</span>
-<span id="cb19-38"><a href="#cb19-38" aria-hidden="true" tabindex="-1"></a>   if (lstat (suse, &amp;sb) == 0) {</span>
-<span id="cb19-39"><a href="#cb19-39" aria-hidden="true" tabindex="-1"></a>     fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxSuSE&quot;);</span>
-<span id="cb19-40"><a href="#cb19-40" aria-hidden="true" tabindex="-1"></a>     fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName SuSE&quot;);</span>
-<span id="cb19-41"><a href="#cb19-41" aria-hidden="true" tabindex="-1"></a>     return;</span>
-<span id="cb19-42"><a href="#cb19-42" aria-hidden="true" tabindex="-1"></a>   }</span>
-<span id="cb19-43"><a href="#cb19-43" aria-hidden="true" tabindex="-1"></a>   if (lstat (redhat, &amp;sb) == 0) {</span>
-<span id="cb19-44"><a href="#cb19-44" aria-hidden="true" tabindex="-1"></a>     fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxRedHat&quot;);</span>
-<span id="cb19-45"><a href="#cb19-45" aria-hidden="true" tabindex="-1"></a>     fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName RedHat&quot;);</span>
-<span id="cb19-46"><a href="#cb19-46" aria-hidden="true" tabindex="-1"></a>     return;</span>
-<span id="cb19-47"><a href="#cb19-47" aria-hidden="true" tabindex="-1"></a>   }</span>
-<span id="cb19-48"><a href="#cb19-48" aria-hidden="true" tabindex="-1"></a>   if (lstat (debian, &amp;sb) == 0) {</span>
-<span id="cb19-49"><a href="#cb19-49" aria-hidden="true" tabindex="-1"></a>     fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxDebian&quot;);</span>
-<span id="cb19-50"><a href="#cb19-50" aria-hidden="true" tabindex="-1"></a>     fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName Debian&quot;);</span>
-<span id="cb19-51"><a href="#cb19-51" aria-hidden="true" tabindex="-1"></a>     /* You could also try to get the version of the Debian distrib by looking</span>
-<span id="cb19-52"><a href="#cb19-52" aria-hidden="true" tabindex="-1"></a>      * at the content of /etc/debian_version */</span>
-<span id="cb19-53"><a href="#cb19-53" aria-hidden="true" tabindex="-1"></a>     return;</span>
-<span id="cb19-54"><a href="#cb19-54" aria-hidden="true" tabindex="-1"></a>   }</span>
-<span id="cb19-55"><a href="#cb19-55" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb19-56"><a href="#cb19-56" aria-hidden="true" tabindex="-1"></a>   /* what's the definitive way to tell what any particular distribution is? */</span>
-<span id="cb19-57"><a href="#cb19-57" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-58"><a href="#cb19-58" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistribution LinuxUnknown&quot;);</span>
-<span id="cb19-59"><a href="#cb19-59" aria-hidden="true" tabindex="-1"></a>   fprintf (inFile, &quot;%s\n&quot;, &quot;#define DefaultLinuxDistName Unknown&quot;);</span>
-<span id="cb19-60"><a href="#cb19-60" aria-hidden="true" tabindex="-1"></a>   /* would like to know what version of the distribution it is */</span>
-<span id="cb19-61"><a href="#cb19-61" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
-<p>We move <strong>#if 0</strong> below to always define <strong>#define LinuxRedHat 8</strong> and friends.</p>
-<p>Original <a href="https://github.com/NixOS/nixpkgs/commit/7dba8848ed4bcceb4187a754f221af26f10b2063">imake.patch</a>
-was added in 2006. This makes it 15 years old bug.</p>
-<p>The fix is pending at <a href="https://github.com/NixOS/nixpkgs/pull/135414">https://github.com/NixOS/nixpkgs/pull/135414</a>
-pull request. Fixing <strong>imake</strong> immediately broke <strong>xcruiser</strong>,
-<strong>xvkbd</strong> and <strong>xxkb</strong> packages (reviewers++). It was failing for the
-lack of path overrides that were now exposed on non-<strong>LinuxRedHat</strong>
-systems. We will probably see more subtle breakages. I hope future
-breakages will not be as magic as this one.</p>
-<p>Now I can test my <strong>ccache</strong> update against <strong>nixpkgs/staging</strong>.</p>
-<p><a href="http://www.snake.net/software/imake-stuff/config-X11R4.pdf">Imake doc</a>
-shares a few amusing facts and subtle tips on how to workaround certain
-C preprocessor behaviours to force it to generate valid makefiles. For
-example if you want cpp to print ‘#’ you need to prepend it with … a
-C comment!</p>
-<pre class><code>$ printf '# Makefile comment\n'
-# Makefile comment
-
-$ printf '# Makefile comment\n' | gcc -traditional -E -
-&lt;stdin&gt;:1:3: error: invalid preprocessing directive #Makefile
-
-$ printf '/**/# Makefile comment\n' | gcc -traditional -E -
-# Makefile comment</code></pre>
-<h1 id="parting-words">Parting words</h1>
-<p><strong>nixpkgs</strong> makes it trivial to bisect faulty package updates on
-a package level as you would normally do it on project level.</p>
-<p>I found a few new things along the way:</p>
-<ul>
-<li><strong>nixs</strong>’s dependency “resolution” is instant. Constructing
-dependency graph is so much faster than trying to search a path in
-existing graph (like Gentoo’s portage does).</li>
-<li><strong>nix-shell</strong> is a nice way to poke at package unpacking,
-building and intallation steps.</li>
-<li><strong>imake</strong> is both fun and scary way to (ab)use C preprocessor to
-generate <strong>Makefile</strong>s.</li>
-</ul>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on September  1, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
