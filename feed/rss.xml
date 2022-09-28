@@ -7,8 +7,130 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 25 Sep 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Wed, 28 Sep 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>Trying out wayland</title>
+    <link>http://trofi.github.io/posts/261-trying-out-wayland.html</link>
+    <description><![CDATA[<h2 id="tldr">TL;DR</h2>
+<p>I switched to <code>wayland</code> from <code>X11</code> as my daily driver and don’t
+regret it so far. It feels like it fixed more problems for me than
+introduced to the point I’d prefer not to switch back.</p>
+<h2 id="x11-and-default-dpi">X11 and default DPI</h2>
+<p>I got my desktop monitor a few years ago. It is capable of
+<code>3840x2160</code> output (172 DPI). My integrated video card could do only
+<code>1920x1080</code> at most (78 DPI). I was a happy user of Xorg with
+default 96 DPI settings. I was using <code>alacritty</code> as a terminal with
+bitmap <code>Terminus</code> fonts carefully picked to avoid the need for glyph
+hinting.</p>
+<h2 id="x11-and-hidpi">X11 and HiDPI</h2>
+<p>About a year ago I updated my desktop machine. I chose cheap videocard
+that could output in <code>3840x2160</code> mode for my existing monitor. I wanted
+to look at the use of vector fonts in the terminal.</p>
+<p>I switched to HiDPI mode on <code>X11</code>. Without the special configuration
+everything shrunk and became half the initial size! Arch Linux has a
+detailed overview of the knobs you can tweak to get most of <code>Xorg</code>
+environment upscaled: <a href="https://wiki.archlinux.org/title/HiDPI" class="uri">https://wiki.archlinux.org/title/HiDPI</a>.</p>
+<p>I tried hard not to configure too many things manually. I did font
+size <code>Xft.dpi: 192</code> tweak via <code>.Xresources</code>. Pictograms in many
+applications (like <code>claws-mail</code>) didn’t pick up larger sizes. Mouse
+cursor became almost invisible. <code>gtk-2</code> applications and older <code>X11</code>
+applications that specify window sizes in pixels became unusable. I
+fixed cursor <code>Xcursor.size: 64</code> via <code>.Xresources</code>. In applications
+(toolkits) without good support for DPI scaling I had to artificially
+increase font size and disabled pictograms in favour of text labels on
+buttons.</p>
+<p>Surprisingly I had to abandon a few GUI apps in favour of their terminal
+equivalents as font scaling works so much better than UI element
+scaling!</p>
+<p>The result was looking ok-ish. But after an active use I noticed sever
+tearing effect when I switch between workspaces. It was most pronounced
+when I switched from <code>Firefox</code> workspace (usually white background) to
+terminal workspace (black background). Tearing effect was a diagonal
+blocky zip line seen for a very short while. I mitigated it with
+<code>Option "TearFree" "true"</code> via <code>xorg.conf</code>. The mitigation only mostly
+removes tearing effect, but not fully. Diagonal line gets turned to
+horisontal line. The tearing frequency decreases to usable levels. But
+it was still noticeable.</p>
+<p>Looking at the final <code>X11</code> HiDPI setup:</p>
+<ul>
+<li>the TTF fonts now looked great in terminals</li>
+<li>the UI sizes were not quite the same, usually smaller, sometimes
+unreadable</li>
+<li>some programs did not survive 2x downscaling and were too small to be
+useful at all</li>
+<li>a bit of tearing effect was present</li>
+</ul>
+<h2 id="wayland">Wayland</h2>
+<p>I’ve been meaning to try <code>wayland</code> for a while but never had an excuse.
+I was afraid it will break too many applications I use frequently (or
+occasionally). I vaguely remembered horror stories from past years of
+things like <code>wine</code> not being able to track mouse cursor properly,
+possible videocard incompatibility problems (like <code>nvidia</code>). I also
+was afrad I was a too long-term <code>Xorg</code> user to easily accept minor
+changes I’ll face.</p>
+<p>Having looked at the amount of tweaks I had to do for HiDPI and seeing
+recent <a href="https://artemis.sh/2022/09/18/wayland-from-an-x-apologist.html">An X11 Apologist Tries Wayland</a>
+post I decided to give it a try.</p>
+<p>I used <code>i3</code> window manager in <code>Xorg</code>. Closest <code>wayland</code> sibling is
+<code>sway</code>. <code>sway</code> is mostly config-compatible with <code>i3</code>: it reads
+<code>~/.config/i3/config</code> if <code>~/.config/sway/config</code> does not exist.
+Thus the initial switch is trivial: just run <code>sway</code>.</p>
+<p><code>wayland</code> has a bit different way to handle DPI: it just assumes 96 DPI
+for programs that don’t handle scaling. User needs to specify the scale
+once for wayland. For me the magic command was <code>wlr-randr --output DP-3 --scale 2</code>
+(or <code>output DP-3 scale 2.0</code> via <code>~/.config/sway/config</code>).</p>
+<p>After that I got most old programs up to a reasonable size! It is
+s omething that <code>X11</code> HiDPI could not do easily. That was a pleasant
+surprise. I even undid those rare changes I had to do for HiDPI on
+<code>X11</code>! <code>Xwayland</code> does a reasonable job of runnin many <code>X11</code> programs
+as is. There are warts still.</p>
+<p>Surprisingly under <code>wayland</code> tearing effect disappeared completely.</p>
+<p>I switched to direct <code>sway</code> start from linux terminal. Before I used
+<code>lightdm</code> graphical login manager (modern <code>X11</code> needed it for rootless
+mode for various reasons).</p>
+<p>Not everything was ideal in <code>wayland</code> world. Some unexpected things I
+found:</p>
+<ul>
+<li><code>xeyes</code> background is garbled at start, issue known as
+<a href="https://github.com/swaywm/sway/issues/3395" class="uri">https://github.com/swaywm/sway/issues/3395</a></li>
+<li>clicking the links in terminal does not switch the focus to the
+browser, issues known as <a href="https://github.com/swaywm/sway/issues/4830" class="uri">https://github.com/swaywm/sway/issues/4830</a></li>
+<li><code>Ctrl+Enter</code> does not work in <code>mc</code> (because it relies on <code>X11</code> events).
+I’m slowly reading through <a href="https://wayland-book.com/" class="uri">https://wayland-book.com/</a> to get the idea
+where it should ideally be implemented: in the terminal, in <code>mc</code> or
+smewhere else.</li>
+</ul>
+<h2 id="parting-words">Parting words</h2>
+<p>When I read through <a href="https://wayland-book.com/" class="uri">https://wayland-book.com/</a> I got a nice feling of
+being able to write nice smooth demos. Just like in <code>DOS</code> times when you
+could write pixels right into video RAM at the right VSYNC time (<code>0x3da</code>
+port).
+It’s probably no harder in <code>X11</code>. I never got to look at X11 <code>MIT-SHM</code>
+extension fearing of it’s lack of network transparency support. I spent
+some time playning with
+<a href="https://wayland-book.com/xdg-shell-basics/example-code.html" class="uri">https://wayland-book.com/xdg-shell-basics/example-code.html</a> example.</p>
+<p>Architecturally <code>wayland</code> feels a lot like <code>X11</code>: both are RPC protocols
+over UNIX socket to interact with objects on the server asynchronously
+via requests and events. But the difference in the details is also
+startling: frame perfect design gives a great user experience, many
+things are a bit different that they used to be and require different
+solution.</p>
+<p>I like <code>sway/wayland</code> experience so far and will try to port a few small
+things to it from <code>X11/OpenGL</code>.</p>
+<p>Full <code>sway</code> config I got: <a href="https://github.com/trofi/home/blob/master/.config/sway/config" class="uri">https://github.com/trofi/home/blob/master/.config/sway/config</a>.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on September 28, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Wed, 28 Sep 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/261-trying-out-wayland.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>GNU make amends rules with multiple targets</title>
     <link>http://trofi.github.io/posts/260-make-multiple-targets.html</link>
     <description><![CDATA[<h2 id="tldr">TL;DR</h2>
@@ -8243,187 +8365,6 @@ even accidental camel case!</p>
 ]]></description>
     <pubDate>Sat, 25 Dec 2021 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/232-AoC-in-rust.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>Trying out gcc-12</title>
-    <link>http://trofi.github.io/posts/231-trying-out-gcc-12.html</link>
-    <description><![CDATA[<p>Having updated locally new <strong>NixOS</strong> system to <strong>gcc-11.2.0</strong> I decided
-I’m familiar enough with <strong>NixOS</strong> to try yet unreleased <strong>gcc-12</strong> on
-a main system.</p>
-<p>Would it just work? That would be boring :)</p>
-<p>First I added new <strong>gcc</strong> snapshot to <strong>nixpkgs</strong> locally. It was only a
-matter of pulling in <strong>flex</strong> as a dependency (<strong>gcc</strong> does not provide
-genrated lexers for snapshots, only does fore releases and release candidates):</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- pkgs/development/compilers/gcc/11/default.nix       2021-10-27 07:15:23.996869137 +0100</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ pkgs/development/compilers/gcc/12/default.nix       2021-11-14 07:34:59.850516073 +0000</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -34,6 +34,9 @@</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a> , gnused ? null</span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a> , cloog # unused; just for compat with gcc4, as we override the parameter on some places</span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a> , buildPackages</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="va">+# snapshots don't have all the environment in front of them</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="va">+, flex</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a> }:</span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a> # LTO needs libelf and zlib.</span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -56,8 +59,9 @@</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a> with lib;</span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a> with builtins;</span>
-<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="st">-let majorVersion = &quot;11&quot;;</span></span>
-<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="st">-    version = &quot;${majorVersion}.2.0&quot;;</span></span>
-<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a><span class="va">+let majorVersion = &quot;12&quot;;</span></span>
-<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="va">+    version = &quot;${majorVersion}.0.0&quot;;</span></span>
-<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="va">+    snapDate = &quot;20211107&quot;;</span></span>
-<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>     inherit (stdenv) buildPlatform hostPlatform targetPlatform;</span>
-<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -94,8 +102,8 @@</span></span>
-<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>   builder = ../builder.sh;</span>
-<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>   src = fetchurl {</span>
-<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a><span class="st">-    url = &quot;mirror://gcc/releases/gcc-${version}/gcc-${version}.tar.xz&quot;;</span></span>
-<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a><span class="st">-    sha256 = &quot;sha256-0I7cU2tUw3KhAQ/2YZ3SdMDxYDqkkhK6IPeqLNo2+os=&quot;;</span></span>
-<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a><span class="va">+    url = &quot;mirror://gcc/snapshots/${majorVersion}-${snapDate}/gcc-${majorVersion}-${snapDate}.tar.xz&quot;;</span></span>
-<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a><span class="va">+    sha256 = &quot;sha256-YrpYs8GHGjpxto8h7JZI3VJLZAn4aRekbCvx+e1WjII=&quot;;</span></span>
-<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>   };</span>
-<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>   inherit patches;</span>
-<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -161,7 +169,7 @@</span></span>
-<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>     libcCross crossMingw;</span>
-<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>   depsBuildBuild = [ buildPackages.stdenv.cc ];</span>
-<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a><span class="st">-  nativeBuildInputs = [ texinfo which gettext ]</span></span>
-<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a><span class="va">+  nativeBuildInputs = [ flex texinfo which gettext ]</span></span>
-<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>     ++ (optional (perl != null) perl)</span>
-<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>     ++ (optional langAda gnatboot)</span>
-<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>;</span></code></pre></div>
-<p>And a few more lines to set <strong>gcc-12</strong> as a default.</p>
-<p>I attempted to rebuild packages in my system with <strong>nix build -f nixos system</strong>.</p>
-<p>First failure was a mysterious early <strong>ed-1.17</strong> test failure. I updated
-<strong>ed</strong> to <strong>1.18-pre3</strong> locally and that fixed the test. I made a mental note
-to get back to it a bit later to find out what fixed the test.</p>
-<p>Then there was a long list of minor failures related to standard library
-header interdependencies where fix is a one-liner to add required header.
-A few examples are:</p>
-<ul>
-<li>oggvideotools: <a href="https://sourceforge.net/p/oggvideotools/bugs/13/">https://sourceforge.net/p/oggvideotools/bugs/13/</a></li>
-<li>libopenmpt: <a href="https://github.com/OpenMPT/openmpt/pull/8">https://github.com/OpenMPT/openmpt/pull/8</a></li>
-<li>jfx</li>
-</ul>
-<p>This is the most typical breakage for compiler updates.</p>
-<p>Then there were a few failures related to now forbidden <strong>std::string(NULL)</strong>
-constructor. The fix is to use simpler <strong>std::string()</strong> constructor.
-A few affected projects are:</p>
-<ul>
-<li>binutils: <a href="https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=068a039b8bd7c7386bb0d88f0ae245b0fe4132e9">https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=068a039b8bd7c7386bb0d88f0ae245b0fe4132e9</a></li>
-<li>nlohmann/json (bug only): <a href="https://github.com/nlohmann/json/issues/3138">https://github.com/nlohmann/json/issues/3138</a></li>
-<li>ccache</li>
-</ul>
-<p>Then I noticed another change in ADL resolution, where <strong>operator&lt;&lt;</strong> was not
-searched in current namespace if none of arguments are in current namespace.
-<strong>clang</strong> had this behaviour for a while. Now <strong>gcc</strong> follows the lead.
-Only one project is affected so far:</p>
-<ul>
-<li>source-highlighting: <a href="https://git.savannah.gnu.org/cgit/src-highlite.git/commit/?id=ab9fe5cb9b85c5afab94f2a7f4b6d7d473c14ee9">https://git.savannah.gnu.org/cgit/src-highlite.git/commit/?id=ab9fe5cb9b85c5afab94f2a7f4b6d7d473c14ee9</a></li>
-</ul>
-<p>After getting through this trivia I got an unusual build failure for <strong>libX11</strong>.
-Here is a shorter example:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> extract<span class="op">(</span><span class="dt">char</span><span class="op">*);</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> XReadBitmapFileData <span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> name_and_type<span class="op">[</span><span class="dv">255</span><span class="op">];</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(;;)</span> <span class="op">{</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        extract <span class="op">(</span>name_and_type<span class="op">);</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">char</span> <span class="op">*</span> type <span class="op">=</span> strrchr <span class="op">(</span>name_and_type<span class="op">,</span> <span class="ch">'_'</span><span class="op">);</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>type<span class="op">)</span> type<span class="op">++;</span> <span class="cf">else</span> type <span class="op">=</span> name_and_type<span class="op">;</span></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>strcmp <span class="op">(</span><span class="st">&quot;hot&quot;</span><span class="op">,</span> type<span class="op">)</span> <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>type<span class="op">--</span> <span class="op">==</span> name_and_type <span class="op">||</span> type<span class="op">--</span> <span class="op">==</span> name_and_type<span class="op">)</span> <span class="cf">continue</span><span class="op">;</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>strcmp <span class="op">(</span><span class="st">&quot;ax_hot&quot;</span><span class="op">,</span> type<span class="op">)</span> <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>It took me a while to wrap my head around what is being done here. And
-after that while I still got it wrong :) (but not by too much).</p>
-<p>Here is what <strong>gcc-12</strong> has to say about the code:</p>
-<pre class><code># ok:
-$ gcc-11.2.0 -Wall -Werror=array-bounds -fno-strict-aliasing -O2 -c bug.c -o bug.o
-# bad:
-$ gcc-12.0.0 -Wall -Werror=array-bounds -fno-strict-aliasing -O2 -c bug.c -o bug.o
-bug.c: In function 'XReadBitmapFileData':
-bug.c:10:48: error: array subscript -2 is outside array bounds of 'char[9223372036854775807]' [-Werror=array-bounds]
-   10 |             if (type-- == name_and_type || type-- == name_and_type) continue;
-      |                                            ~~~~^~
-bug.c:4:14: note: at offset [0, 253] into object 'name_and_type' of size 255
-    4 |         char name_and_type[255];
-      |              ^~~~~~~~~~~~~
-cc1: some warnings being treated as errors</code></pre>
-<p>Note: it’s normally just a warning. But <strong>libX11</strong> explicitly uses
-“-Werror=array-bounds” as part of it’s build system assuming this
-warning can catch important problems.</p>
-<p>The error makes no sense in tis case: a) there is no array dereference,
-b) there should be no out-of-bounds pointers here.</p>
-<p>I was also not sure if <strong>(type– == name_and_type || type– == name_and_type)</strong>
-is a valid construct. I filed <a href="https://gcc.gnu.org/PR103215">https://gcc.gnu.org/PR103215</a>. There Andrew
-explained that <strong>||</strong> is a sequence point and it has expected defined
-behaviour. In hindsight it’s obvious as <strong>||</strong> is also a lazy evaluation
-device.</p>
-<p>Apparently this build failure is somewhat common. Same failure on
-identical code is present in:</p>
-<ul>
-<li>libXmu</li>
-<li>gdk-pixbuf</li>
-</ul>
-<p>Having sorted the above I returned to <strong>ed-1.17</strong> failure. I assumed it
-was some ancient undefined behaviour in <strong>ed</strong> uncovered by new <strong>gcc</strong>
-optimisations (like recent <strong>modref</strong> improvements). I looked at
-the diff between <strong>ed-1.17</strong> and <strong>ed-1.18-pre3</strong> tarballs but found
-nothing suspicious.</p>
-<p><strong>ed</strong> is an old and short codebase. Instead of staring a lot at generated
-assembly I decided to shrink it down to something I could easily understand
-and possibly fix. In the hindsight it was a good decision.</p>
-<p>After I arrived to a 2KB self-contained example of C code I still could
-not see what exactly <strong>gcc-12</strong> does to it to make it fail.</p>
-<p>I filed <a href="https://gcc.gnu.org/PR103202">https://gcc.gnu.org/PR103202</a> and Aldy instantly fixed very obscure
-<strong>PHI</strong> importing order bug. From what I understand we used stale variable
-names before a “rename” and used incorrect metadata attached to them
-(like value ranges).</p>
-<p>These kinds of bugs are very hard to extract from large projects. Even for
-<strong>ed</strong> case it took me 3 evenings. On a positive side now I know <strong>ed</strong>’s
-editor model :)</p>
-<p>After getting <strong>ed</strong> fixed I encountered an (already fixed) ICE on
-<strong>gperftools</strong>: <a href="https://gcc.gnu.org/PR103099">https://gcc.gnu.org/PR103099</a>.</p>
-<p>Currently I can build almost all packages for my system with <strong>gcc-12</strong>.
-I have a few local hacks too dirty to share, but they are mostly about
-getting headers imported correctly and getting around too aggressive
-warnings-as-errors in a few packages libe <strong>libjxl</strong>.</p>
-<p>The only yet unsolved mystery is 4 newly failing tests on <strong>llvm-13</strong>
-package. Somehow <strong>llvm</strong> generates FunctionLength=0 unwind information
-for learly non-empty functions. I suspect (hope) it’s another <strong>gcc</strong> bug.
-I’m trying to debug it right now. <strong>UPDATE:</strong> confirmed and extracted
-example to illustrate <strong>gcc</strong> bug <a href="https://gcc.gnu.org/PR103266">https://gcc.gnu.org/PR103266</a></p>
-<h1 id="fun-facts">Fun facts</h1>
-<ul>
-<li>It took me 2.5 months to get to gcc-from-git after switching the distribution :)</li>
-<li>Not too much was broken for these past two months.</li>
-<li>Most package failures are legitimate code bugs: missing includes, invalid or
-tautological code.</li>
-<li>Some failures against <strong>gcc-12</strong> are still good old compiler bugs :)</li>
-<li>Package test on <strong>nixpkgs</strong> are great at catching real bugs.</li>
-</ul>
-<p>I think <strong>gcc-12</strong> is quite usable for early experiments.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on November 14, 2021 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Sun, 14 Nov 2021 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/231-trying-out-gcc-12.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 

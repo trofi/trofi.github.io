@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: Trying out wayland</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>Trying out wayland</h1>
+
+            <h2 id="tldr">TL;DR</h2>
+<p>I switched to <code>wayland</code> from <code>X11</code> as my daily driver and don’t
+regret it so far. It feels like it fixed more problems for me than
+introduced to the point I’d prefer not to switch back.</p>
+<h2 id="x11-and-default-dpi">X11 and default DPI</h2>
+<p>I got my desktop monitor a few years ago. It is capable of
+<code>3840x2160</code> output (172 DPI). My integrated video card could do only
+<code>1920x1080</code> at most (78 DPI). I was a happy user of Xorg with
+default 96 DPI settings. I was using <code>alacritty</code> as a terminal with
+bitmap <code>Terminus</code> fonts carefully picked to avoid the need for glyph
+hinting.</p>
+<h2 id="x11-and-hidpi">X11 and HiDPI</h2>
+<p>About a year ago I updated my desktop machine. I chose cheap videocard
+that could output in <code>3840x2160</code> mode for my existing monitor. I wanted
+to look at the use of vector fonts in the terminal.</p>
+<p>I switched to HiDPI mode on <code>X11</code>. Without the special configuration
+everything shrunk and became half the initial size! Arch Linux has a
+detailed overview of the knobs you can tweak to get most of <code>Xorg</code>
+environment upscaled: <a href="https://wiki.archlinux.org/title/HiDPI" class="uri">https://wiki.archlinux.org/title/HiDPI</a>.</p>
+<p>I tried hard not to configure too many things manually. I did font
+size <code>Xft.dpi: 192</code> tweak via <code>.Xresources</code>. Pictograms in many
+applications (like <code>claws-mail</code>) didn’t pick up larger sizes. Mouse
+cursor became almost invisible. <code>gtk-2</code> applications and older <code>X11</code>
+applications that specify window sizes in pixels became unusable. I
+fixed cursor <code>Xcursor.size: 64</code> via <code>.Xresources</code>. In applications
+(toolkits) without good support for DPI scaling I had to artificially
+increase font size and disabled pictograms in favour of text labels on
+buttons.</p>
+<p>Surprisingly I had to abandon a few GUI apps in favour of their terminal
+equivalents as font scaling works so much better than UI element
+scaling!</p>
+<p>The result was looking ok-ish. But after an active use I noticed sever
+tearing effect when I switch between workspaces. It was most pronounced
+when I switched from <code>Firefox</code> workspace (usually white background) to
+terminal workspace (black background). Tearing effect was a diagonal
+blocky zip line seen for a very short while. I mitigated it with
+<code>Option "TearFree" "true"</code> via <code>xorg.conf</code>. The mitigation only mostly
+removes tearing effect, but not fully. Diagonal line gets turned to
+horisontal line. The tearing frequency decreases to usable levels. But
+it was still noticeable.</p>
+<p>Looking at the final <code>X11</code> HiDPI setup:</p>
+<ul>
+<li>the TTF fonts now looked great in terminals</li>
+<li>the UI sizes were not quite the same, usually smaller, sometimes
+unreadable</li>
+<li>some programs did not survive 2x downscaling and were too small to be
+useful at all</li>
+<li>a bit of tearing effect was present</li>
+</ul>
+<h2 id="wayland">Wayland</h2>
+<p>I’ve been meaning to try <code>wayland</code> for a while but never had an excuse.
+I was afraid it will break too many applications I use frequently (or
+occasionally). I vaguely remembered horror stories from past years of
+things like <code>wine</code> not being able to track mouse cursor properly,
+possible videocard incompatibility problems (like <code>nvidia</code>). I also
+was afrad I was a too long-term <code>Xorg</code> user to easily accept minor
+changes I’ll face.</p>
+<p>Having looked at the amount of tweaks I had to do for HiDPI and seeing
+recent <a href="https://artemis.sh/2022/09/18/wayland-from-an-x-apologist.html">An X11 Apologist Tries Wayland</a>
+post I decided to give it a try.</p>
+<p>I used <code>i3</code> window manager in <code>Xorg</code>. Closest <code>wayland</code> sibling is
+<code>sway</code>. <code>sway</code> is mostly config-compatible with <code>i3</code>: it reads
+<code>~/.config/i3/config</code> if <code>~/.config/sway/config</code> does not exist.
+Thus the initial switch is trivial: just run <code>sway</code>.</p>
+<p><code>wayland</code> has a bit different way to handle DPI: it just assumes 96 DPI
+for programs that don’t handle scaling. User needs to specify the scale
+once for wayland. For me the magic command was <code>wlr-randr --output DP-3 --scale 2</code>
+(or <code>output DP-3 scale 2.0</code> via <code>~/.config/sway/config</code>).</p>
+<p>After that I got most old programs up to a reasonable size! It is
+s omething that <code>X11</code> HiDPI could not do easily. That was a pleasant
+surprise. I even undid those rare changes I had to do for HiDPI on
+<code>X11</code>! <code>Xwayland</code> does a reasonable job of runnin many <code>X11</code> programs
+as is. There are warts still.</p>
+<p>Surprisingly under <code>wayland</code> tearing effect disappeared completely.</p>
+<p>I switched to direct <code>sway</code> start from linux terminal. Before I used
+<code>lightdm</code> graphical login manager (modern <code>X11</code> needed it for rootless
+mode for various reasons).</p>
+<p>Not everything was ideal in <code>wayland</code> world. Some unexpected things I
+found:</p>
+<ul>
+<li><code>xeyes</code> background is garbled at start, issue known as
+<a href="https://github.com/swaywm/sway/issues/3395" class="uri">https://github.com/swaywm/sway/issues/3395</a></li>
+<li>clicking the links in terminal does not switch the focus to the
+browser, issues known as <a href="https://github.com/swaywm/sway/issues/4830" class="uri">https://github.com/swaywm/sway/issues/4830</a></li>
+<li><code>Ctrl+Enter</code> does not work in <code>mc</code> (because it relies on <code>X11</code> events).
+I’m slowly reading through <a href="https://wayland-book.com/" class="uri">https://wayland-book.com/</a> to get the idea
+where it should ideally be implemented: in the terminal, in <code>mc</code> or
+smewhere else.</li>
+</ul>
+<h2 id="parting-words">Parting words</h2>
+<p>When I read through <a href="https://wayland-book.com/" class="uri">https://wayland-book.com/</a> I got a nice feling of
+being able to write nice smooth demos. Just like in <code>DOS</code> times when you
+could write pixels right into video RAM at the right VSYNC time (<code>0x3da</code>
+port).
+It’s probably no harder in <code>X11</code>. I never got to look at X11 <code>MIT-SHM</code>
+extension fearing of it’s lack of network transparency support. I spent
+some time playning with
+<a href="https://wayland-book.com/xdg-shell-basics/example-code.html" class="uri">https://wayland-book.com/xdg-shell-basics/example-code.html</a> example.</p>
+<p>Architecturally <code>wayland</code> feels a lot like <code>X11</code>: both are RPC protocols
+over UNIX socket to interact with objects on the server asynchronously
+via requests and events. But the difference in the details is also
+startling: frame perfect design gives a great user experience, many
+things are a bit different that they used to be and require different
+solution.</p>
+<p>I like <code>sway/wayland</code> experience so far and will try to port a few small
+things to it from <code>X11/OpenGL</code>.</p>
+<p>Full <code>sway</code> config I got: <a href="https://github.com/trofi/home/blob/master/.config/sway/config" class="uri">https://github.com/trofi/home/blob/master/.config/sway/config</a>.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on September 28, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
