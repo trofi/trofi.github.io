@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: GCC's new -Wdangling-reference warning</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>GCC's new -Wdangling-reference warning</h1>
+
+            <p>Tl;DR: <code>gcc</code> <a href>just got</a>
+new <code>-Wdangling-reference</code> diagnostic to catch some use-after-free bugs
+related to temporary object lifetimes in <code>c++</code> code.</p>
+<p>Initially I encountered <code>-Wdangling-reference</code> at
+<a href="https://gcc.gnu.org/PR107488" class="uri">https://gcc.gnu.org/PR107488</a> where <code>cppunit-1.15.1</code> failed to build
+due to <code>-Wall -Werror</code> flags in the build system. That particular case
+was a false positive (<code>gcc</code> bug). I also found similar build failures in
+<code>libcamera</code>, <code>cvise</code>, <code>spirv-tools</code>, <code>aws-sdk-cpp</code>.</p>
+<p>Once false positive was fixed build was restored on <code>cppunit</code> and
+<code>spirv-tools</code>. <code>libcamera</code> and <code>cvise</code> still fail and need more triage.</p>
+<p>At least on <code>aws-sdk-cpp-1.9.294</code> the bug is real
+(<a href="https://github.com/aws/aws-sdk-cpp/commit/e1aceaeb211901d1985663d3de12c76913e41b90">fixed since</a>).</p>
+<p>Smaller <code>aws-sdk-cpp</code> example:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cat a.cpp</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> C <span class="op">{</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="va">i_</span><span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">public</span><span class="op">:</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    C<span class="op">();</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="op">&amp;</span> iRef<span class="op">(</span><span class="dt">void</span><span class="op">);</span> <span class="co">// returns i_ according to the legend</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> g<span class="op">(</span><span class="dt">int</span> i<span class="op">);</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="dt">int</span> <span class="op">&amp;</span> i <span class="op">=</span> C<span class="op">().</span>iRef<span class="op">();</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    g<span class="op">(</span>i<span class="op">);</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Building:</p>
+<pre><code>$ g++-13.0.0 -c a.cpp -Wall -Werror
+a.cpp: In function 'void f()':
+a.cpp:11:17: error: possibly dangling reference to a temporary [-Werror=dangling-reference]
+   11 |     const int &amp; i = C().iRef();
+      |                 ^
+a.cpp:11:29: note: the temporary was destroyed at the end of the full expression 'C().C::iRef()'
+   11 |     const int &amp; i = C().iRef();
+      |                     ~~~~~~~~^~
+cc1plus: all warnings being treated as errors</code></pre>
+<p>Normally temporary objects don’t outlive statement they are created (or
+even expression in older c++ standards). The special case is a
+<a href="https://en.cppreference.com/w/cpp/language/lifetime">lifetime extension</a>
+by taking a const lvalue reference (and a few other types of
+references).</p>
+<p>In case of our example reference returned by <code>iRef()</code> could be a
+reference to part of <code>C()</code> object (and according to the legened it is).
+This means that <code>g(i)</code> dereferences already destroyed object.</p>
+<p>Unfortunately even this example is still prone to false positives: if
+<code>iRef()</code> happened to return a reference to some global variable that
+outlived <code>C()</code>. We dont see an <code>iRef()</code> definition here at all. Thus it
+could have any lifetime. I don’t think <code>gcc</code> should warn for such cases.</p>
+<p><code>libcamera</code> is one of such cases: <a href="https://gcc.gnu.org/PR107532" class="uri">https://gcc.gnu.org/PR107532</a></p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Plane <span class="op">{</span> <span class="dt">unsigned</span> <span class="dt">int</span> bytesused<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Passes a reference through. Does not change lifetime.</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span>typename Inner<span class="op">&gt;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Ref <span class="op">{</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> Inner <span class="op">&amp;</span> i_<span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    Ref<span class="op">(</span><span class="dt">const</span> Inner <span class="op">&amp;</span> i<span class="op">)</span> <span class="op">:</span> i_<span class="op">(</span>i<span class="op">)</span> <span class="op">{}</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> Inner <span class="op">&amp;</span> inner<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> i_<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> FrameMetadata <span class="op">{</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    Ref<span class="op">&lt;</span><span class="dt">const</span> Plane<span class="op">&gt;</span> planes<span class="op">()</span> <span class="dt">const</span> <span class="op">{</span> <span class="cf">return</span> p_<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    Plane p_<span class="op">;</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> bar<span class="op">(</span><span class="dt">const</span> Plane <span class="op">&amp;</span> meta<span class="op">);</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo<span class="op">(</span><span class="dt">const</span> FrameMetadata <span class="op">&amp;</span> fm<span class="op">)</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> Plane <span class="op">&amp;</span> meta <span class="op">=</span> fm<span class="op">.</span>planes<span class="op">().</span>inner<span class="op">();</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    bar<span class="op">(</span>meta<span class="op">);</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><code>gcc-13</code> complains about it as:</p>
+<pre><code>$ g++-13.0.0 -c -Wall -Werror=dangling-reference a.cpp
+a.cpp: In function 'void foo(const FrameMetadata&amp;)':
+a.cpp:20:19: error: possibly dangling reference to a temporary [-Werror=dangling-reference]
+   20 |     const Plane &amp; meta = fm.planes().inner();
+      |                   ^~~~
+a.cpp:20:43: note: the temporary was destroyed at the end of the full expression '(&amp; fm)-&gt;FrameMetadata::planes().Ref&lt;const Plane&gt;::inner()'
+   20 |     const Plane &amp; meta = fm.planes().inner();
+      |                          ~~~~~~~~~~~~~~~~~^~
+cc1plus: some warnings being treated as errors
+
+This gcc version is this week's gcc-13 snapshot with https://gcc.gnu.org/PR107488 applied on top.</code></pre>
+<p>The idiom here is to wrap a non-owning reference into a tiny value-like
+object. <code>gcc</code> does not see it and thinks that wrapper’s lifetime matters
+here.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>New <code>-Wdangling-reference</code> option in <code>gcc</code> is exciting! It has a chance
+to catch really nasty use-after-free cases. But it also seems to need
+quite a bit more tuning to dial down false positives.</p>
+<p><code>-Werror</code> is a good way to make your program fail to build for no good
+reason (i.e. a benign compiler bug). But it’s also a great tool for
+software developers to find bugs in code being modified (or in the
+compiler :).</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on November  5, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

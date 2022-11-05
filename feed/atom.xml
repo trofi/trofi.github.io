@@ -8,8 +8,118 @@
         <name>Sergei Trofimovich</name>
         <email>slyich@gmail.com</email>
     </author>
-    <updated>2022-11-01T00:00:00Z</updated>
+    <updated>2022-11-05T00:00:00Z</updated>
     <entry>
+    <title>GCC's new -Wdangling-reference warning</title>
+    <link href="http://trofi.github.io/posts/264-gcc-s-new-Wdangling-reference-warning.html" />
+    <id>http://trofi.github.io/posts/264-gcc-s-new-Wdangling-reference-warning.html</id>
+    <published>2022-11-05T00:00:00Z</published>
+    <updated>2022-11-05T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>Tl;DR: <code>gcc</code> <a href>just got</a>
+new <code>-Wdangling-reference</code> diagnostic to catch some use-after-free bugs
+related to temporary object lifetimes in <code>c++</code> code.</p>
+<p>Initially I encountered <code>-Wdangling-reference</code> at
+<a href="https://gcc.gnu.org/PR107488" class="uri">https://gcc.gnu.org/PR107488</a> where <code>cppunit-1.15.1</code> failed to build
+due to <code>-Wall -Werror</code> flags in the build system. That particular case
+was a false positive (<code>gcc</code> bug). I also found similar build failures in
+<code>libcamera</code>, <code>cvise</code>, <code>spirv-tools</code>, <code>aws-sdk-cpp</code>.</p>
+<p>Once false positive was fixed build was restored on <code>cppunit</code> and
+<code>spirv-tools</code>. <code>libcamera</code> and <code>cvise</code> still fail and need more triage.</p>
+<p>At least on <code>aws-sdk-cpp-1.9.294</code> the bug is real
+(<a href="https://github.com/aws/aws-sdk-cpp/commit/e1aceaeb211901d1985663d3de12c76913e41b90">fixed since</a>).</p>
+<p>Smaller <code>aws-sdk-cpp</code> example:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// cat a.cpp</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> C <span class="op">{</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="va">i_</span><span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">public</span><span class="op">:</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    C<span class="op">();</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="op">&amp;</span> iRef<span class="op">(</span><span class="dt">void</span><span class="op">);</span> <span class="co">// returns i_ according to the legend</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> g<span class="op">(</span><span class="dt">int</span> i<span class="op">);</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="dt">int</span> <span class="op">&amp;</span> i <span class="op">=</span> C<span class="op">().</span>iRef<span class="op">();</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    g<span class="op">(</span>i<span class="op">);</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Building:</p>
+<pre><code>$ g++-13.0.0 -c a.cpp -Wall -Werror
+a.cpp: In function 'void f()':
+a.cpp:11:17: error: possibly dangling reference to a temporary [-Werror=dangling-reference]
+   11 |     const int &amp; i = C().iRef();
+      |                 ^
+a.cpp:11:29: note: the temporary was destroyed at the end of the full expression 'C().C::iRef()'
+   11 |     const int &amp; i = C().iRef();
+      |                     ~~~~~~~~^~
+cc1plus: all warnings being treated as errors</code></pre>
+<p>Normally temporary objects don’t outlive statement they are created (or
+even expression in older c++ standards). The special case is a
+<a href="https://en.cppreference.com/w/cpp/language/lifetime">lifetime extension</a>
+by taking a const lvalue reference (and a few other types of
+references).</p>
+<p>In case of our example reference returned by <code>iRef()</code> could be a
+reference to part of <code>C()</code> object (and according to the legened it is).
+This means that <code>g(i)</code> dereferences already destroyed object.</p>
+<p>Unfortunately even this example is still prone to false positives: if
+<code>iRef()</code> happened to return a reference to some global variable that
+outlived <code>C()</code>. We dont see an <code>iRef()</code> definition here at all. Thus it
+could have any lifetime. I don’t think <code>gcc</code> should warn for such cases.</p>
+<p><code>libcamera</code> is one of such cases: <a href="https://gcc.gnu.org/PR107532" class="uri">https://gcc.gnu.org/PR107532</a></p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Plane <span class="op">{</span> <span class="dt">unsigned</span> <span class="dt">int</span> bytesused<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Passes a reference through. Does not change lifetime.</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span>typename Inner<span class="op">&gt;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Ref <span class="op">{</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> Inner <span class="op">&amp;</span> i_<span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    Ref<span class="op">(</span><span class="dt">const</span> Inner <span class="op">&amp;</span> i<span class="op">)</span> <span class="op">:</span> i_<span class="op">(</span>i<span class="op">)</span> <span class="op">{}</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> Inner <span class="op">&amp;</span> inner<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> i_<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> FrameMetadata <span class="op">{</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    Ref<span class="op">&lt;</span><span class="dt">const</span> Plane<span class="op">&gt;</span> planes<span class="op">()</span> <span class="dt">const</span> <span class="op">{</span> <span class="cf">return</span> p_<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    Plane p_<span class="op">;</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> bar<span class="op">(</span><span class="dt">const</span> Plane <span class="op">&amp;</span> meta<span class="op">);</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo<span class="op">(</span><span class="dt">const</span> FrameMetadata <span class="op">&amp;</span> fm<span class="op">)</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> Plane <span class="op">&amp;</span> meta <span class="op">=</span> fm<span class="op">.</span>planes<span class="op">().</span>inner<span class="op">();</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    bar<span class="op">(</span>meta<span class="op">);</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><code>gcc-13</code> complains about it as:</p>
+<pre><code>$ g++-13.0.0 -c -Wall -Werror=dangling-reference a.cpp
+a.cpp: In function 'void foo(const FrameMetadata&amp;)':
+a.cpp:20:19: error: possibly dangling reference to a temporary [-Werror=dangling-reference]
+   20 |     const Plane &amp; meta = fm.planes().inner();
+      |                   ^~~~
+a.cpp:20:43: note: the temporary was destroyed at the end of the full expression '(&amp; fm)-&gt;FrameMetadata::planes().Ref&lt;const Plane&gt;::inner()'
+   20 |     const Plane &amp; meta = fm.planes().inner();
+      |                          ~~~~~~~~~~~~~~~~~^~
+cc1plus: some warnings being treated as errors
+
+This gcc version is this week's gcc-13 snapshot with https://gcc.gnu.org/PR107488 applied on top.</code></pre>
+<p>The idiom here is to wrap a non-owning reference into a tiny value-like
+object. <code>gcc</code> does not see it and thinks that wrapper’s lifetime matters
+here.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>New <code>-Wdangling-reference</code> option in <code>gcc</code> is exciting! It has a chance
+to catch really nasty use-after-free cases. But it also seems to need
+quite a bit more tuning to dial down false positives.</p>
+<p><code>-Werror</code> is a good way to make your program fail to build for no good
+reason (i.e. a benign compiler bug). But it’s also a great tool for
+software developers to find bugs in code being modified (or in the
+compiler :).</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on November  5, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>GNU make 4.4 is out!</title>
     <link href="http://trofi.github.io/posts/263-gnu-make-4.4-is-out.html" />
     <id>http://trofi.github.io/posts/263-gnu-make-4.4-is-out.html</id>
@@ -3426,6 +3536,7 @@ in near future. The example is <strong>netpbm</strong>:
 <li>ispell: will be fixed in 3.4.06. Could not find web UI for the repository.</li>
 <li>mingw-w64: <a href="https://sourceforge.net/p/mingw-w64/mingw-w64/ci/e1b0c1420bbd52ef505c71737c57393ac1397b0a/" class="uri">https://sourceforge.net/p/mingw-w64/mingw-w64/ci/e1b0c1420bbd52ef505c71737c57393ac1397b0a/</a></li>
 <li>notion: <a href="https://github.com/raboof/notion/pull/346" class="uri">https://github.com/raboof/notion/pull/346</a></li>
+<li>jhead: <a href="https://github.com/Matthias-Wandel/jhead/pull/67" class="uri">https://github.com/Matthias-Wandel/jhead/pull/67</a></li>
 </ul>
 <p>Nothing complicated. Just a few missing dependencies.</p>
 <p>Give it a try!</p>
@@ -7983,95 +8094,6 @@ $ find /tmp/r/
 
 <div class="info">
     Posted on January 22, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>seekwatcher 0.14</title>
-    <link href="http://trofi.github.io/posts/234-seekwatcher-0.14.html" />
-    <id>http://trofi.github.io/posts/234-seekwatcher-0.14.html</id>
-    <published>2022-01-17T00:00:00Z</published>
-    <updated>2022-01-17T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>About 10 years ago I <a href="http://trofi.github.io/posts/169-seekwatcher.html">tried</a> <strong>seekwatcher</strong>
-for the first time (unfortunately past videos and pictures did not survive host
-migrations). There I explored slowness of <strong>btrfs</strong> on my spinning drive and
-concluded IO was seek-bound.</p>
-<p>Believe it or not <strong>seekwatcher</strong> code did not change at all since then. It was
-abandoned upstream in favour of <strong>iowatcher</strong>: <a href="http://masoncoding.com/iowatcher/">http://masoncoding.com/iowatcher/</a>.
-I never knew there was a replacement and kept tweaking <strong>seekwatcher</strong> for minor
-failures like <strong>dash</strong> incompatibilities. Eventually (8 years later) I released
-the result as <strong>0.13</strong>. Looking at it 2 years later effectively nobody uses <strong>0.13</strong>:
-<a href="https://repology.org/project/seekwatcher/versions">https://repology.org/project/seekwatcher/versions</a>. This is fine. Most distributions
-effectively abandoned <strong>seekwatcher</strong> or never had it packages in the first place.
-I myself did not have a reason to use it for years and did not notice it’s build
-broke again.</p>
-<p>I spent this weekend to refurbish it a bit. The result is a new
-<a href="https://github.com/trofi/seekwatcher/releases/tag/v0.14">0.14 release</a>! It should
-be able to run on modern Python 3.10 (and something less modern as well).</p>
-<p>As a demo today’s video and picture will be a read-only workload for <strong>btrfs scrub</strong>
-against a 35% filled root SSD partition for my desktop:</p>
-<pre class><code>$ seekwatcher -t scrub.trace -p 'echo 3 &gt; /proc/sys/vm/drop_caches; sync; btrfs scrub start -B /' -d /dev/nvme0n1p3
-$ seekwatcher -t scrub.trace -o scrub.ogg --movie
-$ seekwatcher -t scrub.trace -o scrub.png</code></pre>
-<p>The output of the above commands is also instructive:</p>
-<pre class><code>blktrace -d /dev/nvme0n1p3 -o scrub.trace -D . -a queue -a complete -a issue
-running :echo 3 &gt; /proc/sys/vm/drop_caches; sync; btrfs scrub start -B /:
-scrub done for 6b160f29-1dbb-4020-a36d-c233f1dffaf6
-Scrub started:    Mon Jan 17 07:52:29 2022
-Status:           finished
-Duration:         0:01:08
-Total to scrub:   404.02GiB
-Rate:             2.17GiB/s
-Error summary:    no errors found
-done running echo 3 &gt; /proc/sys/vm/drop_caches; sync; btrfs scrub start -B /
-=== nvme0n1p3 ===
-  CPU  0:               876508 events,    41087 KiB data
-  CPU  1:               693423 events,    32505 KiB data
-  CPU  2:               537656 events,    25203 KiB data
-  CPU  3:               592174 events,    27759 KiB data
-  CPU  4:               511254 events,    23966 KiB data
-  CPU  5:               495733 events,    23238 KiB data
-  CPU  6:               503972 events,    23624 KiB data
-  CPU  7:               593066 events,    27800 KiB data
-  CPU  8:               783384 events,    36722 KiB data
-  CPU  9:               626492 events,    29367 KiB data
-  CPU 10:               938655 events,    44000 KiB data
-  CPU 11:               815019 events,    38205 KiB data
-  CPU 12:               765571 events,    35887 KiB data
-  CPU 13:               603239 events,    28277 KiB data
-  CPU 14:               813953 events,    38155 KiB data
-  CPU 15:               686623 events,    32186 KiB data
-  Total:              10836722 events (dropped 0),   507972 KiB data
-blktrace done
-
-using tracefile ./scrub.trace
-saving graph to trace.png
-using tracefile ./scrub.trace
-total frames is 300 secs per frame = 0.23
-
-start 0.00 secs end 0.23 secs frame 0
-start 0.23 secs end 0.46 secs frame 1
-start 0.46 secs end 0.68 secs frame 2
-start 0.68 secs end 0.91 secs frame 3
-start 0.91 secs end 1.14 secs frame 4
-...
-MEncoder 1.4-10.3.0 (C) 2000-2019 MPlayer Team
-...</code></pre>
-<p>Note that <strong>seekwatcher</strong> is a wrapper around <strong>blktrace</strong> and <strong>mencoder</strong>:
-it’s main job is to build a 30-second clip off any data by donwsampling things.</p>
-<p>Here is the result of the above commands:</p>
-<ul>
-<li><a href="http://trofi.github.io/posts.data/234-seekwatcher/scrub.png">image</a> (143K)</li>
-<li><a href="http://trofi.github.io/posts.data/234-seekwatcher/scrub.ogv">video</a> (700K)</li>
-</ul>
-<p>The average read speed is 2.2GB/s with 17K IO/s of them seeks are 2.5K/s.</p>
-<p>The equivalent <strong>iowatcher</strong> commands should look identical.</p>
-<p>That’s it!</p>
-
-<div class="info">
-    Posted on January 17, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
