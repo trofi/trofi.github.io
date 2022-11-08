@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: Zero Hydra Failures towards 22.11 NixOS release</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>Zero Hydra Failures towards 22.11 NixOS release</h1>
+
+            <p>The end of November is near and that means <code>NixOS</code> will get a release
+soon. One of the late stages is Zero Hydra Failures phase: there everyone
+squashes most of known build failures in <code>nixpkgs/master</code> before branching
+off new <code>22.11</code> release.</p>
+<p><a href="https://github.com/NixOS/nixpkgs/issues/199919" class="uri">https://github.com/NixOS/nixpkgs/issues/199919</a> tracks the effort and
+has a few hints on how to locate all known build failures in various
+places. So far there is a few thousands build failures in <code>nixpkgs/master</code>.</p>
+<p>I had a chance to fix <a href="https://github.com/NixOS/nixpkgs/pull/199932">zsnes build failure</a>.
+As you can see it’s a trivial fix. And we need a lot of fixes like these.
+If you would like to help <code>nixpkgs</code> and upstream projects then please
+join the effort of fixing those! Thank you in advance :)</p>
+<p>Below I’ll run through an example build fix in more detail.</p>
+<p>I usually start from <a href="https://hydra.nixos.org/jobset/nixpkgs/trunk" class="uri">https://hydra.nixos.org/jobset/nixpkgs/trunk</a>
+periodic builder against <code>nixpkgs/master</code>. There I pick most recent
+evaluation and navigate to <code>Still failing jobs</code> tab. From there I pick
+failing package I like and check the build log. Apart from the build
+log there is also a commit at which the package was built successully
+last time. That usually helps in bisection of exact commit that broke
+the package. Useful when you have no idea why the package is unhappy.</p>
+<p>Let’s pick <code>synfigstudio-1.5.1</code> as a broken example. It’s build failure
+is hiding in <a href="https://hydra.nixos.org/build/197644988" class="uri">https://hydra.nixos.org/build/197644988</a>. It’s last
+successful build is <a href="https://hydra.nixos.org/build/194567109" class="uri">https://hydra.nixos.org/build/194567109</a> (<code>Inputs</code>
+tab says it’s 667199140080a656d0be0d9c91b4bbac8828959f upstream commit
+around end of September 2022).</p>
+<p><a href="https://hydra.nixos.org/log/fd916xc57cfiwa3b7nm9x1i0f80czszx-synfigstudio-1.5.1.drv">Build log</a>
+complains about missing <code>intltoolize</code>:</p>
+<pre><code>Makefile.am: installing './INSTALL'
+Makefile.am: installing './COPYING' using GNU General Public License v3 file
+Makefile.am:     Consider adding the COPYING file to the version control system
+Makefile.am:     for your code, to avoid questions about which license your project uses
+src/gui/Makefile.am: installing 'config/depcomp'
+parallel-tests: installing 'config/test-driver'
+autoreconf: Leaving directory '.'
+configuring
+*** No intltoolize found, please install the intltool package ***</code></pre>
+<p>Trying a trivial fix:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/applications/graphics/synfigstudio/default.nix</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/applications/graphics/synfigstudio/default.nix</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -103,6 +103,7 @@ stdenv.mkDerivation {</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>     pkg-config</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>     autoreconfHook</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>     gettext</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="va">+    intltool</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>     wrapGAppsHook</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>   ];</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>   buildInputs = [</span></code></pre></div>
+<pre><code>$ nix build -f . synfigstudio
+...
+ok!</code></pre>
+<p>Proposed fix against <code>nixpkgs</code> as <a href="https://github.com/NixOS/nixpkgs/pull/200095" class="uri">https://github.com/NixOS/nixpkgs/pull/200095</a>.
+That was easy.</p>
+<p>Now out of curiosity let’s see what previous change did break
+<code>synfigstudio</code>:</p>
+<pre><code>$ git clone https://github.com/NixOS/nixpkgs
+$ cd nixpkgs
+
+$ git bisect start origin/master 667199140080a656d0be0d9c91b4bbac8828959f
+Bisecting: 4429 revisions left to test after this (roughly 12 steps)
+[25b3b9b1b2af029d1a6db918d8fdb5560724681b] Merge staging-next into staging
+
+$ git bisect run nix build -f. synfigstudio
+running  'nix' 'build' '-f.' 'synfigstudio'
+...
+
+commit 0734f54ef262ad642eec1166a416bae86779ed9f
+Date:   Sun Sep 25 05:49:25 2022 +0300
+
+    treewide: move pkg-config, autoreconfHook, intltool to nativeBuildInputs
+
+    found with nixpkgs-lint</code></pre>
+<p>If we look at that patch it removed <code>intltool</code> from <code>buildInputs</code> (<code>HOST</code>
+depends) instead of moving it to <code>nativeBuildInputs</code> (<code>BUILD</code> depends):</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/applications/graphics/synfigstudio/default.nix</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/applications/graphics/synfigstudio/default.nix</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -107,21 +107,20 @@ stdenv.mkDerivation {</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>   ];</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>   buildInputs = [</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>     ETL</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>     synfig</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>     boost</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>     cairo</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>     glibmm</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>     gtk3</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>     gtkmm3</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>     imagemagick</span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="st">-    intltool</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>     libjack2</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>     libsigcxx</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>     libxmlxx</span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>     mlt</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>     gnome.adwaita-icon-theme</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>     openexr</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>     fftw</span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>   ];</span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>   enableParallelBuilding = true;</span></code></pre></div>
+<p>Simple bug downstream-only bug. Nothing to report upstream.</p>
+<p>Have fun and happy fixing!</p>
+
+<div class="info">
+    Posted on November  8, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
