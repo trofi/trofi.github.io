@@ -7,8 +7,279 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sat, 19 Nov 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Mon, 28 Nov 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>Fixing wine-wayland on POLARIS</title>
+    <link>http://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html</link>
+    <description><![CDATA[<p>After <a href="http://trofi.github.io/posts/261-trying-out-wayland.html">switching to wayland</a> I got
+most GUI programs to use <code>wayland</code> backend render. The two main
+exceptions are <code>pidgin</code> (used <code>gtk-2</code>) and <code>wine</code> (uses lew level <code>x11</code>
+primitives for many things). <code>pidgin</code> worked fine in <code>Xwayland</code>, but
+<code>wine</code> did not always behave: sometimes input focus did not get passed
+to the emulated application, sometimes wine could not use
+<code>wayland</code>-native pixel screen dimensions and resorted back to
+down-scaled dimensions.</p>
+<p>There is an ongoing effort to get <code>wine</code> a new <code>wayland</code> backend by
+Alexandros Frantzis and others. It’s not yet merged to <code>wine</code> upstream
+proper and is developed at <a href="https://gitlab.collabora.com/alf/wine.git" class="uri">https://gitlab.collabora.com/alf/wine.git</a>
+as a <code>wine</code> fork in <code>wayland</code> branch. <code>nixpkgs</code> packages this fork as
+<code>wine-wayland</code> package.</p>
+<p>I tried <code>wine-wayland</code> for the first time this weekend. Unfortunately it
+was not able to run <code>DirectX</code> or <code>OpenGL</code> games for windows. When I
+started an application I heard expected sounds from the applications
+(good) but got only black screen back (bad!).</p>
+<p>I did not think I could fix it: <code>wine</code> was a huge project, I had no
+background in modern graphics be it <code>linux</code> or <code>windows</code>. But I was
+mildly curious about the following messages <code>wine</code> was dumping to
+<code>stderr</code>:</p>
+<pre><code>$ wine foo.exe
+00f0:err:waylanddrv:wayland_gl_drawable_update Failed to create GBM surface
+00f0:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface
+011c:err:waylanddrv:wayland_gl_drawable_update Failed to create GBM surface
+011c:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface</code></pre>
+<p>I wanted to find out why <code>wine</code> was failing to create these things.</p>
+<p><code>GBM</code> and <code>EGL</code> acronyms sounded vaguely graphics-related. Creating the
+rendering surface sounded like a simple procedure. Everything neededs a
+surface to draw anything. Maybe that error message is an actual bug?</p>
+<p><code>wine</code> has a great <code>WINEDEBUG=</code> mechanism to enable subsystem-specific
+debug prints at runtime (<code>man wine</code> has detailed synatax description).
+To get <code>wayland</code>-related debugging I used <code>WINEDEBUG=waylanddrv,opengl</code>:</p>
+<pre><code>$ WINEDEBUG=waylanddrv,opengl wine foo.exe
+...
+0124:trace:waylanddrv:wayland_gl_create_gbm_surface Using default format/modifier information
+0124:trace:waylanddrv:wayland_gbm_create_surface 640x480 AR24 scanout=0 count_mods=2
+0124:trace:waylanddrv:wayland_gbm_create_surface     mod: 0x00ffffffffffffff
+0124:trace:waylanddrv:wayland_gbm_create_surface     mod: 0x0000000000000000
+0124:err:waylanddrv:wayland_gl_drawable_update Failed to create GBM surface
+0124:trace:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface with SRGB colorspace, trying with default colorspace
+0124:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface
+...</code></pre>
+<p>Not knowing much about these <code>GBM</code> things it felt like creating a <code>640x480</code>
+surface with <code>AR24</code> format (8 bits for each of Red, Blue, Green, Alpha components)
+should not be a problem and the call should succeed. Why does it fail here?</p>
+<p>To ease exploration I started patching <code>mesa</code> and <code>wine-wayland</code> locally
+with <code>fprintf(stderr, ..._;</code> calls to see what gets passed around.</p>
+<p><code>nixpkgs</code>’s <code>mesa</code> clients use <code>/run/opengl-driver-32</code> paths to load
+<code>opengl</code> <code>mesa</code> drivers. That means just rebuilding an application
+against patched <code>mesa</code> locally in <code>nixpkgs</code> checkout is not enough to
+get it used: applications will still load <code>/run/opengl-driver-32</code>
+drivers. One day we will fix this non-hermeticity.</p>
+<p>But until then we have to manually redirect used <code>mesa</code> from default
+paths. There are many ways to do it. I used the following global
+variables:</p>
+<pre><code>$ local_mesa=$(nix-build --no-link ~/nm -A pkgsi686Linux.mesa.drivers)
+$ GBM_BACKENDS_PATH=/not-really-used \
+  LIBGL_DRIVERS_PATH=$local_mesa/lib/dri \
+  __EGL_VENDOR_LIBRARY_DIRS=$local_mesa/share/glvnd/egl_vendor.d \
+      wine foo.exe</code></pre>
+<p>This allowed me to put patches to <code>~/nm</code> checkout of <code>nixpkgs</code> and
+immediately observe their effect on <code>wine-wayland</code>.</p>
+<p>I found that <code>wine</code>’s code at
+<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L373-L440">winewayland.drv</a>.
+calls <code>wayland_gbm_create_surface()</code> -&gt;
+<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L310-L371">wayland_gl_create_gbm_surface()</a>,
+-&gt; <a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/gbm.c#L267-L299">wayland_gbm_create_surface()</a>.
+All of the calls are shallow wrappers of one another. They just pass
+through the request to create surface. I’ll paste the latter in full
+here:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> gbm_surface <span class="op">*</span>wayland_gbm_create_surface<span class="op">(</span><span class="dt">uint32_t</span> drm_format<span class="op">,</span> <span class="dt">int</span> width<span class="op">,</span> <span class="dt">int</span> height<span class="op">,</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>                                               <span class="dt">size_t</span> count_modifiers<span class="op">,</span> <span class="dt">uint64_t</span> <span class="op">*</span>modifiers<span class="op">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                                               BOOL format_is_scanoutable<span class="op">)</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span> gbm_bo_flags <span class="op">=</span> GBM_BO_USE_RENDERING<span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>TRACE_ON<span class="op">(</span>waylanddrv<span class="op">))</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> i<span class="op">;</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        TRACE<span class="op">(</span><span class="st">&quot;%dx%d %.4s scanout=%d count_mods=%zu</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>              width<span class="op">,</span> height<span class="op">,</span> <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*)&amp;</span>drm_format<span class="op">,</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>              format_is_scanoutable<span class="op">,</span> count_modifiers<span class="op">);</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> count_modifiers<span class="op">;</span> i<span class="op">++)</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>            TRACE<span class="op">(</span><span class="st">&quot;    mod: 0x%.16llx</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span><span class="dt">long</span> <span class="dt">long</span><span class="op">)</span>modifiers<span class="op">[</span>i<span class="op">]);</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>format_is_scanoutable<span class="op">)</span> gbm_bo_flags <span class="op">|=</span> GBM_BO_USE_SCANOUT<span class="op">;</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>count_modifiers<span class="op">)</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef HAVE_GBM_SURFACE_CREATE_WITH_MODIFIERS2</span></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> gbm_surface_create_with_modifiers2<span class="op">(</span>process_gbm_device<span class="op">,</span> width<span class="op">,</span> height<span class="op">,</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>                                                  drm_format<span class="op">,</span> modifiers<span class="op">,</span> count_modifiers<span class="op">,</span> gbm_bo_flags<span class="op">);</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> gbm_surface_create_with_modifiers<span class="op">(</span>process_gbm_device<span class="op">,</span> width<span class="op">,</span> height<span class="op">,</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>                                                 drm_format<span class="op">,</span> modifiers<span class="op">,</span> count_modifiers<span class="op">);</span></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> gbm_surface_create<span class="op">(</span>process_gbm_device<span class="op">,</span> width<span class="op">,</span> height<span class="op">,</span> drm_format<span class="op">,</span> gbm_bo_flags<span class="op">);</span></span>
+<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>wayland_gbm_create_surface()</code> tries to call
+<code>gbm_surface_create_with_modifiers2()</code> with 2 modifiers:</p>
+<ul>
+<li>unknown (tiled?): <code>0x00ffffffffffffff</code> (<code>DRM_FORMAT_MOD_INVALID</code>)</li>
+<li>linear: <code>0x0000000000000000</code> (<code>DRM_FORMAT_MOD_LINEAR</code>)</li>
+</ul>
+<p>Note that if there would be no modifiers then <code>gbm_surface_create()</code>
+would be called. From what I understand presence of extra modifiers is
+optional (depends on a driver implementation).</p>
+<p>From what I understand generic code should be able to work with all
+modifiers. Picking wrong modifier should only affect performance (and
+not correctness). An example modifier would be to enable tiled pixel
+layout instead of default linear.</p>
+<p>The fun thing is that <code>mesa</code> rejects
+<code>gbm_surface_create_with_modifiers2()</code> call for me with <code>errno = ENOSYS</code>
+at <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gbm/backends/dri/gbm_dri.c#L1343-L1404">src/gbm/backends/dri/gbm_dri.c</a>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> gbm_surface <span class="op">*</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>gbm_dri_surface_create<span class="op">(</span><span class="kw">struct</span> gbm_device <span class="op">*</span>gbm<span class="op">,</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">uint32_t</span> width<span class="op">,</span> <span class="dt">uint32_t</span> height<span class="op">,</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">uint32_t</span> format<span class="op">,</span> <span class="dt">uint32_t</span> flags<span class="op">,</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">const</span> <span class="dt">uint64_t</span> <span class="op">*</span>modifiers<span class="op">,</span> <span class="dt">const</span> <span class="dt">unsigned</span> count<span class="op">)</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>   <span class="kw">struct</span> gbm_dri_device <span class="op">*</span>dri <span class="op">=</span> gbm_dri_device<span class="op">(</span>gbm<span class="op">);</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>   <span class="kw">struct</span> gbm_dri_surface <span class="op">*</span>surf<span class="op">;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>   <span class="cf">if</span> <span class="op">(</span>modifiers <span class="op">&amp;&amp;</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>       <span class="op">(!</span>dri<span class="op">-&gt;</span>image <span class="op">||</span> dri<span class="op">-&gt;</span>image<span class="op">-&gt;</span>base<span class="op">.</span>version <span class="op">&lt;</span> <span class="dv">14</span> <span class="op">||</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">!</span>dri<span class="op">-&gt;</span>image<span class="op">-&gt;</span>createImageWithModifiers<span class="op">))</span> <span class="op">{</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>      errno <span class="op">=</span> ENOSYS<span class="op">;</span> <span class="co">// &lt;- here</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span></code></pre></div>
+<p>As I understand <code>mesa</code> assumes that <code>createImageWithModifiers</code> support
+should be present in the backend driver. But in my case of
+<code>GFX8 / POLARIS12</code> modifier support for image creation seems to be
+disabled by <code>mesa</code> at
+<a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/radeonsi/si_texture.c#L2378-L2401">src/gallium/drivers/radeonsi/si_texture.c</a>.
+Don’t know why.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> si_init_screen_texture_functions<span class="op">(</span><span class="kw">struct</span> si_screen <span class="op">*</span>sscreen<span class="op">)</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_from_handle <span class="op">=</span> si_texture_from_handle<span class="op">;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_get_handle <span class="op">=</span> si_texture_get_handle<span class="op">;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_get_param <span class="op">=</span> si_resource_get_param<span class="op">;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_get_info <span class="op">=</span> si_texture_get_info<span class="op">;</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_from_memobj <span class="op">=</span> si_resource_from_memobj<span class="op">;</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>memobj_create_from_handle <span class="op">=</span> si_memobj_from_handle<span class="op">;</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>memobj_destroy <span class="op">=</span> si_memobj_destroy<span class="op">;</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>check_resource_capability <span class="op">=</span> si_check_resource_capability<span class="op">;</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>get_sparse_texture_virtual_page_size <span class="op">=</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>      si_get_sparse_texture_virtual_page_size<span class="op">;</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>   <span class="co">/* By not setting it the frontend will fall back to non-modifier create,</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="co">    * which works around some applications using modifiers that are not</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="co">    * allowed in combination with lack of error reporting in</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="co">    * gbm_dri_surface_create */</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>   <span class="cf">if</span> <span class="op">(</span>sscreen<span class="op">-&gt;</span>info<span class="op">.</span>gfx_level <span class="op">&gt;=</span> GFX9 <span class="op">&amp;&amp;</span> sscreen<span class="op">-&gt;</span>info<span class="op">.</span>kernel_has_modifiers<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_create_with_modifiers <span class="op">=</span> si_texture_create_with_modifiers<span class="op">;</span></span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>query_dmabuf_modifiers <span class="op">=</span> si_query_dmabuf_modifiers<span class="op">;</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>is_dmabuf_modifier_supported <span class="op">=</span> si_is_dmabuf_modifier_supported<span class="op">;</span></span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>get_dmabuf_modifier_planes <span class="op">=</span> si_get_dmabuf_modifier_planes<span class="op">;</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>GFX8</code> does not get a hint of <code>resource_create_with_modifiers</code> and
+as a result <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/frontends/dri/dri2.c#L2196-L2264">src/gallium/frontends/dri/dri2.c</a>
+does not set <code>createImageWithModifiers</code>:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>dri2_init_screen_extensions<span class="op">(</span><span class="kw">struct</span> dri_screen <span class="op">*</span>screen<span class="op">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>                            <span class="kw">struct</span> pipe_screen <span class="op">*</span>pscreen<span class="op">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>                            <span class="dt">bool</span> is_kms_screen<span class="op">)</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>   <span class="dt">const</span> __DRIextension <span class="op">**</span>nExt<span class="op">;</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>   STATIC_ASSERT<span class="op">(</span><span class="kw">sizeof</span><span class="op">(</span>screen<span class="op">-&gt;</span>screen_extensions<span class="op">)</span> <span class="op">&gt;=</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>                 <span class="kw">sizeof</span><span class="op">(</span>dri_screen_extensions_base<span class="op">));</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>   memcpy<span class="op">(&amp;</span>screen<span class="op">-&gt;</span>screen_extensions<span class="op">,</span> dri_screen_extensions_base<span class="op">,</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>          <span class="kw">sizeof</span><span class="op">(</span>dri_screen_extensions_base<span class="op">));</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>   screen<span class="op">-&gt;</span>extensions <span class="op">=</span> screen<span class="op">-&gt;</span>screen_extensions<span class="op">;</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>   <span class="co">/* Point nExt at the end of the extension list */</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>   nExt <span class="op">=</span> <span class="op">&amp;</span>screen<span class="op">-&gt;</span>screen_extensions<span class="op">[</span>ARRAY_SIZE<span class="op">(</span>dri_screen_extensions_base<span class="op">)];</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>   screen<span class="op">-&gt;</span>image_extension <span class="op">=</span> dri2ImageExtensionTempl<span class="op">;</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>   <span class="cf">if</span> <span class="op">(</span>pscreen<span class="op">-&gt;</span>resource_create_with_modifiers<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>      screen<span class="op">-&gt;</span>image_extension<span class="op">.</span>createImageWithModifiers <span class="op">=</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>         dri2_create_image_with_modifiers<span class="op">;</span></span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>      screen<span class="op">-&gt;</span>image_extension<span class="op">.</span>createImageWithModifiers2 <span class="op">=</span></span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>         dri2_create_image_with_modifiers2<span class="op">;</span></span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span></code></pre></div>
+<p>I’m not sure why <code>createImageWithModifiers</code> is skipped for me. Is it a
+<code>mesa</code> bug? Is it expected because video card does not expose enough
+information on tile format for <code>mesa</code> to reuse? I have no idea!</p>
+<p>Anyway, from the above I was able to fix <code>wine-wayland</code> with one simple
+trick by pretending there are no modifiers (assume <code>LINEAR</code>?):</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/dlls/winewayland.drv/gbm.c</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/dlls/winewayland.drv/gbm.c</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -286,13 +286,20 @@ struct gbm_surface *wayland_gbm_create_surface(uint32_t drm_format, int width, i</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>     if (count_modifiers)</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>     {</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="va">+        errno = 0;</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="va">+        struct gbm_surface * s =</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a> #ifdef HAVE_GBM_SURFACE_CREATE_WITH_MODIFIERS2</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="st">-        return gbm_surface_create_with_modifiers2(process_gbm_device, width, height,</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="va">+               gbm_surface_create_with_modifiers2(process_gbm_device, width, height,</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>                                                   drm_format, modifiers, count_modifiers, gbm_bo_flags);</span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a> #else</span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="st">-        return gbm_surface_create_with_modifiers(process_gbm_device, width, height,</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="va">+               gbm_surface_create_with_modifiers(process_gbm_device, width, height,</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>                                                  drm_format, modifiers, count_modifiers);</span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a> #endif</span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a><span class="va">+        if (!s &amp;&amp; errno == ENOSYS) {</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="va">+            TRACE(&quot;    =&gt; mesa can't create a surface with modifiers. Falling back to modifer-less.&quot;);</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a><span class="va">+        } else {</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a><span class="va">+            return s;</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a><span class="va">+        }</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>     }</span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>     return gbm_surface_create(process_gbm_device, width, height, drm_format, gbm_bo_flags);</span></code></pre></div>
+<p>The idea is to just ignore <code>gbm_surface_create_with_modifiers2()</code>’s
+result if it fails with <code>ENOSYS</code> and switch over to
+<code>gbm_surface_create()</code> assuming it can handle the the call without
+modifier presence.</p>
+<p>I’m not sure what such a fallback means for other video card types. Will
+it break some tiled worklaods? Or at this point surface creation is
+already broken beyond repair and any try is better than nothing? I have
+no idea!</p>
+<p>With the hack I unexpectedly got my games back running on <code>wine-wayland</code>!</p>
+<p>I sent above hack to Alexandros to get help where the real fix belongs.
+Hopefully we can get <code>wine-wayland</code> to work on more GPUs than today.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Vanilla <code>wine</code> still has to run via <code>Xwayland</code> and it’s not the best
+experience for some picky applications. <code>wine-wayland</code> does a very
+decent job at providing something that works (modulo cards like mine).
+After I applied the fallback hack I was able to run all the games that
+used to work on <code>wine-x11</code>.</p>
+<p><code>wine</code>’s <code>WINEDEBUG=</code> debugging facility is great at tracing both
+application behaviour and <code>wine</code>’s driver behaviour. I had to add
+surprisingly little extra debugging to what is already available in
+<code>wine</code> in form of <code>TRACE(...);</code> calls.</p>
+<p><code>wine</code>’s error message was clear enough to understand why video
+rendering did not produce anything.</p>
+<p><code>nix</code>’s ability to build patched <code>wine</code> against patched <code>mesa</code> without
+destroying existing installation was critical to be able to do
+side-by-side comparisons.</p>
+<p><code>mesa</code>’s <code>LIBGL_DRIVERS_PATH=</code> and <code>libglvnd</code>’s
+<code>__EGL_VENDOR_LIBRARY_DIRS=</code> variables are ideal at fiddling with
+patched opengl stack while keeping the main system running.</p>
+<p><code>wine</code>’s and <code>wayland</code>’s way of handling <code>linux</code> <code>DRM</code> subsystem is very
+lightweiht: they effectively pass available configuration around without
+much of application-specific mangling. At least around surface creation
+logic. That was very easy to get through.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on November 28, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Mon, 28 Nov 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>Diving into an IPA gcc bug</title>
     <link>http://trofi.github.io/posts/267-diving-into-an-ipa-gcc-bug.html</link>
     <description><![CDATA[<p><code>gcc</code> has a nice set of optimizations based on inter-procedural
@@ -1260,7 +1531,8 @@ debug.</p>
 from <code>llvm</code> to a single-file example and 3 days to derive a
 proof-of-concept fix. After that it took <code>gcc</code> developers less than a
 day to write and validate the proper fix.</p>
-<p>The fix was almost a one-liner. Now on to the <code>ffmpeg</code> miscompilation :)</p>
+<p>The fix was almost a one-liner. Now on to the <code>ffmpeg</code>
+<a href="https://gcc.gnu.org/PR107879">miscompilation</a> :)</p>
 <p>Have fun!</p>
 
 <div class="info">
@@ -5044,6 +5316,7 @@ in near future. The example is <strong>netpbm</strong>:
 <li>notion: <a href="https://github.com/raboof/notion/pull/346" class="uri">https://github.com/raboof/notion/pull/346</a></li>
 <li>jhead: <a href="https://github.com/Matthias-Wandel/jhead/pull/67" class="uri">https://github.com/Matthias-Wandel/jhead/pull/67</a></li>
 <li>ldns: <a href="https://github.com/NLnetLabs/ldns/pull/192" class="uri">https://github.com/NLnetLabs/ldns/pull/192</a></li>
+<li>bitlbee-facebook: <a href="https://github.com/bitlbee/bitlbee-facebook/pull/217" class="uri">https://github.com/bitlbee/bitlbee-facebook/pull/217</a></li>
 </ul>
 <p>Nothing complicated. Just a few missing dependencies.</p>
 <p>Give it a try!</p>
@@ -8836,248 +9109,6 @@ sure way to get build failure and even runtime crashes.</p>
 ]]></description>
     <pubDate>Sun, 13 Mar 2022 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/239-hacking-on-glibc.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>New make --shuffle mode</title>
-    <link>http://trofi.github.io/posts/238-new-make-shuffle-mode.html</link>
-    <description><![CDATA[<h1 id="tldr">TL;DR:</h1>
-<p>I implemented new <strong>--shuffle</strong> option for <strong>GNU make</strong> to simulate
-non-deterministic build order in parallel makefiles.</p>
-<h1 id="background">Background</h1>
-<p>About 11 years ago I was a year old Gentoo dev who just started getting
-downstream bug reports on mysterious <strong>ghc</strong> build failures like
-<a href="https://bugs.gentoo.org/326347" class="uri">https://bugs.gentoo.org/326347</a>.</p>
-<p>The symptoms were seemingly simple: some file was inacessible while
-it was being written to, or executed.</p>
-<p>Years later I mastered the intricacies of <strong>ghc</strong>’s build system on how
-to debug it effectively. But at that time I did not really know what to
-do. My main working machine was a Core 2 duo HP laptop which could not do
-more than <strong>-j2</strong>. And even that required a bit of swap for <strong>ghc</strong>’s
-linking stage. Throwing more parallelism was not really an option to
-trigger such bugs.</p>
-<h1 id="makefile-target-ordering">Makefile target ordering</h1>
-<p><strong>Makefiles</strong> are fundamentally simple: it’s a graph of dependencies
-with a sequence of shell commands attached to a node. There are numerous
-caveats, but they should not break this model too much.</p>
-<p>In theory you can topologically sort the graph and execute the dependencies
-in various conformant orders and expect the same result. Modulo missing
-dependencies in the graph.</p>
-<p>In practice <strong>GNU make</strong> happens to traverse the graph in very specific
-topological order: it maintains syntactic order as much as possible.</p>
-<p>Here is an example <strong>Makefile</strong>:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat Makefile</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> a b c</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="dv">b:</span><span class="dt"> b1 b2 b3</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dv">a:</span><span class="dt"> a1 a2 a3</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dv">c:</span><span class="dt"> c1 c2 c3</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="dv">a b c a1 a2 a3 b1 b2 b3 c1 c2 c3:</span><span class="dt">; @echo </span><span class="ch">$@</span><span class="dt"> &amp;&amp; sleep 1</span></span></code></pre></div>
-<p>(I added <strong>sleep 1</strong> to make it more visible when next goal schedules).</p>
-<p>Here is the sequential execution by <strong>GNU make</strong>:</p>
-<pre><code>$ make
-a1
-a2
-a3
-a
-b1
-b2
-b3
-b
-c1
-c2
-c3
-c</code></pre>
-<p>The seen order is exactly <strong>all</strong>’s prerequisites left-to-right
-recursively.</p>
-<p>Adding parallelism does not change the order too much: <strong>make</strong> still
-traverses prerequisites in the same order and starts as many targets
-with satisfied dependencies as possible.</p>
-<p>Parallel example:</p>
-<pre><code>$ make -j4
-a1
-a2
-a3
-b1
-
-b2
-b3
-c1
-c2
-
-c3
-a
-b
-
-c</code></pre>
-<p>I added newlines where 1-second pauses visibly happen.</p>
-<p>Note that in this example <strong>a1</strong> does not depend on
-<strong>c2</strong>. But <strong>c2</strong> practically always starts execution after <strong>a1</strong>
-finishes.</p>
-<p>The “only” way to run <strong>a1</strong> and <strong>c2</strong> in parallel is to run
-<strong>make</strong> with at least <strong>-j8</strong>. Which is a lot.</p>
-<p>Or do something with the system that stalls task execution for
-indefinite amount of time (like, adding various nice levels
-or put system under high memory or CPU pressure).</p>
-<p>Very occasionally already stressed system naturally gets into
-unusual task execution order. You get the one-off failure and
-struggle to repeat it ever again. Which makes it very hard to
-test the fix unless you know where exactly to put the <strong>sleep</strong>
-command to make it more reproducible.</p>
-<h1 id="an-old-idea">An old idea</h1>
-<p>Even then it was clear that CPU count per device will only increase
-and it will be increasingly painful to work with sequentially built
-projects :) Bugs will come back again and again on you the more cores
-you throw at the <strong>Makefiles</strong>.</p>
-<p>I had a silly idea back then (post <a href="http://trofi.github.io/posts/143-make-idea.html">in russian</a>):
-what if we arbitrarily reorder the prerequisites in <strong>Makefile</strong>s? Or
-maybe even trace spawned processes to know for sure what files targets
-access? That might allow us to weed out most of the parallel bugs with
-some sort of stress test on a low-core machine.</p>
-<p>Fast forward 11 years I attempted to enable build parallelism by default
-in <a href="https://discourse.nixos.org/t/rfc-make-stdenv-to-build-in-parallel-by-default/15684/8">nixpkgs</a>.
-A few packages still had <a href="http://trofi.github.io/posts/230-when-make-j-nproc-fails.html">some issues</a>.</p>
-<p>I recalled the idea and tried to implement target random shuffle within
-<strong>GNU make</strong>!</p>
-<h1 id="better-reproducer-make---shuffle">Better reproducer: make --shuffle</h1>
-<p>Initial idea was very simple: pick target order at <strong>Makefile</strong>
-parse time and reshuffle the lists randomly. To pick an example
-above one of the example shuffles would be:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ch">$ </span>cat Makefile</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> c b a</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="dv">b:</span><span class="dt"> b2 b1 b3</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="dv">a:</span><span class="dt"> a3 a2 a1</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="dv">c:</span><span class="dt"> c1 c2 c3</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="dv">a b c a1 a2 a3 b1 b2 b3 c1 c2 c3:</span><span class="dt">; @echo </span><span class="ch">$@</span><span class="dt"> &amp;&amp; sleep 1</span></span></code></pre></div>
-<p>I wrote the patch and proposed it to GNU make community:
-<a href="https://lists.gnu.org/archive/html/bug-make/2022-02/msg00005.html" class="uri">https://lists.gnu.org/archive/html/bug-make/2022-02/msg00005.html</a>.</p>
-<p>The example run of patched <strong>make</strong> shows less determinism now:</p>
-<pre><code>$ ~/dev/git/make/make --shuffle -j4
-c2
-c3
-c1
-a2
-
-a1
-b2
-a3
-b3
-
-b1
-
-c
-b
-a</code></pre>
-<p>Paul did not seem to object too much to the idea and pointed out
-that implementation will break more complex <strong>Makefiles</strong> as there
-is a simple way to refer to individual prerequisites by number.</p>
-<p>To pick Pauls’ example:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o :</span><span class="dt"> %.c</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">$(</span><span class="dt">CC</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span> -c -o <span class="ch">$@</span> <span class="ch">$&lt;</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo.o:</span><span class="dt"> foo.c foo.h bar.h baz.h</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="dv">foo%:</span><span class="dt"> arg%1 arg%2 arg%3 arg%4</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>	bld <span class="ch">$&lt;</span> <span class="ch">$(</span><span class="kw">word</span><span class="st"> 3</span><span class="kw">,</span><span class="ch">$^)</span> <span class="ch">$(</span><span class="kw">word</span><span class="st"> 2</span><span class="kw">,</span><span class="ch">$^)</span> <span class="ch">$(</span><span class="kw">word</span><span class="st"> 4</span><span class="kw">,</span><span class="ch">$^)</span></span></code></pre></div>
-<p>In both cases syntactic reshuffling breaks the build rules
-by passing wrong file name.</p>
-<p>To fix it I came up with a way to store two orders at the same time:
-syntactic and shuffled and posted patch as
-<a href="https://lists.gnu.org/archive/html/bug-make/2022-02/msg00042.html" class="uri">https://lists.gnu.org/archive/html/bug-make/2022-02/msg00042.html</a>.</p>
-<h1 id="running-make---shuffle-on-real-projects">Running ‘make --shuffle’ on real projects</h1>
-<p>While I was waiting for the feedback I ran the build tests against
-<strong>nixpkgs</strong> packages.</p>
-<p>First, I almost instantly got build failures on the projects that already
-explicitly disable parallel builds to avoid known failures: <strong>groff</strong>,
-<strong>source-highlight</strong>, <strong>portaudio</strong>, <strong>slang</strong>, <strong>gnu-efi</strong>, <strong>bind</strong>,
-<strong>pth</strong>, <strong>libomxil</strong>, <strong>dhcp</strong>, <strong>directfb</strong>, <strong>doxygen</strong>, <strong>gpm</strong>,
-<strong>judy</strong> and a few others. That was a good sign.</p>
-<p>A bit later I started getting failures I did not encounter before in
-<strong>ghc</strong>(!), <strong>gcc</strong>(!!), <strong>automake</strong>(!!!), <strong>pulseaudio</strong>,
-<strong>libcanberra</strong>, many <strong>ocaml</strong> and some <strong>perl</strong> packages.</p>
-<p>All the failures looked genuine missing dependencies. For example
-<strong>gcc</strong>’s <strong>libgfortran</strong> is missing a <strong>libquadmath</strong> build dependency.
-It is natural not to encounter it in real world as <strong>libquadmath</strong> is
-usually built along with other small runtimes way before <strong>g++</strong> or
-<strong>gfortran</strong> is ready.</p>
-<p>Fun fact: while running the build I stumbled on a <strong>GNU make</strong> bug
-not related to my change: <a href="https://lists.gnu.org/archive/html/bug-make/2022-02/msg00037.html" class="uri">https://lists.gnu.org/archive/html/bug-make/2022-02/msg00037.html</a>.
-The following snippet tricks <strong>GNU make</strong> to loop for a while until
-it crashes with argument list exhaustion (or inode exhaustion in
-<strong>/tmp</strong>):</p>
-<pre><code>$ printf 'all:\n\techo $(CC)' | ./make -sf -
-&lt;hung&gt;</code></pre>
-<p>This bug is not present in any releases yet. And hopefully will not be.</p>
-<p>I’d like to land the <strong>--shuffle</strong> change upstream in some form before
-sending bug reports and trivial fixes to upstreams.</p>
-<h1 id="how-you-can-test-it">How you can test it</h1>
-<p>If you are keen to try this shuffling mode on your <strong>make</strong>-based
-projects (be it manually written, <strong>automake</strong>-based ro <strong>cmake</strong>-based)
-here is a rough instruction to do it:</p>
-<ul>
-<li>grab current git tree of <strong>GNU make</strong> at <a href="https://git.savannah.gnu.org/git/make.git" class="uri">https://git.savannah.gnu.org/git/make.git</a></li>
-<li>apply <a href="https://savannah.gnu.org/bugs/download.php?file_id=52908">v4-0001-Add-shuffle-argument-support.patch</a> from <a href="https://savannah.gnu.org/bugs/index.php?62100" class="uri">https://savannah.gnu.org/bugs/index.php?62100</a></li>
-<li>build <strong>make</strong> as typical <strong>./bothstrap &amp;&amp; configure &amp;&amp; make</strong></li>
-<li>use it as <strong>path/to/make --shuffle &lt;your-typical-make-arguments&gt;</strong> against your project</li>
-<li>check if the build succeeds, run it a few times</li>
-</ul>
-<p>Both sequential and parallel modes should work fine. I suggest trying
-both. The shuffling overhead should be negligible.</p>
-<h1 id="how-do-failures-look-like">How do failures look like</h1>
-<p>When build fails it reports the shuffling mode and seed used. Let’s try it
-on a concrete <strong>cramfsswap</strong> example:</p>
-<pre><code>$ git clone https://github.com/julijane/cramfsswap.git
-$ cd cramfsswap
-
-$ ~/dev/git/make/make clean &amp;&amp; ~/dev/git/make/make
-rm -f cramfsswap
-gcc -Wall -g -O -o cramfsswap -lz cramfsswap.c
-strip cramfsswap
-
-$ ~/dev/git/make/make clean &amp;&amp; ~/dev/git/make/make
-rm -f cramfsswap
-strip cramfsswap
-/nix/store/v56r6fqg2z5yc5nyjn737hiakc2xm0gh-binutils-2.38/bin/strip: 'cramfsswap': No such file
-make: *** [Makefile:10: strip] Error 1 --shuffle=1645603370</code></pre>
-<p>Here we see a successful run and a failed run. Failed run reports
-specific seed that might trigger the failure: <strong>--shuffle=1645603370</strong>.</p>
-<p>We can use this seed explicitly:</p>
-<pre><code>$ ~/dev/git/make/make --shuffle=1645603370
-strip cramfsswap
-strip: 'cramfsswap': No such file
-make: *** [Makefile:10: strip] Error 1 --shuffle=1645603370
-$ ~/dev/git/make/make --shuffle=1645603370
-strip cramfsswap
-strip: 'cramfsswap': No such file
-make: *** [Makefile:10: strip] Error 1 --shuffle=1645603370
-$ ~/dev/git/make/make --shuffle=1645603370
-strip cramfsswap
-strip: 'cramfsswap': No such file
-make: *** [Makefile:10: strip] Error 1 --shuffle=1645603370</code></pre>
-<p>Note how ordering is preserved across the runs with fixed seed.</p>
-<h1 id="parting-words">Parting words</h1>
-<p>Implementing the shuffling idea took a weekend. I should have tried
-it earlier :) The result instantly found existing and new missing
-dependencies in a small subset of real projects. Some of these failures
-are very hard to trigger otherwise.</p>
-<p>It would be nice to get <strong>--shuffle</strong> upstreamed to ease reporting
-ordering problems to other projects without too much detail on how to get
-unusual build orders. Otherwise this post would have to do.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on February 23, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Wed, 23 Feb 2022 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/238-new-make-shuffle-mode.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
