@@ -8,8 +8,337 @@
         <name>Sergei Trofimovich</name>
         <email>slyich@gmail.com</email>
     </author>
-    <updated>2022-11-28T00:00:00Z</updated>
+    <updated>2022-12-12T00:00:00Z</updated>
     <entry>
+    <title>A dataflow gcc bug</title>
+    <link href="http://trofi.github.io/posts/269-a-dataflow-gcc-bug.html" />
+    <id>http://trofi.github.io/posts/269-a-dataflow-gcc-bug.html</id>
+    <published>2022-12-12T00:00:00Z</published>
+    <updated>2022-12-12T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>Let’s look at a simpler <code>gcc</code> bug today:
+<a href="https://gcc.gnu.org/PR107879">PR107879</a>. There <code>ffmpeg-4</code> started
+failing it’s testsuite on <code>gcc-13</code> from this week’s master:</p>
+<pre><code>$ ./tests/fate-run.sh fate-swr-resample-s16p-2626-8000 &quot;&quot; &quot;&quot; \
+  &quot;ffmpeg&quot; 'ffmpeg -i tests/data/asynth-2626-1.wav \
+  -af atrim=end_sample=10240,\
+aresample=8000:internal_sample_fmt=s16p:exact_rational=0:linear_interp=0,\
+aformat=s16p,\
+aresample=2626:internal_sample_fmt=s16p:exact_rational=0:linear_interp=0 \
+  -f wav -c:a pcm_s16le -' 'stddev' 'tests/data/asynth-2626-1.wav' '0.1' '1' '' '' '' '1393.36' '31512 - 20482' 's16' '' '' '' ''
+...
+FAIL fate-swr-resample-s16p-2626-8000</code></pre>
+<h2 id="on-ffmpeg-structure">On ffmpeg structure</h2>
+<p>While the prospect of debugging multimedia package might sound scary
+<code>ffmpeg</code> is a lot simpler to explore than other complex projects like
+<code>llvm</code> or <code>gcc</code>.</p>
+<p><code>ffmpeg</code> can be viewed as a simple buffer-in / buffer-out stream codec
+(just like <code>zlib</code> or <code>zstd</code>). It’s hard to come up with a new clever
+algorithm. But debugging already written one is usually straightforward.</p>
+<p>Individual bytes when they get from input to output are either copied as
+is or get slightly transformed without too much state to be collected
+along the way. The code is written to be not too slow which means there
+are not many high level abstractions or deep memory indirections.</p>
+<p>Then if it’s all so somple what could possible go wrong there then? Is
+there even a place for <code>gcc</code> to find a crack to fall in? Let’s find out.</p>
+<p>The only caveat is that for most algorithms use floating points all over
+the place. That might make computations not bit-for-bit reproducible
+even on different optimization levels.</p>
+<p>The change in behaviour we see might not be the bug at all.</p>
+<h2 id="extracting-minimized-example">Extracting minimized example</h2>
+<p>The above <code>$ ./tests/fate-run.sh fate-swr-resample-s16p-2626-8000 ...</code>
+command was failing consistently when built with <code>gcc-master</code> and was
+succeeding when built with <code>gcc-12</code>. With help of
+<code>#pragma GCC optimize(0)</code> I nailed the misclmpilation down to
+<a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c">libswresample/resample.c</a>
+file. <code>build_filter()</code> function produced different filters for good and
+bad cases.</p>
+<p>Once I extracted test inputs for <code>build_filter()</code> I managed to craft the
+following self-contained example that exhibits the problem:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">,</span> noipa<span class="op">))</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">double</span> build_filter<span class="op">(</span><span class="dt">double</span> <span class="op">*</span> y<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">int</span> ph <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">double</span> vf <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> factor <span class="op">=</span> vf<span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> x <span class="op">=</span> <span class="op">-</span> <span class="op">(</span><span class="dt">double</span><span class="op">)</span>ph <span class="op">*</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;z = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> x<span class="op">);</span>   <span class="co">/* prints -0.0, ok */</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* This 'if / else' code should not affect calculation of 'ffm', but</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">       removing it does change things. */</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>x <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span>    <span class="co">/* should be 1.0 or .. */</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span> <span class="op">/</span> x<span class="op">;</span>       <span class="co">/* -inf? */</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;*y = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">*</span>y<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> w <span class="op">=</span> <span class="fl">2.0</span> <span class="op">*</span> x <span class="op">/</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;w = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> w<span class="op">);</span> <span class="co">/* prints -0.0, ok */</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> omww <span class="op">=</span> <span class="dv">1</span> <span class="op">-</span> w<span class="op">;</span>                  <span class="co">/* should be 1.0 */</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;omww = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> omww<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="fl">0.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="fl">0.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;ffm = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> ffm<span class="op">);</span> <span class="co">/* printf 0.0 or 1.0, </span><span class="al">BUG</span><span class="co"> */</span></span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ffm<span class="op">;</span></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span></span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> y <span class="op">=</span> <span class="fl">42.0</span><span class="op">;</span></span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> filter <span class="op">=</span> build_filter<span class="op">(&amp;</span>y<span class="op">);</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = %.20f; y = %.20f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should be 1.0, sometimes returns 0.0. */</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="fl">0.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>It’s a bit long but very straightforward: no loops, just one condition.</p>
+<p>Here is the output difference in <code>-O0</code> / <code>-O1</code> comparison on
+<code>gcc-master</code>:</p>
+<pre><code># -O0, good:
+$ gcc-HEAD/bin/gcc -O0 -lm a.c -o a -mfpmath=sse -fexcess-precision=standard -Wall -Wextra &amp;&amp; ./a
+z = -0.000000
+*y = 1.000000
+w = -0.000000
+omww = 1.000000
+ffm = 1.000000
+f = 1.00000000000000000000; y = 1.00000000000000000000
+OK
+
+# -O1, bad:
+$ gcc-HEAD/bin/gcc -O1 -lm a.c -o a -mfpmath=sse -fexcess-precision=standard -Wall -Wextra &amp;&amp; ./a
+z = -0.000000
+*y = 1.000000
+w = -0.000000
+omww = 1.000000
+ffm = 0.000000
+f = 0.00000000000000000000; y = 1.00000000000000000000
+BUG</code></pre>
+<p>Note how <code>-O0</code> case computes correct <code>f = 1.0</code> and <code>-O1</code> computes
+incorrect <code>f = 0.0</code>. There are no denormalized values. Just <code>0.0</code>,
+<code>1.0</code> and <code>2.0</code>. All of them are representable perfectly in 32-bit
+<code>float</code> or 64 <code>double</code> types. Thus the result should not be affected
+by finer optimizations like fused-multiply-add which might observably
+increase precision.</p>
+<p>Let’s strip all the <code>printf()</code> calls off <code>build_filter()</code> to ease
+inspection of <code>gcc</code> optimization process:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">,</span> noipa<span class="op">))</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">double</span> build_filter<span class="op">(</span><span class="dt">double</span> <span class="op">*</span> y<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">int</span> ph <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">double</span> vf <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> factor <span class="op">=</span> vf<span class="op">;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> x <span class="op">=</span> <span class="op">-</span> <span class="op">(</span><span class="dt">double</span><span class="op">)</span>ph <span class="op">*</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* This 'if / else' code should not affect calculation of 'ffm', but</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="co">       removing it does change things. */</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>x <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span>    <span class="co">/* should be 1.0 or .. */</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span> <span class="op">/</span> x<span class="op">;</span>       <span class="co">/* -inf? */</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> w <span class="op">=</span> <span class="fl">2.0</span> <span class="op">*</span> x <span class="op">/</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> omww <span class="op">=</span> <span class="dv">1</span> <span class="op">-</span> w<span class="op">;</span>                  <span class="co">/* should be 1.0 */</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="fl">0.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="fl">0.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ffm<span class="op">;</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span></span>
+<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> y <span class="op">=</span> <span class="fl">42.0</span><span class="op">;</span></span>
+<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> filter <span class="op">=</span> build_filter<span class="op">(&amp;</span>y<span class="op">);</span></span>
+<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = %.1f; y = %.1f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
+<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should be 1.0, sometimes returns 0.0. */</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="fl">0.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
+<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The bug is still here:</p>
+<pre><code># -O0, good:
+$ gcc-HEAD/bin/gcc -O0 -lm b.c -o b &amp;&amp; ./b
+f = 1.0; y = 1.0
+OK
+
+# -O1, bad:
+$ gcc-HEAD/bin/gcc -O1 -lm b.c -o b &amp;&amp; ./b
+f = 0.0; y = 1.0
+BUG</code></pre>
+<p>I had to use a bit fo <code>volatile</code> to prevent <code>gcc</code> from folding constants
+early and eliminate the the bug condition.</p>
+<p>Fun fact: this test case still fails on <code>gcc-master</code> while original
+<code>ffmpef-4</code> test suite does not. Looks like some unrelated detail of
+<code>gcc</code> changed to partially mask the bug. If I was not quick enough
+to extract the reproducer it might take a bit more time to restore
+the envieonment and get it.</p>
+<h2 id="diving-into-iptimization-process">Diving into iptimization process</h2>
+<p>As usual <code>-fdump-tree-all</code> is our friend to find out when suspicios
+pass broke our program.</p>
+<p><code>gcc-HEAD/bin/gcc -O1 -lm b.c -o b -fdump-tree-optimized-slim</code> shows the
+following final state in <code>b.c.254t.optimized</code>:</p>
+<pre><code>__attribute__((noipa, noinline, noclone, no_icf))
+double build_filter (double * y)
+{
+  double omww;
+  double w;
+  double x;
+  double factor;
+  volatile double vf;
+  volatile int ph;
+  int ph.4_1;
+  double _2;
+  double _3;
+  double _4;
+  double _5;
+  double iftmp.5_6;
+  double _20;
+
+  &lt;bb 2&gt; [local count: 1073741824]:
+  ph ={v} 0;
+  vf ={v} 1.0e+0;
+  factor_11 ={v} vf;
+  ph.4_1 ={v} ph;
+  _2 = (double) ph.4_1;
+  _3 = -_2;
+  x_12 = _3 * factor_11;
+  if (x_12 == 0.0)
+    goto &lt;bb 5&gt;; [50.00%]
+  else
+    goto &lt;bb 3&gt;; [50.00%]
+
+  &lt;bb 3&gt; [local count: 633507680]:
+  _4 = 1.0e+0 / x_12;
+  _5 = x_12 * 2.0e+0;
+  w_16 = _5 / factor_11;
+  omww_17 = 1.0e+0 - w_16;
+  if (omww_17 &gt; 0.0)
+    goto &lt;bb 4&gt;; [100.00%]
+  else
+    goto &lt;bb 5&gt;; [0.00%]
+
+  &lt;bb 4&gt; [local count: 633507680]:
+
+  &lt;bb 5&gt; [local count: 1073741824]:
+  # iftmp.5_6 = PHI &lt;omww_17(4), 0.0(3), 0.0(2)&gt;
+  # _20 = PHI &lt;_4(4), _4(3), 1.0e+0(2)&gt;
+  *y_13(D) = _20;
+  return iftmp.5_6;
+}</code></pre>
+<p>Can you spot the bug? It might be a bit hard to read. I can’t easily
+follow it due to many branch conditions. I could vaguely see that this
+example is incorrect, but tracing the dumps through each of ~100 <code>gcc</code>
+passes would be too slow. I asked <code>gcc</code> to dump <code>graphviz</code> style outputs
+with <code>-fdump-tree-optimized-graph</code>. <code>b.c.254t.optimized.dot</code> generates
+the following picture:</p>
+<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.254t.optimized.svg" /></p>
+<p>Arc legend here is the following:</p>
+<ul>
+<li>green color is <code>TRUE</code> case of branch in <code>if</code> condition.</li>
+<li>orange color is <code>FALSE</code> case of branch in <code>if</code> condition.</li>
+</ul>
+<p>I find graphical output to be slightly easier to follow: our
+<code>x_12 == 0.0</code> is supposed to be <code>TRUE</code>. Fun fact: <code>-0.0</code> is equal to
+<code>0.0</code> according to <code>C</code> and <code>IEEE-754</code> rules.</p>
+<p>This means that none of <code>bb3</code> or <code>bb4</code> are executed and
+<code>iftmp.5_6</code> <code>PHI</code> node brings in <code>0.0</code> value from <code>bb2</code>:</p>
+<pre><code>  &lt;bb 5&gt; [local count: 1073741824]:
+  # iftmp.5_6 = PHI &lt;omww_17(4), 0.0(3), 0.0(2)&gt;
+  ...
+  *y_13(D) = _20;
+  return iftmp.5_6;</code></pre>
+<p>I went through the graphs of all tree passes dumped with
+<code>gcc-HEAD/bin/gcc -O1 -lm b.c -o b -fdump-tree-all-graph</code> to find the
+seemingly problematic graph.</p>
+<p>Here is our <code>b.c.015t.cfg.dot</code> original unoptimized graph as a reference:</p>
+<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.015t.cfg.svg" /></p>
+<p>Let’s trace it through to make sure it’s correct. It wil also help
+getting used to variable names and expected basic block effects:</p>
+<ul>
+<li>in <code>bb2</code> (entrance):
+<ul>
+<li><code>ph.4_1 = ph = 0;</code></li>
+<li><code>factor = vf = 1.0;</code></li>
+<li><code>_2 = ph.4_1; /* 0.0 */</code></li>
+<li><code>_3 = -_2; /* -0.0 */</code></li>
+<li><code>x = factor * _3; /* -0.0 */</code></li>
+<li><code>if (x == 0.0) goto bb3;</code></li>
+</ul></li>
+<li>in <code>bb3</code> (branch taken):
+<ul>
+<li><code>*y = 1.0;</code> (not interesting)</li>
+<li><code>goto bb5;</code></li>
+</ul></li>
+<li>in <code>bb5</code>:
+<ul>
+<li><code>_5 = x * 2.0; /* -0.0 */</code></li>
+<li><code>w = _5 / factor; /* -0.0 */</code></li>
+<li><code>omw = 1.0 - w; /* 1.0 */</code></li>
+<li><code>if (omww &gt; 0.0) goto bb6;</code></li>
+</ul></li>
+<li>in <code>bb6</code>: (return)
+<ul>
+<li><code>iftmp.5 = omww; /* 1.0 */</code></li>
+<li><code>goto bb8;</code></li>
+</ul></li>
+<li>in <code>bb8</code>:
+<ul>
+<li><code>ffm = iftmp.5; /* 1.0 */</code></li>
+<li><code>D.3203 = ffm; /* 1.0 */</code></li>
+<li><code>return D.3203; /* 1.0 */</code></li>
+</ul></li>
+</ul>
+<p>It’s a bit verbose but very straightforward. The effect is:</p>
+<ul>
+<li><code>w</code> gets calculated to <code>0.0</code></li>
+<li><code>omww</code> and <code>ffm</code> get calculated to <code>1.0</code> and return the value</li>
+</ul>
+<p>If we look further down the optimization passes I think the
+<code>b.c.128t.sra</code> is last valid step:</p>
+<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.128t.sra.svg" /></p>
+<p>And <code>b.c.130t.dom2</code> is first problematic step:</p>
+<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.130t.dom2.svg" /></p>
+<p>Note how <code>omww_22 = 1.0 - w_21;</code> in <code>bb6</code> is never read. Instead our
+<code>PHI</code> node <code># iftmp.5_6 = PHI &lt;omww_17(3), 0.0(4), 0.0(6)&gt;</code> claims
+that <code>bb6</code> always brings in <code>0.0</code> value in <code>0.0(6)</code> alternative.</p>
+<p>Why does it happen? At this point I gave up and filed
+<a href="https://gcc.gnu.org/PR107879" class="uri">https://gcc.gnu.org/PR107879</a> bug.</p>
+<p>Then I bisected <code>gcc</code> down to <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=d4c2f1d376da6f">commit d4c2f1d3</a>:</p>
+<pre><code>commit d4c2f1d376da6fc3f3c30a9d3160e43c95399343
+Date:   Sat Nov 12 09:39:00 2022 +0100
+
+    range-op: Implement op[12]_range operators for {PLUS,MINUS,MULT,RDIV}_EXPR</code></pre>
+<p>The commit changed value ranges inferred for variables to simplify the
+call graph by eliminating impossible edges. Alexander confirmed that
+<code>dom2/dom3</code> passes take part in destroying original program and Jakub
+nailed it down to incorrect inferred ranges around the division.</p>
+<p>I would like to get a bit better understanding at how and when ranges
+get computed for this example. So far I don’t know how to look at them
+in detail.</p>
+<h2 id="parting-words">Parting words</h2>
+<ul>
+<li><code>ffmpeg</code> while being simple and full of assembly still can step on
+<code>gcc</code> bugs in more obscure areas.</li>
+<li><code>ffmpeg</code> uses
+<a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c#L182-L183">cubic formula</a>
+to upsample inputs.</li>
+<li><code>-0.0</code> is equal to <code>0.0</code> according to IEEE754 even if binary encodings
+differ.</li>
+<li><code>gcc</code>’s dataflow related to value ranges is a bit hard to follow even in
+<code>-fdump-*</code> outputs.</li>
+<li><code>gcc</code>’s <code>-fdump-*-graph</code> set of options dump nice <code>.dot</code>-style outputs
+for visual debugging.</li>
+<li><code>volatile</code> is great at inhibiting complex constant propagation
+optimizations.</li>
+</ul>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December 12, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>Fixing wine-wayland on POLARIS</title>
     <link href="http://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html" />
     <id>http://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html</id>
@@ -8808,305 +9137,6 @@ disable defaul search paths. But that’s for another time :)</p>
 
 <div class="info">
     Posted on March 24, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>Hacking on glibc</title>
-    <link href="http://trofi.github.io/posts/239-hacking-on-glibc.html" />
-    <id>http://trofi.github.io/posts/239-hacking-on-glibc.html</id>
-    <published>2022-03-13T00:00:00Z</published>
-    <updated>2022-03-13T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<h1 id="intro">Intro</h1>
-<p>Sometimes it’s useful to check fresh <strong>glibc</strong> out and test a fix
-against it. Or add a few <strong>printf()</strong> statements into relevant modules.
-Fun past cases of the above are
-<a href="http://trofi.github.io/posts/189-glibc-on-ia64-or-how-relocations-bootstrap.html">here</a>,
-<a href="http://trofi.github.io/posts/205-stack-protection-on-mips64.html">here</a> and
-<a href="http://trofi.github.io/posts/209-tracking-down-mysterious-memory-corruption.html">here</a>.</p>
-<p>We’ll look in more detail how to build and use local glibc for debugging
-purposes. I’ll focus on redirecting the toolchain (and not on the ways to
-break glibc with rare <strong>CFLAGS</strong> or configure <strong>--options</strong>). That would
-be a separate big and entertaining topic :)</p>
-<p>It also might be useful for folks who deal with systems that involve
-multiple <strong>glibc</strong> versions present in the system simultaneously
-(for bootstrap, embedded development or testing purposes).</p>
-<h1 id="hello-world-anatomy">Hello World anatomy</h1>
-<p>Suppose you have just built a fresh experimental <strong>glibc</strong> version.
-How do you build and run a simple “hello world” program against it
-without modifying already installed system <strong>glibc</strong> and <strong>gcc</strong>?</p>
-<p>Let’s dissect a simple “hello world” in detail and try to extract
-a few assumptions that <strong>gcc</strong> and <strong>binutils</strong> already embeds.
-Here is our specimen:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hello.c:</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> puts <span class="op">(</span><span class="st">&quot;hello!&quot;</span><span class="op">);</span> <span class="op">}</span></span></code></pre></div>
-<p>The example compiles and runs just fine:</p>
-<pre><code>$ gcc -c hello.c -o hello.o
-$ gcc hello.o -o hello
-$ ./hello
-hello!</code></pre>
-<p>If you are somewhat familiar with the C toolchain you might already know
-that there are a few stages involved:</p>
-<ul>
-<li><strong>compilation</strong>: C-source preprocessing (include substitution) and
-translation of preprocessed C-source file into <strong>.o</strong> file</li>
-<li><strong>linkage</strong>: <strong>.o</strong> files and their dependencies are joined together into
-final executable file</li>
-</ul>
-<p>Let’s look at the preprocessing stage. Where do preprocessed headers
-come from? We can have a peek at it by looking at preprocessed output
-using <strong>-E</strong> flag:</p>
-<pre><code>$ gcc -E hello.c -o - | head -n 10 | unnix
-
-# 0 &quot;hello.c&quot;
-# 0 &quot;&lt;built-in&gt;&quot;
-# 0 &quot;&lt;command-line&gt;&quot;
-# 1 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/stdc-predef.h&quot; 1 3 4
-# 0 &quot;&lt;command-line&gt;&quot; 2
-# 1 &quot;hello.c&quot;
-
-# 1 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/stdio.h&quot; 1 3 4
-# 27 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/stdio.h&quot; 3 4
-# 1 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/bits/libc-header-start.h&quot; 1 3 4
-...</code></pre>
-<p>As expected <strong>&lt;stdio.h&gt;</strong> comes from <strong>glibc</strong>. On <strong>FHS</strong> systems
-that is usually <strong>/usr/include</strong>.</p>
-<p>There also is another mysterious header: <strong>stdc-predef.h</strong> (also a <strong>glibc</strong>
-one). It gets added even into empty files:</p>
-<pre><code>$ echo | gcc -E - -o - | head -n 10 | unnix
-
-# 0 &quot;&lt;stdin&gt;&quot;
-# 0 &quot;&lt;built-in&gt;&quot;
-# 0 &quot;&lt;command-line&gt;&quot;
-# 1 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/stdc-predef.h&quot; 1 3 4
-# 0 &quot;&lt;command-line&gt;&quot; 2
-# 1 &quot;&lt;stdin&gt;&quot;</code></pre>
-<p><strong>stdc-predef.h</strong> is a header <strong>gcc</strong> knows to import if it targets <strong>glibc</strong>
-(but not other libcs): <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/glibc-c.cc" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/glibc-c.cc</a>.</p>
-<p>Preprocessing was straightforward. Ideally translation should not
-depend on glibc specifics. In practice it might but we’ll ignore it here.</p>
-<p>Let’s now look at linking phase.
-We’ll use <strong>-Wl,-t</strong> flag (thanks MaskRay!) to get details of what linker actually
-pulls in:</p>
-<pre><code>$ LANG=C gcc hello.o -o hello -Wl,-t |&amp; unnix
-
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crt1.o
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crti.o
-/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/crtbegin.o
-hello.o
-/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/libgcc.a
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1
-/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/libgcc.a
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc.so.6
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc_nonshared.a
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libc_nonshared.a
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2
-/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/libgcc.a
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1
-/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/libgcc.a
-/&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/crtend.o
-/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crtn.o</code></pre>
-<p>That is a lot of output! But be not afraid. Some things repeat here 4
-times and inflate the output a bit.</p>
-<p>All these files above are used in linking process:</p>
-<ul>
-<li><strong>crt{1,i,n}.o</strong>: <strong>glibc</strong>’s runtime startup and shutdown support files (<strong>__attribute__((contructor))</strong> support)</li>
-<li><strong>crt{begin,end}</strong>: <strong>gcc</strong>’s runtime startup and shutdown support files (c++ global constructor and destructor support)</li>
-<li><strong>hello.o</strong>: our own file!</li>
-<li><strong>libgcc.a</strong>, <strong>libgcc_s.so</strong>: <strong>gcc</strong>’s runtime support for primitives that compiler
-needs when CPU does not always provide as instructions (128-bit integer multiplication, stack unwinders,
-atomic promitives on unusual type size and similar).</li>
-<li><strong>libc.so</strong>, <strong>libc_nonshared.a</strong>: actual C library that implements <strong>puts()</strong> (<strong>printf()</strong>) and friends.</li>
-<li><strong>ld-linux-x86-64.so.2</strong>: <strong>glibc</strong>’s dynamic loader.</li>
-</ul>
-<h1 id="custom-glibc">Custom glibc</h1>
-<p>We found out that <strong>glibc</strong> provides us at least:</p>
-<ul>
-<li>include headers</li>
-<li><strong>crt{1,i,n}.o</strong> object files</li>
-<li><strong>libc.so</strong> shared object files</li>
-<li><strong>libc_nonshared.a</strong> static library files</li>
-<li><strong>ld-linux-x86-64.so.2</strong>: dynamic loader</li>
-</ul>
-<p>Now we should be able to redirect all these pieces. Let’ build our custom glibc first:</p>
-<pre><code>$ git clone https://sourceware.org/git/glibc.git /tmp/custom-glibc-src
-$ mkdir -p /tmp/custom-glibc-build /tmp/custom-glibc-install
-
-$ cd /tmp/custom-glibc-build
-$ /tmp/custom-glibc-src/configure --prefix=/tmp/custom-glibc-install
-$ make &amp;&amp; make install</code></pre>
-<p>We can already use resulting <strong>glibc</strong> to run other programs:</p>
-<pre><code>$ /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 --library-path /tmp/custom-glibc-install/lib $(which id)
-
-uid=1000(slyfox) gid=100(users) groups=100(users),1(wheel),26(video)
-
-$ LD_DEBUG=all /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 --library-path /tmp/custom-glibc-install/lib $(which id) |&amp; fgrep relocation | unnix
-   2844932:     relocation processing: /tmp/custom-glibc-install/lib/libc.so.6 (lazy)
-   2844932:     relocation processing: /tmp/custom-glibc-install/lib/libdl.so.2 (lazy)
-   2844932:     relocation processing: /tmp/custom-glibc-install/lib/libpthread.so.0 (lazy)
-   2844932:     relocation processing: /&lt;&lt;NIX&gt;&gt;/attr-2.5.1/lib/libattr.so.1
-   2844932:     relocation processing: /&lt;&lt;NIX&gt;&gt;/acl-2.3.1/lib/libacl.so.1
-   2844932:     relocation processing: /&lt;&lt;NIX&gt;&gt;/openssl-1.1.1m/lib/libcrypto.so.1.1
-   2844932:     relocation processing: /tmp/custom-glibc-install/lib/librt.so.1 (lazy)
-   2844932:     relocation processing: /run/current-system/sw/bin/id
-   2844932:     relocation processing: /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2</code></pre>
-<p>I’m searching for “relocation” here as a hack to see all loaded files in memory.</p>
-<p>From the above we see that <strong>libc.so</strong>, <strong>libdl.so</strong> and
-<strong>libpthread.so</strong> are used from our custom <strong>glibc</strong>. But <strong>libattr.so</strong>
-(<strong>attr</strong> package), <strong>libacl.so</strong> (<strong>acl</strong> package), <strong>libcrypto.so</strong>
-(<strong>openssl</strong> package) are used from their current locations. It is safe
-to load such libraries only if they were built against same or older
-<strong>glibc</strong> versions. All thanks to <strong>glibc</strong> being backwards compatible.</p>
-<p>If we would, say, use use <strong>glibc-2.8</strong> as a custom version things would
-probaby fail to load as those libraries depend on fresh symbols:</p>
-<pre><code>$ LD_DEBUG=all /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 --library-path /tmp/custom-glibc-install/lib $(which id) |&amp; fgrep libcrypto | fgrep GLIBC_2.17 | unnix
-    532869:     checking for version `GLIBC_2.17' in file /tmp/custom-glibc-install/lib/libc.so.6 [0] required by file /&lt;&lt;NIX&gt;&gt;/openssl-1.1.1m/lib/libcrypto.so.1.1 [0]</code></pre>
-<p>In this case <strong>id</strong> binary requires at least <strong>glibc-2.17</strong> (via <strong>libcrypto.so</strong> dependency).</p>
-<p>Ok, so running against modified glibc is straightforward. It would be
-useful to rebuild <strong>id</strong> (and <strong>openssl</strong>) against older <strong>glibc</strong>.
-Let’s now try building our toy example against modified <strong>glibc</strong>.</p>
-<p>To deal with preprocessor we can use <strong>-I</strong> option:</p>
-<pre><code>$ gcc -E hello.c -o - -I/tmp/custom-glibc-install/include | head -n 10 | unnix
-# 0 &quot;hello.c&quot;
-# 0 &quot;&lt;built-in&gt;&quot;
-# 0 &quot;&lt;command-line&gt;&quot;
-# 1 &quot;/tmp/custom-glibc-install/include/stdc-predef.h&quot; 1
-# 0 &quot;&lt;command-line&gt;&quot; 2
-# 1 &quot;hello.c&quot;
-
-# 1 &quot;/tmp/custom-glibc-install/include/stdio.h&quot; 1
-# 27 &quot;/tmp/custom-glibc-install/include/stdio.h&quot;
-# 1 &quot;/tmp/custom-glibc-install/include/bits/libc-header-start.h&quot; 1
-...</code></pre>
-<p>For complex cases <strong>gcc</strong> supports many other flavours of handling include
-paths: <strong>-isystem</strong>, <strong>-idirafter</strong>, <strong>-isysroot</strong>, <strong>-iquote</strong> and
-many more :) We will use simplest <strong>-I</strong>.</p>
-<p>Now let’s deal with the <strong>libc.so</strong> location. Normally <strong>-L</strong> option would
-be enough to specify library lookup path:</p>
-<pre><code>{ LANG=C gcc hello.o -o hello -Wl,--verbose -L/tmp/custom-glibc-install/lib | fgrep succeeded; } |&amp; unnix
-/&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld: /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crt1.o: in function `_start':
-/build/glibc-2.33/csu/../sysdeps/x86_64/start.S:101: undefined reference to `__libc_csu_fini'
-/&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld: /build/glibc-2.33/csu/../sysdeps/x86_64/start.S:102: undefined reference to `__libc_csu_init'
-/&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld: link errors found, deleting executable `hello'
-collect2: error: ld returned 1 exit status
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crt1.o succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crti.o succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtbegin.o succeeded
-attempt to open hello.o succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /tmp/custom-glibc-install/lib/libc.so succeeded
-attempt to open /tmp/custom-glibc-install/lib/libc.so.6 succeeded
-attempt to open /tmp/custom-glibc-install/lib/libc_nonshared.a succeeded
-attempt to open /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtend.o succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crtn.o succeeded</code></pre>
-<p>Almost worked!</p>
-<ul>
-<li><p>good: we successfully redirected <strong>libc.so.6</strong> and <strong>libc_nonshared.a</strong>
-(as expected); and even <strong>ld-linux-x86-64.so.2</strong> was redirected!</p></li>
-<li><p>bad: <strong>crt{1,i,n}.o</strong> set of files were not redirected; they are not exactly libraries, thus it’s fine.</p></li>
-</ul>
-<p><strong>crt{1,i,n}.o</strong> are still pulled in from system <strong>glibc</strong>. Such a mix of parts from different <strong>glibc</strong> versions causes linkage failure: <strong>undefined reference to ‘__libc_csu_fini’</strong>.</p>
-<p>Object files can be redirected with <strong>-B</strong> (or can be redirected with <strong>-nostartfiles /path/to/crt{1,i,n}.o</strong>):</p>
-<pre><code>$ LANG=C gcc hello.o -o hello -Wl,--verbose -L/tmp/custom-glibc-install/lib -B/tmp/custom-glibc-install/lib | fgrep succeeded |&amp; unnix
-attempt to open /tmp/custom-glibc-install/lib/crt1.o succeeded
-attempt to open /tmp/custom-glibc-install/lib/crti.o succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtbegin.o succeeded
-attempt to open hello.o succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /tmp/custom-glibc-install/lib/libc.so succeeded
-attempt to open /tmp/custom-glibc-install/lib/libc.so.6 succeeded
-attempt to open /tmp/custom-glibc-install/lib/libc_nonshared.a succeeded
-attempt to open /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
-attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtend.o succeeded
-attempt to open /tmp/custom-glibc-install/lib/crtn.o succeeded</code></pre>
-<p>Let’s ignore <strong>libgcc_s.so</strong> for now. It’s not really a part of <strong>glibc</strong> but
-a <strong>nixpkgs</strong> idiosyncrasy. The rest of <strong>glibc</strong> files is successfully redirected!</p>
-<p>Does final result look good now? Let’s try!</p>
-<pre><code>$ LANG=C ./hello
-Segmentation fault (core dumped)</code></pre>
-<p>Our program can’t even run. Why is that?</p>
-<pre><code>$ LD_DEBUG=all ./hello |&amp; fgrep reloc | unnix
-   1359934:     relocation processing: /tmp/custom-glibc-install/lib/libc.so.6 (lazy)
-   1359934:     relocation processing: ./hello (lazy)
-   1359934:     relocation processing: /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2</code></pre>
-<p><strong>LD_DEBUG=all</strong> hints at dynamic loader from our system <strong>glibc</strong>
-and not from custom <strong>glibc</strong>. That path is embedded into <strong>gcc</strong> itself:</p>
-<pre><code>gcc -dumpspecs |&amp; fgrep ld-linux | unnix
-...
-    -dynamic-linker %{muclibc:/lib/ld64-uClibc.so.0;:
-                    %{mbionic:/system/bin/linker64;:
-                    %{mmusl:/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-musl-x86_64.so.1;:
-                    /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib64/ld-linux-x86-64.so.2}}}
-...</code></pre>
-<p>Here linker spec always passes <strong>-dynamic-linker /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib64/ld-linux-x86-64.so.2</strong>
-path to the linker until it’s expliictly overridden. Let’s override it explicitly.</p>
-<p>Here is our final combined result of overriding headers, libraries,
-object files and dynamic linker:</p>
-<pre><code>$ gcc hello.c -o hello \
-    -I/tmp/custom-glibc-install/include \
-    \
-    -L/tmp/custom-glibc-install/lib \
-    -B/tmp/custom-glibc-install/lib \
-    -Wl,-dynamic-linker,/tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2
-
-$ ./hello
-hello!
-
-$ LD_DEBUG=all ./hello |&amp; fgrep reloc | unnix
-   1398510:     relocation processing: /tmp/custom-glibc-install/lib/libc.so.6 (lazy)
-   1398510:     relocation processing: ./hello (lazy)
-   1398510:     relocation processing: /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2</code></pre>
-<p>Success! We completely untangled from host’s <strong>glibc</strong>.</p>
-<p>Sometimes (usually in bare-metal space) it’s easier to drop defaults
-entirely and specify all the dependencies as explicit arguments.
-A few related options you might want to explore in <strong>gcc</strong> are:</p>
-<ul>
-<li><strong>-nostdinc</strong></li>
-<li><strong>-nostdlib</strong></li>
-<li><strong>-nolibc</strong></li>
-<li><strong>-nodefaultlibs</strong></li>
-<li><strong>-nostartfiles</strong></li>
-<li><strong>-ffreestanding</strong></li>
-</ul>
-<p>They explicitly disable search paths or object files inclusion for:
-include paths, startup files or standard and runtime support libraries.
-Their interaction is subtle. I won’t get into detail here either.</p>
-<h1 id="parting-words">Parting words</h1>
-<p>It is straightforward to experiment with new <strong>glibc</strong> without damaging
-your main install on most Linux distributions. Just make sure you set the
-environment up correctly and override all the bits.</p>
-<p><strong>glibc</strong> has many moving parts to watch for when you replace parts of
-it: headers (<strong>-I</strong>), object files (<strong>-B</strong>), shared libraris (<strong>-L</strong>),
-static libraries (also <strong>-L</strong>) and dynamic linker (<strong>ld-linux-x86-64.so.2</strong>).</p>
-<p><strong>LD_DEBUG=</strong> is extremely useful for dynamic loader debugging.</p>
-<p>Mixing parts from different <strong>glibc</strong> versions in a single binary is a
-sure way to get build failure and even runtime crashes.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on March 13, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
