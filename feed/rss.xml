@@ -7,8 +7,88 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 18 Dec 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sun, 25 Dec 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>AoC of 2022</title>
+    <link>http://trofi.github.io/posts/271-Aoc-of-2022.html</link>
+    <description><![CDATA[<p>This year I again took part in <code>AoC</code>: <a href="https://adventofcode.com/2022" class="uri">https://adventofcode.com/2022</a>.
+I published my solutions at <a href="https://github.com/trofi/AoC/tree/main/2022" class="uri">https://github.com/trofi/AoC/tree/main/2022</a>.</p>
+<p>As usual problems were appearing once a day at 5AM from Dec 1 to Dec 25.
+I did not get up that early. Instead my personal goal was to solve them
+within 24 hours of publish time and get the source code within 4KB each.
+I failed a few of them.</p>
+<p>This year I again took <code>rust</code> (without <code>cargo</code>) to get some practice in
+it. I think it went a bit smoother this time.</p>
+<h2 id="rust-niceties-lifetime-tracking-and-error-handling">rust niceties: lifetime tracking and error handling</h2>
+<p>I was more conscious of decreasing amount of data copying around.
+Instead of slapping <code>.clone()</code> all over the place. <code>rust</code> is great at
+tracking dangling references with lifetimes. For example in
+<a href="https://adventofcode.com/2022/day/16">Day 16: Proboscidea Volcanium</a>
+I encoded search space as a vector and a set of <code>&amp;str</code> “pointers”
+instead of copying <code>String</code>s in:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> Expr<span class="op">&lt;</span><span class="ot">'a</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Val(<span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="dt">isize</span>)<span class="op">,</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Expr(<span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span>)<span class="op">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  Assert(<span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span>)<span class="op">,</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> parse<span class="op">&lt;</span><span class="ot">'a</span><span class="op">&gt;</span>(i<span class="op">:</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Vec</span><span class="op">&lt;</span>Expr<span class="op">&lt;</span><span class="ot">'a</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span></span></code></pre></div>
+<p>I even attempted using a bit of error handling in
+1-2 problemsinstead of <code>panic!()</code>-ing on unexpected data:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> <span class="bu">FromStr</span> <span class="cf">for</span> Assignment <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">type</span> Err <span class="op">=</span> E<span class="op">;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fn</span> from_str(s<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Self</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span><span class="cn">Err</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> numbers<span class="op">:</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;,</span> <span class="dt">Self</span><span class="pp">::</span><span class="cn">Err</span><span class="op">&gt;</span> <span class="op">=</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>      s<span class="op">.</span>split(<span class="ch">'-'</span>)<span class="op">.</span>map(<span class="op">|</span>e<span class="op">|</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        e<span class="op">.</span>parse()<span class="op">.</span>map_err(<span class="op">|</span>err<span class="op">|</span> mk_e(<span class="pp">format!</span>(<span class="st">&quot;'{}': {}&quot;</span><span class="op">,</span> e<span class="op">,</span> err)))</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>      )<span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> numbers<span class="op">?.</span>as_slice() <span class="op">{</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;</span>[a<span class="op">,</span> b] <span class="op">=&gt;</span> <span class="cn">Ok</span>(Assignment<span class="op">{</span>from<span class="op">:</span> a<span class="op">,</span> to<span class="op">:</span> b<span class="op">}</span>)<span class="op">,</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>      _       <span class="op">=&gt;</span> <span class="cn">Err</span>(mk_e(<span class="pp">format!</span>(<span class="st">&quot;'{}' does not match N-M format&quot;</span><span class="op">,</span> s)))</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>Iter&lt;Result&lt;...&gt;&gt;</code> constructs <code>Result&lt;Vec&lt;...&gt;&gt;</code> (instead of
+typical <code>Vec&lt;Result&lt;...&gt;&gt;</code>!). It’s a handy way to pop errors out from
+iterator based loops. I’m still very clumzy at constructing new errors.
+But at least I did not lose them here.</p>
+<h2 id="funniest-problems">Funniest problems</h2>
+<p>The solutions to most problems are technically very boring. But some
+problem statements are great: a bit of ray casting, 2d and 3d physics
+simulation and even CPU+CRT simulation!</p>
+<p>Here is my list of fun problems I remembered:</p>
+<ul>
+<li><p><a href="https://adventofcode.com/2022/day/10">Day 10: Cathode-Ray Tube</a></p>
+<p>Good mix of “hardware” simulations nides in a single problem.</p></li>
+<li><p><a href="https://adventofcode.com/2022/day/14">Day 14: Regolith Reservoir</a></p>
+<p>A problem where falling sand is simulated.</p></li>
+<li><p><a href="https://adventofcode.com/2022/day/22">Day 22: Monkey Map</a></p>
+<p>The only problem I did not manage to solve in 24 hours. I don’t like
+my solution. But the problem statement is great!</p></li>
+<li><p><a href="https://adventofcode.com/2022/day/25">Day 25: Full of Hot Air</a></p>
+<p>A nice problem on unusual number base.</p></li>
+</ul>
+<p>I did not include a bunch of other problems like robot
+production and valve handling as they looked very similar to me. I
+solved them all with <a href="https://en.wikipedia.org/wiki/A*_search_algorithm">A* search</a>.</p>
+<p>Grepping through the solutions <code>visited</code> keyword hapens 5 times.
+I would say it is too many similar search-in-graph problems in a single
+year. But maybe it’s just me who used search too frequently without an
+attempt at finding better solution?</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December 25, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Sun, 25 Dec 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/271-Aoc-of-2022.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>Registered on mastodon</title>
     <link>http://trofi.github.io/posts/270-registered-on-mastodon.html</link>
     <description><![CDATA[<p>PSA: I registered on <a href="https://en.wikipedia.org/wiki/Mastodon_(social_network)">Mastodon</a>
@@ -8142,301 +8222,6 @@ until they get noticed.</p>
 ]]></description>
     <pubDate>Sun, 24 Apr 2022 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/242-gcc-12-journey.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>nix gc speedup improvements</title>
-    <link>http://trofi.github.io/posts/241-nix-gc-speedup-improvements.html</link>
-    <description><![CDATA[<p>I wondered the other day: why my <strong>nix store gc</strong> takes an hour to run
-on a system with a few terabytes of garbage packages to clean up. Is it
-a typical time or could something be optimised to make it slightly
-faster?</p>
-<p>I ran <strong>top</strong> while <strong>nix store gc</strong> was churning and noticed it was a
-CPU-bound task. That was unusual.</p>
-<h1 id="background">Background</h1>
-<p><strong>nix</strong> package manager never changes files inplace when it installs new
-packages into <strong>/nix/store</strong>. This makes installation and uninstallation
-operations cheap: no need for <strong>sync()</strong>-style calls or file locks.</p>
-<p>Single package installation could be viewed as 2 steps:</p>
-<ol type="1">
-<li>unpack new package to <strong>/nix/store/…-package-version</strong> (if it does
-not already exist)</li>
-<li>refer to unpacked files (usually via symlinks, via
-scripts, configs or embedded binary)</li>
-</ol>
-<p>Uninstallation is just one step of undoing “[2.]”:</p>
-<ol type="1">
-<li>stop referring to the package (by creating a new closure of needed packages)</li>
-</ol>
-<p>This procedure does not require any file or directory removal.
-On <strong>NixOS</strong> it’s a matter of updating a single <strong>/run/current-system</strong>
-symlink.</p>
-<p>As a result over normal lifetime the system accumulates unreferenced
-packages as files and directories in <strong>/nix/store/</strong>. If you have enough
-storage you can completely ignore these unreferenced files.</p>
-<p>But sometimes it’s useful to delete unreferenced data to free up some
-space or to check that there are no missing references in current package
-closure. Such cleaning is done with <strong>nix-collect-garbage</strong>
-(or <strong>nix store gc</strong>). Or their lower level sibling
-<strong>nix-store --delete …</strong> (or <strong>nix store delete …</strong>).</p>
-<h1 id="actual-gc-speed">Actual GC speed</h1>
-<p>All the above sounds nice, but how fast that garbage collection is in
-practice? Should it take 1 second, 1 minute or 1 hour on an average
-system? On a heavily cluttered system?</p>
-<p>Let’s find out! I have 2 systems:</p>
-<ol type="1">
-<li><p><strong>i7</strong> host: <strong>HDD</strong>-based 10+ years old web server with daily updates
-which never saw a garbage collection run. It’s whole <strong>/nix/store</strong>
-is 26GB.</p></li>
-<li><p><strong>nz</strong> host: <strong>NVMe</strong>-based 1 year old desktop where I build A Lot of
-packages daily and run garbage collection once a month. It’s whole
-<strong>/nix/store</strong> is <strong>380GB</strong>.</p></li>
-</ol>
-<p><strong>i7</strong> dry run:</p>
-<pre><code>$ time nix store gc --dry-run
-
-real 3m18.522s
-...</code></pre>
-<p>~200 seconds. Is it a lot? The process touches no disk. According to
-<strong>top</strong> it’s a CPU-bound problem. What does it do? Runnig
-<strong>perf top -p $pid</strong> shows the following:</p>
-<pre><code>$ sudo perf top -p 6217
-&lt;wait 5 seconds&gt;
-   6.82%  libstdc++.so.6.0.28  [.] std::istream::get
-   6.12%  libc-2.33.so         [.] __memcmp_sse4_1
-   4.51%  libcrypto.so.1.1     [.] sha256_block_data_order_avx
-   4.18%  libstdc++.so.6.0.28  [.] std::istream::sentry::sentry
-   3.91%  libnixstore.so       [.] nix::parseString
-   2.73%  libc-2.33.so         [.] malloc
-   2.55%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec
-   2.31%  [kernel]             [k] syscall_exit_to_user_mode</code></pre>
-<p>Looks like some string parsing and <strong>sqlite3</strong> reading. Could be
-optimised a bit around that strange <strong>std::istream::get</strong> but
-otherwise looks reasonable. Not exactly an interactive latency,
-but not too bad if ran infrequently. Maybe there is just a lot
-to do in this case?</p>
-<p><strong>nz</strong> run:</p>
-<pre><code>$ time nix store gc --dry-run
-
-real    28m24,295s
-...</code></pre>
-<p>~1800 seconds. Almost half an hour! That is already way outside
-interactive use of the tool. But maybe it’s fine for a system
-with large amount of clutter? Let’s find out!</p>
-<p>Checking for profile picture:</p>
-<pre><code>$ sudo perf top -p 2531652
-&lt;wait 5 seconds&gt;
-  10,15%  libstdc++.so.6.0.28  [.] std::istream::get
-   5,42%  libstdc++.so.6.0.28  [.] std::istream::sentry::sentry
-   5,16%  libc-2.33.so         [.] __memcmp_avx2_movbe
-   4,14%  [kernel]             [k] copy_user_enhanced_fast_string
-   3,90%  libc-2.33.so         [.] _int_malloc
-   3,03%  libc-2.33.so         [.] malloc
-   2,38%  libnixstore.so       [.] nix::parseString
-   2,30%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec</code></pre>
-<p>The profile is very close to <strong>i7</strong> one: same <strong>std::istream::get</strong>
-at the top and a <strong>memcmp()</strong> implementation that follows.</p>
-<h1 id="the-first-attempt">The first attempt</h1>
-<p>Profile clearly tells us that <strong>istream</strong> related parsing is the
-bottleneck.</p>
-<p>Quick quiz: does it?</p>
-<p>The parser is supposed to extract <strong>/nix/store</strong> references out of
-<strong>.drv</strong> files which usually look like the example below:</p>
-<pre><code>$ nix show-derivation /nix/store/6xcvz9zp757knf005g4q1p451p6wslpk-ninja-1.10.2.drv
-
-{
-  &quot;/nix/store/6xcvz9zp757knf005g4q1p451p6wslpk-ninja-1.10.2.drv&quot;: {
-    &quot;outputs&quot;: {
-      &quot;out&quot;: {
-        &quot;hashAlgo&quot;: &quot;r:sha256&quot;
-      }
-    },
-    &quot;inputSrcs&quot;: [
-      &quot;/nix/store/27axb57ya2ddmaa9m5fv700ww65z5hcd-docbook-xml-4.5&quot;,
-      &quot;/nix/store/2wald1adsn6bxzmvypzjk5z2zk9dlgwh-stdenv-linux&quot;,
-      &quot;/nix/store/34v3hflhcklq44jigh2banjwkcyqjc5k-python3-3.9.9&quot;,
-      &quot;/nix/store/7z1wzf51i7jxi9nl2dg3yqmsfb70s4fm-docbook-xsl-nons-1.79.2&quot;,
-      &quot;/nix/store/8m2rhn4jgz0bj52m7fx53jbj9qiswy6q-re2c-2.2&quot;,
-      &quot;/nix/store/8x4aqaqaiyylvcpnhn1phypkb4n6ady0-source&quot;,
-      &quot;/nix/store/9krlzvny65gdc8s7kpb6lkx8cd02c25b-default-builder.sh&quot;,
-      &quot;/nix/store/mcm0l38vgh9l24dgl94gj4hjvxp91g8j-libxslt-1.1.34-bin&quot;,
-      &quot;/nix/store/v3rml3r7liky77iwipjg9bxmm874ra6g-bash-5.1-p12&quot;,
-      &quot;/nix/store/y9yz15h8mlpggmr3jidjdhjpddsx7d25-setup-hook.sh&quot;,
-      &quot;/nix/store/yyaxnsqm849wwi901m6g7nbi1hqy7vsp-asciidoc-9.1.0&quot;
-    ],
-    &quot;inputDrvs&quot;: {},
-    &quot;system&quot;: &quot;x86_64-linux&quot;,
-    &quot;builder&quot;: &quot;/nix/store/v3rml3r7liky77iwipjg9bxmm874ra6g-bash-5.1-p12/bin/bash&quot;,
-    &quot;args&quot;: [
-      &quot;-e&quot;,
-      &quot;/nix/store/9krlzvny65gdc8s7kpb6lkx8cd02c25b-default-builder.sh&quot;
-    ],
-    &quot;env&quot;: {
-      &quot;buildInputs&quot;: &quot;&quot;,
-      &quot;buildPhase&quot;: &quot;python configure.py --bootstrap\n# \&quot;./ninja -vn manual\&quot; output copied here to support cross compilation.\nasciidoc -b docbook -d book -o build/manual.xml doc/manual.asciidoc\nxsltproc --nonet doc/docbook.xsl build/manual.xml &gt; doc/manual.html\n&quot;,
-      &quot;builder&quot;: &quot;/nix/store/v3rml3r7liky77iwipjg9bxmm874ra6g-bash-5.1-p12/bin/bash&quot;,
-...</code></pre>
-<p>Here <strong>inputDrvs</strong>, <strong>inputSrcs</strong> and some <strong>env</strong> references are
-interesting edges for garbage collector. But some are possibly not
-(like build-only <strong>env.builder</strong>).</p>
-<p>The parsing format looked trivial and I tried a quick hack to
-substitute <strong>istream</strong> for a manual parser in <a href="https://github.com/NixOS/nix/pull/6266" class="uri">https://github.com/NixOS/nix/pull/6266</a>.</p>
-<p>This gave a 25% speedup (7 minutes faster on <strong>nz</strong>). Sounds like a
-lot for a simple 80-line change.</p>
-<p>But Eelco did not see any speedup improvement on his system. Moreover
-Eelso’s GC times were ridiculously short: 17 seconds instead of minutes.</p>
-<p>That made me think: what is parser’s parse speed if I see so large
-an improvement? My system has to parse A Lot of <strong>.drv</strong> files to make
-it measurable.</p>
-<p>To put the example into some abstract numbers:
-if parse speed is even as low as 100MB/s then running it for 7 minutes
-would be able to parse ~40GB of <strong>.drv</strong> files. I don’t have that many.
-All my <strong>/nix/store/*.drv</strong> files are ~1GB (~270K files).</p>
-<p>Does it mean my system parses the same files multiple times? Is my system
-somehow special to have many of them?</p>
-<p>Running <strong>strace -f</strong> against the <strong>nix-daemon</strong> confirmed that some of
-<strong>.drv</strong> files were opened and read repeatedly. That’s strange.</p>
-<h1 id="the-second-attempt">The second attempt</h1>
-<p>My naive understanding of graph traversal for garbage collection purposes
-told me that each node should be traversed once.</p>
-<p>I added a few <strong>debug()</strong> calls to
-<a href="https://github.com/NixOS/nix/blob/master/src/libstore/gc.cc">src/libstore/gc.cc</a>
-around repeated <strong>.drv</strong> visits and found … a bug!</p>
-<p>For some <strong>nix.conf</strong> setups (like the ones with
-<strong>keep-derivations = true</strong>) <strong>.drv</strong> files are themselves considered
-(implicit) referrers. They should be retained on garbage
-collection (live paths). By keeping related <strong>.drv</strong> files around
-we keep possible prerequisites in case we want to rebuild a derivation.
-Which is handy for package development.</p>
-<p>The bug was in treatment of the <strong>.drv</strong> files: they were correctly traversed
-as referrers, but they were not added to <strong>alive</strong> set of visited nodes.
-As a result <strong>.drv</strong> file was visited every time some path pulled a <strong>.drv</strong> in.</p>
-<p>Thus the fix was a two-liner: <a href="https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e" class="uri">https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e</a></p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/libstore/gc.cc</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/libstore/gc.cc</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -678,7 +678,8 @@ void LocalStore::collectGarbage(const GCOptions &amp; options, GCResults &amp; results)</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>                 alive.insert(start);</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>                 try {</span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>                     StorePathSet closure;</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="st">-                    computeFSClosure(*path, closure);</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="va">+                    computeFSClosure(*path, closure,</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="va">+                        /* flipDirection */ false, gcKeepOutputs, gcKeepDerivations);</span></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>                     for (auto &amp; p : closure)</span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>                         alive.insert(p);</span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>                 } catch (InvalidPath &amp;) { }</span></code></pre></div>
-<p>Before the change <strong>computeFSClosure()</strong> was called with implicit default
-<strong>gcKeepDerivations = false</strong> argument. After the change it started honoring
-user’s configuration.</p>
-<p>The fun thing is that <strong>keep-derivations = true</strong> is a default enabled option!
-Unless you switched it off explicitly you probably have it enabled on <strong>NixOS</strong>.</p>
-<h1 id="benchmarks">Benchmarks</h1>
-<p>Let’s benchmark this change on the same setup as above. I plugged the patch
-into <strong>configuration.nix</strong> as:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>  nixpkgs.overlays = <span class="op">[</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span><span class="va">final</span><span class="op">:</span> <span class="va">prev</span><span class="op">:</span> <span class="op">{</span> <span class="va">nix</span> <span class="op">=</span> prev.nix.overrideAttrs <span class="op">(</span><span class="va">oa</span><span class="op">:</span> <span class="op">{</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>      <span class="va">patches</span> <span class="op">=</span> <span class="op">(</span>oa.patches <span class="kw">or</span> <span class="op">[])</span> <span class="op">++</span> <span class="op">[</span> <span class="op">(</span>prev.fetchpatch <span class="op">({</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;fix-gc-drv-re-parse.patch&quot;</span><span class="op">;</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>        <span class="va">url</span> <span class="op">=</span> <span class="st">&quot;https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e.patch&quot;</span><span class="op">;</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>        <span class="va">hash</span> <span class="op">=</span> <span class="st">&quot;sha256-QiBFJVRWNTXyVFch1zoNJL3ZfF4ZD9JKNlID4v+eUVc=&quot;</span><span class="op">;</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>      <span class="op">}))</span> <span class="op">];</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">});})</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">]</span>;</span></code></pre></div>
-<p><strong>i7</strong>:</p>
-<pre><code>$ time nix store gc --dry-run
-
-real    0m7.403s
-...</code></pre>
-<p>7 seconds compared to previous 200 seconds. ~29x speedup.</p>
-<p><strong>nz</strong>:</p>
-<pre><code>$ time nix store gc --dry-run
-
-real    1m0,140s
-...</code></pre>
-<p>60 seconds compared to previous 1800 seonds. ~30x speedup as well.</p>
-<h1 id="full-run">Full run</h1>
-<p>Time to run the actual garbage collection that includes file removal
-from disk and path unregistration from database:</p>
-<p><strong>i7</strong>:</p>
-<pre><code># dry run
-$ time nix store gc --dry-run
-
-real    0m7.403s
-...
-
-# full run
-$ time nix store gc
-
-2250 store paths deleted, 18751.92 MiB freed
-
-real    0m32.695s
-...
-
-# full re-run
-$ time nix store gc
-
-0 store paths deleted, 0.00 MiB freed
-
-real    0m7.708s
-...</code></pre>
-<p>Note that actual package removal is 5 times slower than
-GC dry run. This ratio depends a lot on how many files are
-to delete, what filesystem and what mode you are using.
-But the gist of it is that the difference is not that big
-compared to dry run.</p>
-<p>Dry-run before and after garbage collection did not change
-much. This means we did not delete that many packages
-compared to alive set of packages. After the cleanup
-<strong>/nix/store</strong> is only 2.3GB with 2300 store paths.</p>
-<p>Thus we deleted about the half the store paths and about
-90% of content size.</p>
-<p>The speed of removal is about 70 store paths (packages)
-per second.</p>
-<p><strong>nz</strong>:</p>
-<pre><code># dry run
-$ time nix store gc --dry-run
-
-real    1m0,140s
-...
-
-# full run
-$ time nix store gc
-
-319698 store paths deleted, 332762.52 MiB freed
-
-real    5m54,990s
-...
-
-# full re-run
-$ time nix store gc
-
-0 store paths deleted, 0.00 MiB freed
-
-real    0m4,528s
-...</code></pre>
-<p>Again, actual file deletion is only 6 times slower than GC dry run.
-Alive set after GC is 15K packages with 34GB storage.</p>
-<p>The speed of removal is about ~800 store paths (packages)
-per second.</p>
-<p>How many packages per second can your distribution delete?
-Does it scale well with amount of packages already installed in system?</p>
-<h1 id="parting-words">Parting words</h1>
-<p>Garbage collection should take no more than one minute :)</p>
-<p>It was surprisingly easy to get ~30x speedup of garbage collector with
-a two-liner patch. The improvement will help systems with default
-<strong>nix.conf</strong> configuration. Upcoming <strong>nix-2.8</strong> will contain the
-improvement.</p>
-<p>Initially I was fooled by <strong>perf top</strong> output and optimised the parser
-to get 25% speedup. The real bug was in tracking visited nodes.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on April  4, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Mon, 04 Apr 2022 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/241-nix-gc-speedup-improvements.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 

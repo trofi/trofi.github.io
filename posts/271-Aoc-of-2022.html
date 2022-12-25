@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: AoC of 2022</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>AoC of 2022</h1>
+
+            <p>This year I again took part in <code>AoC</code>: <a href="https://adventofcode.com/2022" class="uri">https://adventofcode.com/2022</a>.
+I published my solutions at <a href="https://github.com/trofi/AoC/tree/main/2022" class="uri">https://github.com/trofi/AoC/tree/main/2022</a>.</p>
+<p>As usual problems were appearing once a day at 5AM from Dec 1 to Dec 25.
+I did not get up that early. Instead my personal goal was to solve them
+within 24 hours of publish time and get the source code within 4KB each.
+I failed a few of them.</p>
+<p>This year I again took <code>rust</code> (without <code>cargo</code>) to get some practice in
+it. I think it went a bit smoother this time.</p>
+<h2 id="rust-niceties-lifetime-tracking-and-error-handling">rust niceties: lifetime tracking and error handling</h2>
+<p>I was more conscious of decreasing amount of data copying around.
+Instead of slapping <code>.clone()</code> all over the place. <code>rust</code> is great at
+tracking dangling references with lifetimes. For example in
+<a href="https://adventofcode.com/2022/day/16">Day 16: Proboscidea Volcanium</a>
+I encoded search space as a vector and a set of <code>&amp;str</code> “pointers”
+instead of copying <code>String</code>s in:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> Expr<span class="op">&lt;</span><span class="ot">'a</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  Val(<span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="dt">isize</span>)<span class="op">,</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  Expr(<span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span>)<span class="op">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  Assert(<span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span><span class="op">,</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span>)<span class="op">,</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> parse<span class="op">&lt;</span><span class="ot">'a</span><span class="op">&gt;</span>(i<span class="op">:</span> <span class="op">&amp;</span><span class="ot">'a</span> <span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Vec</span><span class="op">&lt;</span>Expr<span class="op">&lt;</span><span class="ot">'a</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span></span></code></pre></div>
+<p>I even attempted using a bit of error handling in
+1-2 problemsinstead of <code>panic!()</code>-ing on unexpected data:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> <span class="bu">FromStr</span> <span class="cf">for</span> Assignment <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="kw">type</span> Err <span class="op">=</span> E<span class="op">;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">fn</span> from_str(s<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Self</span><span class="op">,</span> <span class="dt">Self</span><span class="pp">::</span><span class="cn">Err</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> numbers<span class="op">:</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;,</span> <span class="dt">Self</span><span class="pp">::</span><span class="cn">Err</span><span class="op">&gt;</span> <span class="op">=</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>      s<span class="op">.</span>split(<span class="ch">'-'</span>)<span class="op">.</span>map(<span class="op">|</span>e<span class="op">|</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>        e<span class="op">.</span>parse()<span class="op">.</span>map_err(<span class="op">|</span>err<span class="op">|</span> mk_e(<span class="pp">format!</span>(<span class="st">&quot;'{}': {}&quot;</span><span class="op">,</span> e<span class="op">,</span> err)))</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>      )<span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> numbers<span class="op">?.</span>as_slice() <span class="op">{</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>      <span class="op">&amp;</span>[a<span class="op">,</span> b] <span class="op">=&gt;</span> <span class="cn">Ok</span>(Assignment<span class="op">{</span>from<span class="op">:</span> a<span class="op">,</span> to<span class="op">:</span> b<span class="op">}</span>)<span class="op">,</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>      _       <span class="op">=&gt;</span> <span class="cn">Err</span>(mk_e(<span class="pp">format!</span>(<span class="st">&quot;'{}' does not match N-M format&quot;</span><span class="op">,</span> s)))</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>Iter&lt;Result&lt;...&gt;&gt;</code> constructs <code>Result&lt;Vec&lt;...&gt;&gt;</code> (instead of
+typical <code>Vec&lt;Result&lt;...&gt;&gt;</code>!). It’s a handy way to pop errors out from
+iterator based loops. I’m still very clumzy at constructing new errors.
+But at least I did not lose them here.</p>
+<h2 id="funniest-problems">Funniest problems</h2>
+<p>The solutions to most problems are technically very boring. But some
+problem statements are great: a bit of ray casting, 2d and 3d physics
+simulation and even CPU+CRT simulation!</p>
+<p>Here is my list of fun problems I remembered:</p>
+<ul>
+<li><p><a href="https://adventofcode.com/2022/day/10">Day 10: Cathode-Ray Tube</a></p>
+<p>Good mix of “hardware” simulations nides in a single problem.</p></li>
+<li><p><a href="https://adventofcode.com/2022/day/14">Day 14: Regolith Reservoir</a></p>
+<p>A problem where falling sand is simulated.</p></li>
+<li><p><a href="https://adventofcode.com/2022/day/22">Day 22: Monkey Map</a></p>
+<p>The only problem I did not manage to solve in 24 hours. I don’t like
+my solution. But the problem statement is great!</p></li>
+<li><p><a href="https://adventofcode.com/2022/day/25">Day 25: Full of Hot Air</a></p>
+<p>A nice problem on unusual number base.</p></li>
+</ul>
+<p>I did not include a bunch of other problems like robot
+production and valve handling as they looked very similar to me. I
+solved them all with <a href="https://en.wikipedia.org/wiki/A*_search_algorithm">A* search</a>.</p>
+<p>Grepping through the solutions <code>visited</code> keyword hapens 5 times.
+I would say it is too many similar search-in-graph problems in a single
+year. But maybe it’s just me who used search too frequently without an
+attempt at finding better solution?</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December 25, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
