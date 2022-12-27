@@ -7,8 +7,306 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 25 Dec 2022 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Tue, 27 Dec 2022 00:00:00 UT</lastBuildDate>
         <item>
+    <title>peeking at stale nixpkgs packages</title>
+    <link>http://trofi.github.io/posts/272-peeking-at-stale-nixpkgs-packages.html</link>
+    <description><![CDATA[<p>As a <code>nixpkgs</code> user I want it to help me solve my and others’ problems.
+The upstream package bugs are frequently already fixed upstream and we
+only need to update to get <code>nixpkgs</code> into better state.</p>
+<p>How many outdated packages does my system have? Can I just list them all
+and maybe work on one or two to update them?</p>
+<h2 id="on-repology">On repology</h2>
+<p>Probably the most popular package info database is
+<a href="https://repology.org/" class="uri">https://repology.org/</a>. It contains package details across various
+package repositories. <code>nixpkgs</code> is not an exception.</p>
+<p>Let’s have a look at example <code>re2c</code> package.
+<code>repology</code> <a href="https://repology.org/project/re2c/versions">page</a> shows us a
+few things:</p>
+<ul>
+<li><code>3.0</code> is the latest release available</li>
+<li><code>nixpkgs-unstable</code> (<code>master</code> branch), <code>22.05</code> and <code>21.11</code>
+releases do provide latest <code>3.0</code>.</li>
+<li><code>nixpkgs-stable-21.11</code> (2 releases back) provides older <code>2.2</code> version</li>
+<li><code>Debian unstable</code> and <code>12</code> release also provide latest <code>3.0</code>.</li>
+<li><code>Fedora rawhide</code> provides very old <code>2.1.1</code> release (whoops!)</li>
+</ul>
+<p><code>repology.org</code> API <a href="https://repology.org/api">provides</a> a <code>json</code>
+table we can fetch and inspect directly.</p>
+<p>Joining this data against the installed system should yield something
+useful. Let’s see how hard it is.</p>
+<p>To get data related to <code>matser</code> branch of <code>nixpkgs</code> we can filter on
+<code>nix_unstable</code> repo with <code>inrepo=nix_unstable</code> parameter:</p>
+<pre><code>$ curl --compressed -s \
+  &quot;https://repology.org/api/v1/projects/?inrepo=nix_unstable&amp;outdated=1&quot; | jq
+
+{
+...
+  &quot;a52dec&quot;: [
+    {
+      &quot;repo&quot;: &quot;adelie_current&quot;,
+      &quot;subrepo&quot;: &quot;user&quot;,
+      &quot;srcname&quot;: &quot;a52dec&quot;,
+      &quot;binname&quot;: &quot;a52dec-dev&quot;,
+      &quot;visiblename&quot;: &quot;a52dec-dev&quot;,
+      &quot;version&quot;: &quot;0.8.0&quot;,
+      &quot;maintainers&quot;: [
+        &quot;me@zv.io&quot;
+      ],
+      &quot;licenses&quot;: [
+        &quot;GPL-2.0+&quot;
+      ],
+      &quot;summary&quot;: &quot;Library for decoding ATSC A/52 streams (development files)&quot;,
+      &quot;status&quot;: &quot;newest&quot;,
+      &quot;origversion&quot;: &quot;0.8.0-r0&quot;
+    },
+    ...
+    {
+      &quot;repo&quot;: &quot;nix_unstable&quot;,
+      &quot;name&quot;: &quot;a52dec&quot;,
+      &quot;visiblename&quot;: &quot;a52dec&quot;,
+      &quot;version&quot;: &quot;0.7.4&quot;,
+      &quot;maintainers&quot;: [
+        &quot;fallback-mnt-nix@repology&quot;
+      ],
+      &quot;licenses&quot;: [
+        &quot;GPL-2.0-or-later&quot;
+      ],
+      &quot;summary&quot;: &quot;ATSC A/52 stream decoder&quot;,
+      &quot;status&quot;: &quot;outdated&quot;,
+      &quot;origversion&quot;: null
+    },
+  ...
+  &quot;azure-cli&quot;: [
+    {
+      &quot;repo&quot;: &quot;scoop&quot;,
+      &quot;subrepo&quot;: &quot;main&quot;,
+      &quot;binname&quot;: &quot;azure-cli&quot;,
+      &quot;visiblename&quot;: &quot;azure-cli&quot;,
+      &quot;version&quot;: &quot;2.43.0&quot;,
+      &quot;licenses&quot;: [
+        &quot;MIT&quot;
+      ],
+      &quot;status&quot;: &quot;newest&quot;,
+      &quot;origversion&quot;: null
+    },
+  ...
+    }
+  ]
+}</code></pre>
+<p>I piped the output through <code>jq</code> to make it slightly more readable.</p>
+<p>We see a lot here:</p>
+<ul>
+<li><p><code>repology</code>’s <strong>project name</strong> comes as a key here</p></li>
+<li><p><strong>values</strong> are arrays of per-repository details for package status:
+repository name, package name, version, version status and so on.</p></li>
+<li><p><strong>status</strong> field tells us outright if the package is stale or not.</p></li>
+<li><p>data is paginated: only the range from <code>"a52dec"</code> to <code>"azure-cli"</code> is
+covered.</p></li>
+</ul>
+<p>To get more data we can call the same API by passing the project key
+as part of <code>projects/</code> path to continue from there:</p>
+<pre><code># page 1:
+$ curl --compressed -s \
+  &quot;https://repology.org/api/v1/projects/?inrepo=nix_unstable&amp;outdated=1&quot; &gt;p1
+# page2
+$ curl --compressed -s \
+  &quot;https://repology.org/api/v1/projects/azure-cli/?inrepo=nix_unstable&amp;outdated=1&quot; &gt;p2
+
+$ jq --sort-keys --raw-output 'keys|last' &lt;p1
+azure-cli
+$ jq --sort-keys --raw-output 'keys|last' &lt;p2
+cli11</code></pre>
+<p>Now we can build the list of outdated packages in <code>nixpkgs</code>. I’ll use
+the following <code>jq</code> hack to pick latest-everywhere vs latest-in-nixpkgs:</p>
+<pre><code>$ jq --sort-keys '
+map_values({
+  &quot;newest&quot;: map(
+    select(.status|in({&quot;newest&quot;:1}))
+  )|first(.[].version),
+  &quot;nix_unstable_version&quot;: map(
+    select(.repo|in({&quot;nix_unstable&quot;:1}))
+  )|first(.[].version),
+  &quot;nix_name&quot;: map(
+    select(.repo|in({&quot;nix_unstable&quot;:1}))
+  )|first(.[].name),
+})' &lt; p1 | jq --sort-keys '
+  map_values(
+    &quot;\(.nix_name): \(.nix_unstable_version) -&gt; \(.newest)&quot;
+  )
+'
+
+{
+  &quot;1password-cli&quot;: &quot;1password-cli: 2.11.0 -&gt; 2.12.0&quot;,
+  &quot;389-ds-base&quot;: &quot;389-ds-base: 2.3.0 -&gt; 2.3.1&quot;,
+  &quot;7kaa&quot;: &quot;7kaa: 2.15.4p1 -&gt; 2.15.5&quot;,
+  &quot;a52dec&quot;: &quot;a52dec: 0.7.4 -&gt; 0.8.0&quot;,
+  &quot;abuse&quot;: &quot;abuse: 0.8 -&gt; 0.9.1&quot;,
+  &quot;ace-framework&quot;: &quot;ace: 7.0.8 -&gt; 7.0.11&quot;,
+  &quot;acorn&quot;: &quot;acorn: 0.4.2 -&gt; 8.8.1&quot;,
+  &quot;acpica&quot;: &quot;acpica-tools: 20220331 -&gt; 20221022&quot;,
+  &quot;acpitool&quot;: &quot;acpitool: 0.5.1 -&gt; 0.5.2&quot;,
+  &quot;actor-framework&quot;: &quot;actor-framework: 0.18.5 -&gt; 0.18.6&quot;,
+  ...
+  &quot;azure-cli&quot;: &quot;azure-cli: 2.37.0 -&gt; 2.43.0&quot;
+}</code></pre>
+<p>You should be able to come up with a more reasonable query.</p>
+<p>The above quary is not distribution-specific: you can swap
+<code>nix_unstalble</code> for your distro of choice to fish for things you care
+about.</p>
+<p>Or you can use web UI to skim through the same data:
+<a href="https://repology.org/projects/?inrepo=nix_unstable&amp;outdated=1" class="uri">https://repology.org/projects/?inrepo=nix_unstable&amp;outdated=1</a>.</p>
+<p>Web UI is not very handy to grep through as it takes multiple pages.</p>
+<h2 id="on-derivations">On derivations</h2>
+<p>The above hack gives us the whole list of stale packages in <code>nixpkgs</code>.
+I would still still like to narrow it down to set of packages relevant
+to my system.</p>
+<p>Luckily the whole <code>NixOS</code> system is normally described by a single build
+“rule” (a single <code>derivation</code>). By inspecting that we can find all the
+used packages:</p>
+<pre><code>$ nix show-derivation --derivation -r $(nix-instantiate '&lt;nixpkgs/nixos&gt;' -A system)
+
+{
+...
+  &quot;/nix/store/1vb6bjnkrwyj94d87ps1z9wa3i1fzia8-re2c-3.0.drv&quot;: {
+    &quot;args&quot;: [
+      &quot;-e&quot;,
+      &quot;/nix/store/9krlzvny65gdc8s7kpb6lkx8cd02c25b-default-builder.sh&quot;
+    ],
+    &quot;builder&quot;: &quot;/nix/store/4xw8n979xpivdc46a9ndcvyhwgif00hz-bash-5.1-p16/bin/bash&quot;,
+    &quot;env&quot;: {
+      &quot;buildInputs&quot;: &quot;&quot;,
+      &quot;builder&quot;: &quot;/nix/store/4xw8n979xpivdc46a9ndcvyhwgif00hz-bash-5.1-p16/bin/bash&quot;,
+      &quot;cmakeFlags&quot;: &quot;&quot;,
+      &quot;configureFlags&quot;: &quot;&quot;,
+      &quot;depsBuildBuild&quot;: &quot;&quot;,
+      &quot;depsBuildBuildPropagated&quot;: &quot;&quot;,
+      &quot;depsBuildTarget&quot;: &quot;&quot;,
+      &quot;depsBuildTargetPropagated&quot;: &quot;&quot;,
+      &quot;depsHostHost&quot;: &quot;&quot;,
+      &quot;depsHostHostPropagated&quot;: &quot;&quot;,
+      &quot;depsTargetTarget&quot;: &quot;&quot;,
+      &quot;depsTargetTargetPropagated&quot;: &quot;&quot;,
+      &quot;doCheck&quot;: &quot;1&quot;,
+      &quot;doInstallCheck&quot;: &quot;&quot;,
+      &quot;enableParallelBuilding&quot;: &quot;1&quot;,
+      &quot;enableParallelChecking&quot;: &quot;1&quot;,
+      &quot;mesonFlags&quot;: &quot;&quot;,
+      &quot;name&quot;: &quot;re2c-3.0&quot;,
+      &quot;nativeBuildInputs&quot;: &quot;/nix/store/nxxd4bhq41ix50n532vkdx6vp5p5hir3-hook /nix/store/al6g1zbk8li6p8mcyp0h60d08jaahf8c-python3-3.10.9&quot;,
+      &quot;out&quot;: &quot;/nix/store/5mf1k9jy94ji20xcy77z58qaw7w4izrp-re2c-3.0&quot;,
+      &quot;outputs&quot;: &quot;out&quot;,
+      &quot;patches&quot;: &quot;&quot;,
+      &quot;pname&quot;: &quot;re2c&quot;,
+      &quot;preCheck&quot;: &quot;patchShebangs run_tests.py\n&quot;,
+      &quot;propagatedBuildInputs&quot;: &quot;&quot;,
+      &quot;propagatedNativeBuildInputs&quot;: &quot;&quot;,
+      &quot;src&quot;: &quot;/nix/store/sl98y4sk9vzxinydlbc9nyzlqr5az8sj-source&quot;,
+      &quot;stdenv&quot;: &quot;/nix/store/cp65c8nk29qq5cl1wyy5qyw103cwmax7-stdenv-linux&quot;,
+      &quot;strictDeps&quot;: &quot;&quot;,
+      &quot;system&quot;: &quot;x86_64-linux&quot;,
+      &quot;version&quot;: &quot;3.0&quot;
+    },
+    &quot;inputDrvs&quot;: {
+      &quot;/nix/store/6z1jfnqqgyqr221zgbpm30v91yfj3r45-bash-5.1-p16.drv&quot;: [
+        &quot;out&quot;
+      ],
+      &quot;/nix/store/7k290ai5pfv6zw25ymank65dks86g64h-source.drv&quot;: [
+        &quot;out&quot;
+      ],
+      &quot;/nix/store/ap9g09fxbicj836zm88d56dn3ff4clxl-stdenv-linux.drv&quot;: [
+        &quot;out&quot;
+      ],
+      &quot;/nix/store/b2p151ilwqpd47fbmzz50a5cmj12ixbf-hook.drv&quot;: [
+        &quot;out&quot;
+      ],
+      &quot;/nix/store/vgpv5w9lxnrxkdvb4hx1llxp811fd8pk-python3-3.10.9.drv&quot;: [
+        &quot;out&quot;
+      ]
+    },
+    &quot;inputSrcs&quot;: [
+      &quot;/nix/store/9krlzvny65gdc8s7kpb6lkx8cd02c25b-default-builder.sh&quot;
+    ],
+    &quot;outputs&quot;: {
+      &quot;out&quot;: {
+        &quot;path&quot;: &quot;/nix/store/5mf1k9jy94ji20xcy77z58qaw7w4izrp-re2c-3.0&quot;
+      }
+    },
+    &quot;system&quot;: &quot;x86_64-linux&quot;
+  },
+...</code></pre>
+<p>Here one of numerous derivations used to produce final <code>system</code>
+derivation is <code>re2c</code>. Most derivations have <code>pname</code> and <code>version</code> in
+their environemnts. Thus the simplest hack would be to extract them with
+<code>jq</code> again:</p>
+<pre><code>$ nix show-derivation --derivation -r $(nix-instantiate '&lt;nixpkgs/nixos&gt;' -A system) |
+    jq -r '.[] | &quot;\(.env.pname) \(.env.version)&quot;' | fgrep -v &quot;null&quot; | sort -u
+
+a52dec 0.7.4
+aalib 1.4rc5
+abseil-cpp 20210324.2
+accounts-qt 1.16
+...
+re2c 3.0</code></pre>
+<h2 id="collecting-list-of-outdated-packages">Collecting list of outdated packages</h2>
+<p>Now we have everything to match our system against the stale list. I
+used simple <code>grep</code> for that. Full list of used scripts is at
+<a href="https://discourse.nixos.org/t/a-tool-for-looking-if-installed-packages-are-up-to-date/21630/6" class="uri">https://discourse.nixos.org/t/a-tool-for-looking-if-installed-packages-are-up-to-date/21630/6</a>.</p>
+<p>The typical output looks like that:</p>
+<pre><code>$ ./print_local_outdated.bash | nl
+     1  # installed(staging): unstable(master) -&gt; latest(others)
+     2  a52dec-0.7.4:   &quot;a52dec&quot;: &quot;a52dec: 0.7.4 -&gt; 0.8.0&quot;,
+     3  afdko-3.9.0:   &quot;afdko&quot;: &quot;python3.9-afdko: 3.9.0 -&gt; 3.9.1&quot;,
+     4  alsa-lib-1.2.7.2:   &quot;alsa-lib&quot;: &quot;alsa-lib: 1.2.7.2 -&gt; 1.2.8&quot;,
+     5  alsa-ucm-conf-1.2.7.1:   &quot;alsa-ucm-conf&quot;: &quot;alsa-ucm-conf: 1.2.7.1 -&gt; 1.2.8&quot;,
+     6  appstream-0.15.5:   &quot;appstream&quot;: &quot;appstream-qt: 0.15.5 -&gt; 0.15.6&quot;,
+...
+   223  xhost-1.0.8:   &quot;xhost&quot;: &quot;xhost: 1.0.8 -&gt; 1.0.9&quot;,
+   224  xkbcomp-1.4.5:   &quot;xkbcomp&quot;: &quot;xkbcomp: 1.4.5 -&gt; 1.4.6&quot;,
+   225  xkeyboard-config-2.33:   &quot;xkeyboard-config&quot;: &quot;xkeyboard-config: 2.33 -&gt; 2.37&quot;,
+   226  xlsclients-1.1.4:   &quot;xlsclients&quot;: &quot;xlsclients: 1.1.4 -&gt; 1.1.5&quot;,
+   227  xmlrpc-c-1.51.07:   &quot;xmlrpc-c&quot;: &quot;xmlrpc-c: 1.51.07 -&gt; 1.51.08&quot;,
+   228  xorgproto-2021.5:   &quot;xorgproto&quot;: &quot;xorgproto: 2021.5 -&gt; 2022.2&quot;,
+   229  xorg-server-1.20.14:   &quot;xorg-server&quot;: &quot;xorg-server: 1.20.14 -&gt; 21.1.6&quot;,
+   230  xprop-1.2.5:   &quot;xprop&quot;: &quot;xprop: 1.2.5 -&gt; 1.2.6&quot;,
+   231  xrandr-1.5.1:   &quot;xrandr&quot;: &quot;xrandr: 1.5.1 -&gt; 1.5.2&quot;,
+   232  xset-1.2.4:   &quot;xset&quot;: &quot;xset: 1.2.4 -&gt; 1.2.5&quot;,
+   233  xsetroot-1.1.2:   &quot;xsetroot&quot;: &quot;xsetroot: 1.1.2 -&gt; 1.1.3&quot;,</code></pre>
+<p>My system has at least 232 outdated packages (of 1505 detected). That is
+a lot. I’m slowly going through them one by one and check why automated
+upgrades do not work for them. One of the obvious examples here is <code>xorg</code>
+related packages.</p>
+<h2 id="next-steps">Next steps</h2>
+<p>The source data that <code>repology</code> and package derivations provide
+are enough to tie freshness together. My <code>jq</code> hacks don’t handle
+corner cases well. Some obvious deficiencies are:</p>
+<ul>
+<li>packages intentionally kept as multiple versions</li>
+<li>clearly wrong package versions reported by repology</li>
+<li>something else?</li>
+</ul>
+<p>I’ll attemt to write more robust tool with friendlier UI available for
+daily use.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Package version information exposed by <code>repology.org</code> is great. It does
+not require much of data processing to get basic details of how fresh
+the package version you are looking at is.</p>
+<p><code>nixpkgs</code> has quite a few stale packages worth updating. If you are
+thinking of contributing to <code>nixpkgs</code> then list such as this might be
+a good inspiration.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on December 27, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Tue, 27 Dec 2022 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/272-peeking-at-stale-nixpkgs-packages.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>AoC of 2022</title>
     <link>http://trofi.github.io/posts/271-Aoc-of-2022.html</link>
     <description><![CDATA[<p>This year I again took part in <code>AoC</code>: <a href="https://adventofcode.com/2022" class="uri">https://adventofcode.com/2022</a>.
@@ -157,21 +455,21 @@ following self-contained example that exhibits the problem:</p>
 <span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> factor <span class="op">=</span> vf<span class="op">;</span></span>
 <span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> x <span class="op">=</span> <span class="op">-</span> <span class="op">(</span><span class="dt">double</span><span class="op">)</span>ph <span class="op">*</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;z = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> x<span class="op">);</span>   <span class="co">/* prints -0.0, ok */</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;z = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> x<span class="op">);</span>   <span class="co">/* prints -0.0, ok */</span></span>
 <span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* This 'if / else' code should not affect calculation of 'ffm', but</span></span>
 <span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">       removing it does change things. */</span></span>
 <span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>x <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span>    <span class="co">/* should be 1.0 or .. */</span></span>
 <span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span> <span class="op">/</span> x<span class="op">;</span>       <span class="co">/* -inf? */</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;*y = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">*</span>y<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;*y = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">*</span>y<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
 <span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> w <span class="op">=</span> <span class="fl">2.0</span> <span class="op">*</span> x <span class="op">/</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;w = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> w<span class="op">);</span> <span class="co">/* prints -0.0, ok */</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;w = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> w<span class="op">);</span> <span class="co">/* prints -0.0, ok */</span></span>
 <span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> omww <span class="op">=</span> <span class="dv">1</span> <span class="op">-</span> w<span class="op">;</span>                  <span class="co">/* should be 1.0 */</span></span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;omww = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> omww<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="fl">0.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="fl">0.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;ffm = %f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> ffm<span class="op">);</span> <span class="co">/* printf 0.0 or 1.0, </span><span class="al">BUG</span><span class="co"> */</span></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;omww = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> omww<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="dv">0</span><span class="er">.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;ffm = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> ffm<span class="op">);</span> <span class="co">/* printf 0.0 or 1.0, </span><span class="al">BUG</span><span class="co"> */</span></span>
 <span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ffm<span class="op">;</span></span>
 <span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
@@ -181,9 +479,9 @@ following self-contained example that exhibits the problem:</p>
 <span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> y <span class="op">=</span> <span class="fl">42.0</span><span class="op">;</span></span>
 <span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> filter <span class="op">=</span> build_filter<span class="op">(&amp;</span>y<span class="op">);</span></span>
 <span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = %.20f; y = %.20f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = </span><span class="sc">%.20f</span><span class="st">; y = </span><span class="sc">%.20f\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
 <span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should be 1.0, sometimes returns 0.0. */</span></span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="fl">0.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;</span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
 <span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>It’s a bit long but very straightforward: no loops, just one condition.</p>
 <p>Here is the output difference in <code>-O0</code> / <code>-O1</code> comparison on
@@ -233,7 +531,7 @@ inspection of <code>gcc</code> optimization process:</p>
 <span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> w <span class="op">=</span> <span class="fl">2.0</span> <span class="op">*</span> x <span class="op">/</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
 <span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> omww <span class="op">=</span> <span class="dv">1</span> <span class="op">-</span> w<span class="op">;</span>                  <span class="co">/* should be 1.0 */</span></span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="fl">0.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="fl">0.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="dv">0</span><span class="er">.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
 <span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ffm<span class="op">;</span></span>
 <span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
@@ -243,9 +541,9 @@ inspection of <code>gcc</code> optimization process:</p>
 <span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> y <span class="op">=</span> <span class="fl">42.0</span><span class="op">;</span></span>
 <span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> filter <span class="op">=</span> build_filter<span class="op">(&amp;</span>y<span class="op">);</span></span>
 <span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = %.1f; y = %.1f</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
+<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = </span><span class="sc">%.1f</span><span class="st">; y = </span><span class="sc">%.1f\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
 <span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should be 1.0, sometimes returns 0.0. */</span></span>
-<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;%s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="fl">0.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
+<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;</span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
 <span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>The bug is still here:</p>
 <pre><code># -O0, good:
@@ -519,12 +817,12 @@ here:</p>
 <span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
 <span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> i<span class="op">;</span></span>
 <span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        TRACE<span class="op">(</span><span class="st">&quot;%dx%d %.4s scanout=%d count_mods=%zu</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        TRACE<span class="op">(</span><span class="st">&quot;</span><span class="sc">%d</span><span class="st">x</span><span class="sc">%d</span><span class="st"> </span><span class="sc">%.4s</span><span class="st"> scanout=</span><span class="sc">%d</span><span class="st"> count_mods=</span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span></span>
 <span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>              width<span class="op">,</span> height<span class="op">,</span> <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*)&amp;</span>drm_format<span class="op">,</span></span>
 <span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>              format_is_scanoutable<span class="op">,</span> count_modifiers<span class="op">);</span></span>
 <span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> count_modifiers<span class="op">;</span> i<span class="op">++)</span></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>            TRACE<span class="op">(</span><span class="st">&quot;    mod: 0x%.16llx</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span><span class="dt">long</span> <span class="dt">long</span><span class="op">)</span>modifiers<span class="op">[</span>i<span class="op">]);</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>            TRACE<span class="op">(</span><span class="st">&quot;    mod: 0x</span><span class="sc">%.16llx\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span><span class="dt">long</span> <span class="dt">long</span><span class="op">)</span>modifiers<span class="op">[</span>i<span class="op">]);</span></span>
 <span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
 <span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>format_is_scanoutable<span class="op">)</span> gbm_bo_flags <span class="op">|=</span> GBM_BO_USE_SCANOUT<span class="op">;</span></span>
@@ -1741,7 +2039,7 @@ will see the conditon on which <code>gcc</code> decided it’s OK
 <span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>              <span class="op">&amp;&amp;</span> cgraph_edge_brings_all_agg_vals_for_node <span class="op">(</span>cs<span class="op">,</span> val<span class="op">-&gt;</span>spec_node<span class="op">))</span></span>
 <span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>            <span class="op">{</span></span>
 <span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>              <span class="cf">if</span> <span class="op">(</span>dump_file<span class="op">)</span></span>
-<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>                fprintf <span class="op">(</span>dump_file<span class="op">,</span> <span class="st">&quot; - adding an extra caller %s of %s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>                fprintf <span class="op">(</span>dump_file<span class="op">,</span> <span class="st">&quot; - adding an extra caller </span><span class="sc">%s</span><span class="st"> of </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span></span>
 <span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>                         cs<span class="op">-&gt;</span>caller<span class="op">-&gt;</span>dump_name <span class="op">(),</span></span>
 <span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>                         val<span class="op">-&gt;</span>spec_node<span class="op">-&gt;</span>dump_name <span class="op">());</span></span>
 <span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a></span>
@@ -3652,13 +3950,13 @@ around.</p>
 <span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="op">%</span>type <span class="op">&lt;</span>ival<span class="op">&gt;</span> expr</span>
 <span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="op">%%</span></span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>result <span class="op">:</span> expr       <span class="op">{</span> printf<span class="op">(</span><span class="st">&quot;RESULT: %d</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> $<span class="dv">1</span><span class="op">);</span> <span class="op">}</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>result <span class="op">:</span> expr       <span class="op">{</span> printf<span class="op">(</span><span class="st">&quot;RESULT: </span><span class="sc">%d\n</span><span class="st">&quot;</span><span class="op">,</span> $<span class="dv">1</span><span class="op">);</span> <span class="op">}</span></span>
 <span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>expr <span class="op">:</span> NUM          <span class="op">{</span> $$ <span class="op">=</span> $<span class="dv">1</span><span class="op">;</span> <span class="op">}</span></span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>     <span class="op">|</span> expr <span class="ch">'+'</span> NUM <span class="op">{</span> $$ <span class="op">=</span> $<span class="dv">1</span> <span class="op">+</span> $<span class="dv">3</span><span class="op">;</span> printf<span class="op">(</span><span class="st">&quot;I-RESULT: %d</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> $$<span class="op">);</span> <span class="op">}</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>     <span class="op">|</span> expr <span class="ch">'+'</span> NUM <span class="op">{</span> $$ <span class="op">=</span> $<span class="dv">1</span> <span class="op">+</span> $<span class="dv">3</span><span class="op">;</span> printf<span class="op">(</span><span class="st">&quot;I-RESULT: </span><span class="sc">%d\n</span><span class="st">&quot;</span><span class="op">,</span> $$<span class="op">);</span> <span class="op">}</span></span>
 <span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>     <span class="op">;</span></span>
 <span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a><span class="op">%%</span></span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> yyerror <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> err<span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;PARSE ERROR: %s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> err<span class="op">);</span> <span class="op">}</span></span></code></pre></div>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> yyerror <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> err<span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;PARSE ERROR: </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> err<span class="op">);</span> <span class="op">}</span></span></code></pre></div>
 <p>Here we handle our grammar almost as it’s written in <code>BNF</code>. A few things
 to note:</p>
 <ul>
@@ -3803,13 +4101,13 @@ lexer-dependenct).</p>
 <span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a><span class="op">%</span>type <span class="op">&lt;</span>ival<span class="op">&gt;</span> expr</span>
 <span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a><span class="op">%%</span></span>
-<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>result <span class="op">:</span> expr       <span class="op">{</span> printf<span class="op">(</span><span class="st">&quot;RESULT: %d</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> $<span class="dv">1</span><span class="op">);</span> <span class="op">}</span></span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>result <span class="op">:</span> expr       <span class="op">{</span> printf<span class="op">(</span><span class="st">&quot;RESULT: </span><span class="sc">%d\n</span><span class="st">&quot;</span><span class="op">,</span> $<span class="dv">1</span><span class="op">);</span> <span class="op">}</span></span>
 <span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>expr <span class="op">:</span> NUM          <span class="op">{</span> $$ <span class="op">=</span> $<span class="dv">1</span><span class="op">;</span> <span class="op">}</span></span>
-<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>     <span class="op">|</span> expr <span class="ch">'+'</span> NUM <span class="op">{</span> $$ <span class="op">=</span> $<span class="dv">1</span> <span class="op">+</span> $<span class="dv">3</span><span class="op">;</span> printf<span class="op">(</span><span class="st">&quot;I-RESULT: %d</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> $$<span class="op">);</span> <span class="op">}</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>     <span class="op">|</span> expr <span class="ch">'+'</span> NUM <span class="op">{</span> $$ <span class="op">=</span> $<span class="dv">1</span> <span class="op">+</span> $<span class="dv">3</span><span class="op">;</span> printf<span class="op">(</span><span class="st">&quot;I-RESULT: </span><span class="sc">%d\n</span><span class="st">&quot;</span><span class="op">,</span> $$<span class="op">);</span> <span class="op">}</span></span>
 <span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>     <span class="op">;</span></span>
 <span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a><span class="op">%%</span></span>
-<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> yyerror <span class="op">(</span>yyscan_t scanner<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> err<span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;PARSE ERROR: %s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> err<span class="op">);</span> <span class="op">}</span></span></code></pre></div>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> yyerror <span class="op">(</span>yyscan_t scanner<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> err<span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;PARSE ERROR: </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> err<span class="op">);</span> <span class="op">}</span></span></code></pre></div>
 <p>Compared to original example <code>%param {yyscan_t scanner}</code> extends
 <code>yyparse()</code> declaration with <code>yyscan_t scanner</code> parameter (and also pass
 it to every <code>yy*()</code> call including <code>yylex()</code>, <code>yyerror()</code> and many others).</p>
@@ -3859,7 +4157,7 @@ Let’s look at the <code>yy*()</code> call site in <code>main()</code> function
 <span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;Parsing input from argv:</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
 <span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> i <span class="op">=</span> <span class="dv">1</span><span class="op">;</span> i <span class="op">&lt;</span> argc<span class="op">;</span> <span class="op">++</span>i<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;argv[%i]='%s':</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> i<span class="op">,</span> argv<span class="op">[</span>i<span class="op">]);</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;argv[</span><span class="sc">%i</span><span class="st">]='</span><span class="sc">%s</span><span class="st">':</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> i<span class="op">,</span> argv<span class="op">[</span>i<span class="op">]);</span></span>
 <span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>        yyscan_t scanner<span class="op">;</span></span>
 <span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>        YY_BUFFER_STATE buf<span class="op">;</span></span>
@@ -5397,9 +5695,9 @@ unreg targets are not affected?</p>
 <span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> lib_g<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
 <span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;before: main.g=%i; lib_g()=%i</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> g<span class="op">,</span> lib_g<span class="op">());</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;before: main.g=</span><span class="sc">%i</span><span class="st">; lib_g()=</span><span class="sc">%i\n</span><span class="st">&quot;</span><span class="op">,</span> g<span class="op">,</span> lib_g<span class="op">());</span></span>
 <span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    g <span class="op">=</span> <span class="dv">12345678</span><span class="op">;</span> <span class="co">/* Was 42. */</span></span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;after:  main.g=%i; lib_g()=%i</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> g<span class="op">,</span> lib_g<span class="op">());</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;after:  main.g=</span><span class="sc">%i</span><span class="st">; lib_g()=</span><span class="sc">%i\n</span><span class="st">&quot;</span><span class="op">,</span> g<span class="op">,</span> lib_g<span class="op">());</span></span>
 <span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Here we have library code with one global variable <strong>g</strong> and
@@ -5813,13 +6111,13 @@ provides a single function to tell us it’s name:</p>
 <span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
 <span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* important part: */</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;lib_name() = %s</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> lib_name<span class="op">());</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;lib_name() = </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> lib_name<span class="op">());</span></span>
 <span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* library loading introspection: */</span></span>
 <span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;My address space:</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
 <span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> cmd<span class="op">[</span><span class="dv">1000</span><span class="op">];</span></span>
 <span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* search for code segments (should be at most one per loaded ELF) */</span></span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    snprintf<span class="op">(</span>cmd<span class="op">,</span> <span class="kw">sizeof</span> <span class="op">(</span>cmd<span class="op">),</span> <span class="st">&quot;grep 'r-x' /proc/%u/maps&quot;</span><span class="op">,</span> getpid<span class="op">());</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    snprintf<span class="op">(</span>cmd<span class="op">,</span> <span class="kw">sizeof</span> <span class="op">(</span>cmd<span class="op">),</span> <span class="st">&quot;grep 'r-x' /proc/</span><span class="sc">%u</span><span class="st">/maps&quot;</span><span class="op">,</span> getpid<span class="op">());</span></span>
 <span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    system<span class="op">(</span>cmd<span class="op">);</span></span>
 <span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>The important bit here is <strong>fprintf (stderr, “lib_name() = %s”, lib_name());</strong>.
@@ -6759,8 +7057,8 @@ form. We’ll use the following sample code as our running example:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">/* Keep the functions around to have real indirect calls. */</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define DECL_F(fn) static void fn(void) __attribute__((noipa))</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define  DEF_F(fn) static void fn(void) {}</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define DECL_F</span><span class="op">(</span><span class="pp">fn</span><span class="op">)</span><span class="pp"> </span><span class="dt">static</span><span class="pp"> </span><span class="dt">void</span><span class="pp"> fn</span><span class="op">(</span><span class="dt">void</span><span class="op">)</span><span class="pp"> __attribute__</span><span class="op">((</span><span class="pp">noipa</span><span class="op">))</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define  DEF_F</span><span class="op">(</span><span class="pp">fn</span><span class="op">)</span><span class="pp"> </span><span class="dt">static</span><span class="pp"> </span><span class="dt">void</span><span class="pp"> fn</span><span class="op">(</span><span class="dt">void</span><span class="op">)</span><span class="pp"> </span><span class="op">{}</span></span>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f0<span class="op">);</span> DEF_F<span class="op">(</span>f0<span class="op">);</span></span>
 <span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f1<span class="op">);</span> DEF_F<span class="op">(</span>f1<span class="op">);</span></span>
@@ -7219,8 +7517,8 @@ optimised <strong>GIMPLE</strong> tree. Here is our original program:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="co">/* Keep the functions around to have real indirect calls. */</span></span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define DECL_F(fn) static void fn(void) __attribute__((noipa))</span></span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define  DEF_F(fn) static void fn(void) {}</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define DECL_F</span><span class="op">(</span><span class="pp">fn</span><span class="op">)</span><span class="pp"> </span><span class="dt">static</span><span class="pp"> </span><span class="dt">void</span><span class="pp"> fn</span><span class="op">(</span><span class="dt">void</span><span class="op">)</span><span class="pp"> __attribute__</span><span class="op">((</span><span class="pp">noipa</span><span class="op">))</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define  DEF_F</span><span class="op">(</span><span class="pp">fn</span><span class="op">)</span><span class="pp"> </span><span class="dt">static</span><span class="pp"> </span><span class="dt">void</span><span class="pp"> fn</span><span class="op">(</span><span class="dt">void</span><span class="op">)</span><span class="pp"> </span><span class="op">{}</span></span>
 <span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f0<span class="op">);</span> DEF_F<span class="op">(</span>f0<span class="op">);</span></span>
 <span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>DECL_F<span class="op">(</span>f1<span class="op">);</span> DEF_F<span class="op">(</span>f1<span class="op">);</span></span>
@@ -7443,7 +7741,7 @@ program was optimised with training data available.</p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">void</span> <span class="op">(*</span>cb_t<span class="op">)(</span><span class="dt">void</span><span class="op">);</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define F(__fn) static void __fn(void) {}</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#define F</span><span class="op">(</span><span class="pp">__fn</span><span class="op">)</span><span class="pp"> </span><span class="dt">static</span><span class="pp"> </span><span class="dt">void</span><span class="pp"> __fn</span><span class="op">(</span><span class="dt">void</span><span class="op">)</span><span class="pp"> </span><span class="op">{}</span></span>
 <span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f00<span class="op">);</span>F<span class="op">(</span>f01<span class="op">);</span>F<span class="op">(</span>f02<span class="op">);</span>F<span class="op">(</span>f03<span class="op">);</span>F<span class="op">(</span>f04<span class="op">);</span>F<span class="op">(</span>f05<span class="op">);</span>F<span class="op">(</span>f06<span class="op">);</span>F<span class="op">(</span>f07<span class="op">);</span>F<span class="op">(</span>f08<span class="op">);</span>F<span class="op">(</span>f09<span class="op">);</span></span>
 <span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>F<span class="op">(</span>f10<span class="op">);</span>F<span class="op">(</span>f11<span class="op">);</span>F<span class="op">(</span>f12<span class="op">);</span>F<span class="op">(</span>f13<span class="op">);</span>F<span class="op">(</span>f14<span class="op">);</span>F<span class="op">(</span>f15<span class="op">);</span>F<span class="op">(</span>f16<span class="op">);</span>F<span class="op">(</span>f17<span class="op">);</span>F<span class="op">(</span>f18<span class="op">);</span>F<span class="op">(</span>f19<span class="op">);</span></span>
@@ -7611,617 +7909,6 @@ what <strong>gcc</strong> is doing.</p>
 ]]></description>
     <pubDate>Sun, 01 May 2022 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/243-gcc-profiler-internals.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>gcc-12 journey</title>
-    <link>http://trofi.github.io/posts/242-gcc-12-journey.html</link>
-    <description><![CDATA[<p>It’s the end of April. This <a href="https://gcc.gnu.org/releases.html">means</a>
-<strong>gcc-12</strong> will likely get released soon.</p>
-<p>6 months passed since I wrote about fancy bugs in development versions
-of <strong>gcc</strong>. Nowadays I use <a href="https://gcc.gnu.org/pub/gcc/snapshots/LATEST-12/">weekly gcc snapshots</a>
-against <strong>nixpkgs</strong> tree. Usually I rebuild just my system against
-weekly <strong>gcc</strong> shapshots. But sometimes I build random packages to check
-how <strong>gcc</strong> behaves on more exotic code bases. Most of the time
-everything Just Works. It would be too boring if things worked all the
-time.</p>
-<p>Since November 2021 I encountered ~30 <strong>gcc</strong> bugs which
-makes it roughly one bug a week. I could hardly handle more than that.</p>
-<p>I’ll list most of these bugs below. ICEs (internal compiler errors) are
-usually the easiest to find and report. Wrong-code bugs are more
-interesting and are also way harder to minimize and report.</p>
-<p>I usually get to know a lot more about <strong>gcc</strong> from wrong-code cases.
-This time I got only two of them. I’ll start from them.</p>
-<h1 id="fipa-modref-strikes-again">-fipa-modref strikes again</h1>
-<p><a href="https://gcc.gnu.org/PR103432">ipa/103432</a>: <strong>gcc</strong> miscompiled
-<strong>libjxl</strong> in a way that test suite started failing.</p>
-<p>I can’t provide a small failure example as the bug requires specific
-inline to happen within one compilation.</p>
-<p>The effect program result difference when built with <strong>-O0</strong> versus
-<strong>-O2</strong>. The test was a floating point workload. Those always have a
-potential of being not-a-bug, but an expected precision loss (like
-<strong>fma()</strong> precision increase).</p>
-<p>It took me a while to reduce original test manually to something that
-is still a valid program but is small enough to be able to debug it.</p>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=a70faf6e4df7481c2c9a08a06657c20beb3043de">The fix</a>
-tells us what kind of error it was in <strong>gcc</strong>: information about inferred
-effects of functions was calculated but not actually used, something
-else’s ditails were used. It’s a nasty kind of bugs: things work for
-smaller programs and break only in non-trivial scenarios.</p>
-<p>I’m glad I spent some time to extract the reproducer.</p>
-<h1 id="global-constructors-wrong-code">global constructors wrong code</h1>
-<p><a href="https://gcc.gnu.org/PR104031">c++/104031</a>: <strong>gcc</strong> generated
-wrong global initializer for <strong>nix</strong>. Minimal example:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> vector</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  vector<span class="op">(){}</span>  <span class="op">~</span>vector<span class="op">(){}</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Info <span class="op">{</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    vector args<span class="op">;</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> arity <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> RegisterPrimOp</span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">[[</span><span class="ex">gnu::noipa</span><span class="op">,</span><span class="at"> </span><span class="ex">gnu::noinline</span><span class="op">]]</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    RegisterPrimOp<span class="op">(</span>Info info<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>info<span class="op">.</span>arity <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>            <span class="fu">__builtin_trap</span><span class="op">();</span></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> RegisterPrimOp <span class="va">s_op</span><span class="op">({</span></span>
-<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>args <span class="op">=</span> vector<span class="op">{},</span></span>
-<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>arity <span class="op">=</span> <span class="dv">0</span><span class="op">,</span></span>
-<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="op">});</span></span>
-<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{}</span></span></code></pre></div>
-<p>The code’s idea is to always have <strong>arity</strong> initialized to <strong>0</strong>. In
-practice <strong>gcc-12</strong> managed to put something else into <strong>arity</strong>:</p>
-<pre><code># ok:
-$ g++-11.2.0 main.cc -o main -O2 &amp;&amp; ./main
-
-# bad:
-$ g++-12.0.0 main.cc -o main -O2 &amp;&amp; ./main
-Illegal instruction (core dumped)</code></pre>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=aeca44768d54b089243004d1ef00d34dfa9f6530">The fix</a>
-sheds some light into why it happens: this declaration syntax is special
-and it was not handled in some definitions. As a result <strong>arity</strong> was
-uninitialized.</p>
-<h1 id="type-comparison-ice">type comparison ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103279">c++/101715</a>: <strong>gcc</strong> ICE
-on clang’s <strong>compiler-rt</strong> library. Minimized example:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> A<span class="op">&gt;</span> <span class="kw">struct</span> S <span class="op">{</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  S<span class="op">&lt;</span>A<span class="op">&gt;</span> <span class="op">&amp;</span> bar<span class="op">()</span> <span class="kw">noexcept</span><span class="op">(</span>A<span class="op">::</span>value<span class="op">);</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  S<span class="op">&lt;</span>A<span class="op">&gt;</span> <span class="op">&amp;</span> foo<span class="op">()</span> <span class="kw">noexcept</span><span class="op">(</span>A<span class="op">::</span>value<span class="op">);</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> A<span class="op">&gt;</span> S<span class="op">&lt;</span>A<span class="op">&gt;</span> <span class="op">&amp;</span> S<span class="op">&lt;</span>A<span class="op">&gt;::</span>foo<span class="op">()</span> <span class="kw">noexcept</span><span class="op">(</span>A<span class="op">::</span>value<span class="op">)</span> <span class="op">{}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ g++-12.0.0 -c a.c.cpp -std=c++14
-# no crash
-
-$ g++-12.0.0 -c a.c.cpp -std=c++17
-a.c.cpp:6:56: internal compiler error: canonical types differ for identical types 'S&lt;A&gt;&amp; (S&lt;A&gt;::)() noexcept (A::value)' and 'S&lt;A&gt;&amp; (S&lt;A&gt;::)() noexcept (A::value)'
-    6 | template &lt;class A&gt; S&lt;A&gt; &amp; S&lt;A&gt;::foo() noexcept(A::value) {}
-      |                                                        ^
-0xc3f6ee comptypes(tree_node*, tree_node*, int)
-        ../../gcc-12-20211226/gcc/cp/typeck.c:1558
-...</code></pre>
-<p>Note that <strong>-std=c++14</strong> is not enough to trigger the failure. <strong>gcc-11</strong>
-did change the default from <strong>gnu++14</strong> to <strong>gnu++17</strong>.</p>
-<p>Sometimes <strong>gcc</strong> needs to compare types for equality. That usually
-happens in template instantiation when closest specialization is picked.
-It might sound easy, but the subtlety is in details: template types can
-refer to other (possibly not yet defined) template types in their
-definition.</p>
-<p>When instantiation happens it’s crucial to resolve identical types into
-the same canonical type.</p>
-<p>In the <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=3abcbf243239f9576a60f4ce7f8ee4b3fa14784b">commit message</a>
-Marek added great explataion how canonical types came into divergence.</p>
-<h1 id="null-warnings-in-dynamic_cast-expressions">null warnings in dynamic_cast expressions</h1>
-<p><a href="https://gcc.gnu.org/PR96003">c++/96003</a>: <strong>gcc</strong> failed to build
-<strong>firefox</strong> (due to <strong>-Werror=null</strong>). Minimized example:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> A <span class="op">{</span> <span class="kw">virtual</span> <span class="op">~</span>A <span class="op">();</span> <span class="op">};</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> B <span class="op">{</span> <span class="kw">virtual</span> <span class="op">~</span>B <span class="op">();</span> <span class="dt">void</span> f <span class="op">();</span> <span class="op">};</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> f <span class="op">(</span>A <span class="op">*</span>p<span class="op">)</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span><span class="kw">dynamic_cast</span><span class="op">&lt;</span>B<span class="op">*&gt;(</span>p<span class="op">))</span></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">dynamic_cast</span><span class="op">&lt;</span>B<span class="op">*&gt;(</span>p<span class="op">)-&gt;</span>f <span class="op">();</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Build error:</p>
-<pre><code>$ gcc -O2 -S -Wall t.C
-t.C: In function ‘void f(A*)’:
-t.C:7:29: warning: ‘this’ pointer is null [-Wnonnull]
-    7 |     dynamic_cast&lt;B*&gt;(p)-&gt;f ();
-      |                             ^
-t.C:2:32: note: in a call to non-static member function ‘void B::f()’
-    2 | struct B { virtual ~B (); void f (); };
-      |                                ^</code></pre>
-<p>This time it’s not an <strong>ICE</strong> but a seemingly reasonable warning.
-Ideally original code should be restructured into something simpler, like:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> A <span class="op">{</span> <span class="kw">virtual</span> <span class="op">~</span>A <span class="op">();</span> <span class="op">};</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> B <span class="op">{</span> <span class="kw">virtual</span> <span class="op">~</span>B <span class="op">();</span> <span class="dt">void</span> f <span class="op">();</span> <span class="op">};</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> f <span class="op">(</span>A <span class="op">*</span>p<span class="op">)</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    B <span class="op">*</span> b <span class="op">=</span> <span class="kw">dynamic_cast</span><span class="op">&lt;</span>B<span class="op">*&gt;(</span>p<span class="op">);</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>b<span class="op">)</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>        b<span class="op">-&gt;</span>f <span class="op">();</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=df5cf47a978aaeb53fc2b18ff0b22eb4531a27d8">The fix</a>
-suppressed warnings for some cases where similar code is generated by
-<strong>gcc</strong> itself (instead of being handwritten). More complicated cases
-will still issue warnings.</p>
-<p>You might need to clean your code up to avoid similar warnings.</p>
-<h1 id="vectored-intrinsics-ice">vectored intrinsics ICE</h1>
-<p><a href="https://gcc.gnu.org/PR102080">middle-end/102080</a>: <strong>gcc</strong> ICE
-on <strong>firefox</strong> build. Minimized example:</p>
-<pre class="c+++"><code>// cat dec_reconstruct.cc.cc
-#pragma GCC target &quot;avx&quot;
-typedef float __m256 __attribute__((__vector_size__(32)));
-__m256 _mm256_blendv_ps___Y, _mm256_blendv_ps___M, _mm256_mul_ps___A,
-    _mm256_mul_ps___B, IfThenElse___trans_tmp_9;
-void IfThenElse(__m256 no) {
-  IfThenElse___trans_tmp_9 = __builtin_ia32_blendvps256(
-      no, _mm256_blendv_ps___Y, _mm256_blendv_ps___M);
-}
-#pragma GCC target &quot;avx512vl&quot;
-void EncodedFromDisplay() {
-  __m256 __trans_tmp_11 = _mm256_mul_ps___A * _mm256_mul_ps___B;
-  IfThenElse(__trans_tmp_11);
-}</code></pre>
-<p>ICE:</p>
-<pre><code>$ /tmp/gcc-c/gcc/xg++ -B/tmp/gcc-c/gcc -c dec_reconstruct.cc.cc -O0
-# no crash
-
-$ /tmp/gcc-c/gcc/xg++ -B/tmp/gcc-c/gcc -c dec_reconstruct.cc.cc -O2
-during RTL pass: expand
-dec_reconstruct.cc.cc: In function 'void EncodedFromDisplay()':
-dec_reconstruct.cc.cc:10:6: internal compiler error: in expand_insn, at optabs.c:7946
-   10 | void EncodedFromDisplay() {
-      |      ^~~~~~~~~~~~~~~~~~</code></pre>
-<p>The sample is not very readable but it’s essentially a direct call of
-<strong>__builtin_ia32_blendvps256()</strong> <strong>AVX</strong> intrinsic. Those usually get
-translated 1-to-1 into CPU instructions.</p>
-<p>Here the crash happens in <strong>expand_insn()</strong> where middle end expands
-<strong>GIMPLE</strong> (C style tree-like representation) into <strong>RTL</strong> (assembly style
-instruction-like representation). Assertion complains about unexpected
-arguments.</p>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=a26ff83ed07e33c4aa46f3314553c0d15ca21100">The fix</a>
-adjusts one of <strong>GIMPLE</strong> simplifiers to not generate invalid <strong>GIMPLE</strong>
-around vectored conditionals.</p>
-<h1 id="atomics-intrinsics-ice">atomics intrinsics ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103268">tree-optimization/103268</a>: <strong>gcc</strong> ICE
-on <strong>glib</strong> build. Minimized example:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> si<span class="op">;</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span></span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>test_types <span class="op">(</span><span class="dt">long</span> n<span class="op">)</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> u2 <span class="op">=</span> __atomic_fetch_xor <span class="op">(&amp;</span>si<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">);</span></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> u2<span class="op">;</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ gcc -O2 -S x.c
-during GIMPLE pass: fab
-x.c: In function ‘test_types’:
-x.c:3:1: internal compiler error: in optimize_atomic_bit_test_and, at tree-ssa-ccp.c:3645
-    3 | test_types (long n)
-      | ^~~~~~~~~~
-0x1515c9d optimize_atomic_bit_test_and
-    /export/gnu/import/git/gitlab/x86-gcc/gcc/tree-ssa-ccp.c:3645</code></pre>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=074ee8d9a91d7573c1e8774a22e4e08f923adb18">The fix</a>
-suggests the tree matcher had an accident fall-through code.
-It was supposed to reject unhandled cases instead of attempting
-to generate something nonsensical.</p>
-<h1 id="vectored-instructions-selector-ice">vectored instructions selector ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103557">target/103557</a>: <strong>gcc</strong> ICE
-on <strong>tpm2-tss</strong> build. Minimized example:</p>
-<pre><code>struct {
-  char sm3_256[32];
-} TPMU_HA;
-typedef struct {
-  short size;
-  char buffer[sizeof(TPMU_HA)];
-} TPM2B_DIGEST;
-typedef struct {
-  TPM2B_DIGEST auths[3];
-} TSS2L_SYS_AUTH_COMMAND;
-
-void Tss2_Sys_Clear(TSS2L_SYS_AUTH_COMMAND);
-
-void sysContext(void) {
-  TPM2B_DIGEST nonce = {};
-  TSS2L_SYS_AUTH_COMMAND sessionsDataIn = {{nonce}};
-  Tss2_Sys_Clear(sessionsDataIn);
-}</code></pre>
-<p>ICE:</p>
-<pre><code>$ gcc-12.0.0 -O2  -c a.c.c -o a.o
-during RTL pass: sched2
-a.c.c: In function 'sysContext':
-a.c.c:19:1: internal compiler error: Segmentation fault
-   19 | }
-      | ^
-0x1e22687 internal_error(char const*, ...)
-        ???:0
-0xe7e43c memory_operand(rtx_def*, machine_mode)
-        ???:0
-0x167e598 get_attr_memory(rtx_insn*)
-        ???:0
-0x19a4bc0 insn_default_latency_generic(rtx_insn*)
-        ???:0
-0x1c74ad3 insn_sched_cost(rtx_insn*)
-        ???:0
-0x1c77934 dep_cost_1(_dep*, unsigned int)
-        ???:0
-0x1c79d7f set_priorities(rtx_insn*, rtx_insn*)
-        ???:0
-0xec28e2 compute_priorities()
-        ???:0</code></pre>
-<p>In this case instruction selector fails to fetch the details
-around memory reference accessed by instruction.
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9519b694afbf9a35c36cf9f14d35d1c0e9e8cacc">The change</a>
-fixes <strong>x86</strong>-specific vectored instruction definitions to accept
-expected inputs.</p>
-<h1 id="another-atomics-ice">another atomics ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103682">tree-optimization/103682</a>: <strong>gcc</strong> ICE
-on some cryptographic code. Minimized example:</p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;atomic&gt;</span></span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="dt">bool</span> bug<span class="op">(</span><span class="bu">std::</span>atomic<span class="op">&lt;</span><span class="dt">unsigned</span><span class="op">&gt;</span> <span class="op">&amp;</span> ready<span class="op">,</span> <span class="dt">unsigned</span> u<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="op">(</span>ready<span class="op">.</span>fetch_and<span class="op">(~</span>u<span class="op">)</span> <span class="op">&amp;</span> u<span class="op">);</span></span>
-<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ g++-12.0.0 -Ofast -c bug.cpp
-during GIMPLE pass: fab
-bug.cpp: In function 'bool bug(std::atomic&lt;unsigned int&gt;&amp;, unsigned int)':
-bug.cpp:6:6: internal compiler error: gimple check: expected gimple_assign(error_mark), have gimple_nop() in gimple_assign_rhs_code, at gimple.h:2852
-    6 | bool bug(std::atomic&lt;unsigned&gt; &amp; ready, unsigned u) {
-      |      ^~~
-0x20a58f7 internal_error(char const*, ...)
-        ???:0
-0x7c76dd gimple_check_failed(gimple const*, char const*, int, char const*, gimple_code, tree_code)
-        ???:0</code></pre>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=a2a0c91b47537b16908981e206f4e42db8425eca">The fix</a>
-shows us it was another case where one particular case of <strong>GIMPLE</strong>
-form was not handled.</p>
-<h1 id="another-template-instantiation-ice">another template instantiation ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103769">c++/103769</a>: <strong>gcc</strong> ICE
-on <strong>openttd</strong>. Minimized example:</p>
-<div class="sourceCode" id="cb16"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">using</span> t <span class="op">=</span> T<span class="op">;</span></span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span><span class="op">...&gt;</span> <span class="kw">struct</span> s<span class="op">;</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span><span class="op">...</span> Args<span class="op">&gt;</span> s<span class="op">&lt;</span>t<span class="op">&lt;</span>Args<span class="op">&gt;...&gt;</span> f<span class="op">()</span> <span class="op">{</span> f<span class="op">&lt;</span><span class="dt">void</span><span class="op">&gt;();</span> <span class="op">}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ g++-12.0.0 --param=hash-table-verification-limit=1000 -O1 -o a.o -c bug.cpp
-
-hash table checking failed: equal operator returns true for a pair of values with a different hash value
-bug.cpp: In substitution of 'template&lt;class ... Args&gt; s&lt;Args ...&gt; f() [with Args = {void}]':
-bug.cpp:3:56:   required from here
-bug.cpp:3:43: internal compiler error: in hashtab_chk_error, at hash-table.c:137
-    3 | template &lt;typename... Args&gt; s&lt;t&lt;Args&gt;...&gt; f() { f&lt;void&gt;(); }
-      |                                           ^
-0x9c316d hashtab_chk_error()
-        ../../gcc-12-20220102/gcc/hash-table.c:137
-0xbeca15 hash_table&lt;spec_hasher, false, xcallocator&gt;::verify(spec_entry* const&amp;, unsigned int)
-        ../../gcc-12-20220102/gcc/hash-table.h:1036
-0xbecb6f hash_table&lt;spec_hasher, false, xcallocator&gt;::find_with_hash(spec_entry* const&amp;, unsigned int)
-        ../../gcc-12-20220102/gcc/hash-table.h:921
-0xbd58bc lookup_template_class_1
-        ../../gcc-12-20220102/gcc/cp/pt.c:9905</code></pre>
-<p>This is aanother <strong>c++</strong> frontend bug where identical types have
-different objects. Here I found out about <strong>--param=hash-table-verification-limit=1000</strong>
-option which enables more frequent type mismatches like this.
-Without this option the bug disappears when program is still large.</p>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=07be8f8da4c6840a1fd6b2229b147e50cc6f03dc">The change</a>
-shows it was a case of reused type object in typedef simplification.</p>
-<h1 id="yet-another-vectored-expansion-ice">yet another vectored expansion ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103842">target/103842</a>: <strong>gcc</strong> ICE
-on <strong>ilmbase-2.5.7</strong>. Minimized example:</p>
-<pre><code>void abs(float *);
-struct Matrix33 {
-  float x[3][3];
-  float *operator[](int i) { return x[i]; }
-  Matrix33();
-  Matrix33(float f, float g) {
-    x[1][0] = x[1][1] = x[1][2] = f;
-    x[2][0] = g;
-  }
-  void equalWithAbsError();
-  Matrix33 inverse() {
-    Matrix33 s(x[1][2] - x[1][2], x[1][1] - x[1][1]);
-    float r = s[2][0];
-    if (r)
-      for (int i = 0; i &lt; 3; ++i)
-        for (int j = 0; j &lt; 3; ++j)
-          s[i][j] /= r;
-    for (int i = 0;;) {
-      float *__trans_tmp_2 = s[i];
-      abs(__trans_tmp_2);
-    }
-  }
-};
-void __assert_fail() {
-  Matrix33 m, inv1 = m.inverse(), ident1 = inv1;
-  ident1.equalWithAbsError();
-}</code></pre>
-<p>ICE:</p>
-<pre><code>
-$ g++-12.0.0 -O3 -c bug.cpp.cpp
-during RTL pass: expand
-bug.cpp.cpp: In function 'void __assert_fail()':
-bug.cpp.cpp:27:5: internal compiler error: Segmentation fault
-   27 |     }
-      |     ^
-0x21196c6 internal_error(char const*, ...)
-        ???:0</code></pre>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=242783c52c22ed96eae722b2fa9847711ac84699">The change</a>
-fixes another case of <strong>x86</strong>-specific instruction selector that
-generates unexpected instruction parameters.</p>
-<h1 id="one-more-vectored-instruction-ice">one more vectored instruction ICE</h1>
-<p><a href="https://gcc.gnu.org/PR103894">target/103894</a>: <strong>gcc</strong> ICE
-on <strong>valgrind</strong>.</p>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=1096ab1775636f35de9c6661f8f71f03299af998">The change</a>
-fixes marking of available SSE instructions in 32-bit mode.</p>
-<h1 id="precompiled-headers">precompiled headers</h1>
-<p><a href="https://gcc.gnu.org/PR103910">target/103910</a>: <strong>gcc</strong> ICE
-on <strong>openjdk</strong>. Minimized example:</p>
-<pre><code>#include &quot;precompiled.hpp&quot;
-void *operator new(unsigned long, void *__p) { return __p; }
-#define MEMORY_TYPES_DO(f) f(mtNone, )
-enum MEMFLAGS {};
-#define MEMORY_TYPE_SHORTNAME(type, human_readable) MEMFLAGS type;
-MEMORY_TYPES_DO(MEMORY_TYPE_SHORTNAME) struct GrowableArrayView {
-  GrowableArrayView(int *, int, int);
-};
-int *GrowableArrayWithAllocator_data;
-struct GrowableArrayWithAllocator : GrowableArrayView {
-  GrowableArrayWithAllocator(int initial_max)
-      : GrowableArrayView(GrowableArrayWithAllocator_data, initial_max, 0) {
-    for (int i = 0; i &lt; initial_max; i++)
-      new (&amp;GrowableArrayWithAllocator_data[i]) int();
-  }
-};
-struct GrowableArrayMetadata {
-  GrowableArrayMetadata(MEMFLAGS);
-};
-struct GrowableArray : GrowableArrayWithAllocator {
-  GrowableArrayMetadata _metadata;
-  GrowableArray(int initial_max)
-      : GrowableArrayWithAllocator(initial_max), _metadata(mtNone) {}
-};
-struct SourceObjList {
-  SourceObjList();
-};
-SourceObjList::SourceObjList() { GrowableArray(128 * 1024); }</code></pre>
-<p>ICE:</p>
-<pre><code>$ rm -rf ph
-$ mkdir -p ph
-$ touch precompiled_.hpp # create empty file
-$ ./xg++ -B. -O3 -march=opteron -fcheck-new -c precompiled_.hpp -o ph/precompiled.hpp.gch
-$ ./xg++ -B. -O3 -march=opteron -fcheck-new -Iph -c archiveBuilder.cpp -o a.o
-
-during GIMPLE pass: aprefetch
-archiveBuilder.cpp: In constructor ‘SourceObjList::SourceObjList()’:
-archiveBuilder.cpp:28:1: internal compiler error: in gimple_build_call, at gimple.c:267
-   28 | SourceObjList::SourceObjList() { GrowableArray(128 * 1024); }
-      | ^~~~~~~~~~~~~
-0xd2845f gimple_build_call(tree_node*, unsigned int, ...)
-        gcc/gimple.c:267
-0x12880c8 emit_mfence_after_loop
-        gcc/tree-ssa-loop-prefetch.c:1300
-0x12880c8 mark_nontemporal_stores
-        gcc/tree-ssa-loop-prefetch.c:1359
-0x12880c8 loop_prefetch_arrays
-        gcc/tree-ssa-loop-prefetch.c:1955
-0x12880c8 tree_ssa_prefetch_arrays()
-        gcc/tree-ssa-loop-prefetch.c:2031
-0x1288be9 execute
-        gcc/tree-ssa-loop-prefetch.c:2097</code></pre>
-<p>This is an unusual and scary case: precompiled headers are implemented
-as a serialization of part of <strong>gcc</strong> heap. The serialization tries
-hard to be very fast and cuts corners in various places. Up to the point
-where building positional-independent <strong>gcc</strong> binary breaks <strong>GCH</strong>:
-<a href="https://gcc.gnu.org/PR71934" class="uri">https://gcc.gnu.org/PR71934</a>. It’s very fragile. It does not have to be.</p>
-<p>To make <strong>GCH</strong> somehow work <strong>gcc</strong>’s internals have garbage collector
-implementation. It requires global variables to be annotated with
-<strong>gcc</strong>-specific <a href="https://gcc.gnu.org/onlinedocs//gccint/GTY-Options.html">GTY markings</a>
-that describe heap layout.</p>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=d243f4009d8071b734df16cd70f4c5d09a373769">The change</a>
-hints at an <strong>x86_mfence</strong> global variable that did not have the marking.</p>
-<p>Why did it break only with <strong>GCH</strong>?</p>
-<p>Without <strong>GCH</strong>, <strong>x86_mfence</strong> is referenced via another global object which
-has <strong>GTY</strong> marking. Both are constructed via normal means of <strong>gcc</strong>
-parsing the source.</p>
-<p>With GCH, that another global object is restored at a different location
-and the decl that is refenced by <strong>x86_mfence</strong> is GC’ed out.</p>
-<h1 id="c-frontend-constructor-ice">C++ frontend constructor ICE</h1>
-<p><a href="https://gcc.gnu.org/PR104583">c++/103910</a>: <strong>gcc</strong> ICE
-on <strong>dolphin-emu</strong>. Minimized example:</p>
-<div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> TVec3 <span class="op">{</span></span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  TVec3<span class="op">();</span></span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int</span> data<span class="op">;</span></span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>using Vec3 <span class="op">=</span> TVec3<span class="op">;</span></span>
-<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> <span class="op">{</span></span>
-<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  Vec3 position<span class="op">{};</span></span>
-<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> EmulatePoint_state<span class="op">;</span></span>
-<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> EmulatePoint<span class="op">()</span> <span class="op">{</span> EmulatePoint_state <span class="op">=</span> <span class="op">{};</span> <span class="op">}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ /tmp/gcc/xg++ -B/tmp/gcc -c bug.cc -freport-bug
-bug.cc: In function ‘void EmulatePoint()’:
-bug.cc:9:42: internal compiler error: in cp_gimplify_expr, at cp/cp-gimplify.cc:746
-    9 | void EmulatePoint() { EmulatePoint_state = {}; }
-      |                       ~~~~~~~~~~~~~~~~~~~^~~~
-0x7a0fb2 cp_gimplify_expr(tree_node**, gimple**, gimple**)
-        gcc/cp/cp-gimplify.cc:746
-0xd9fb80 gimplify_expr(tree_node**, gimple**, gimple**, bool (*)(tree_node*), int)
-        gcc/gimplify.cc:14893
-0xdab095 gimplify_init_ctor_preeval
-        gcc/gimplify.cc:4678</code></pre>
-<p>In this case <strong>gcc</strong> was unable to generate <strong>GIMPLE</strong> out of
-<strong>EmulatePoint_state = {};</strong> statement.</p>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=f8c1f29a0b47b4b4a3c1506678f7ca2ce4b7ffbb">The change</a>
-expands set of cases that look like a constructor call.</p>
-<h1 id="fun-option-handling-bug">fun option handling bug</h1>
-<p><a href="https://gcc.gnu.org/PR104705">middle-end/104705</a>: <strong>gcc</strong> ICEs when
-tried to build <strong>ghc</strong>.</p>
-<p>Normally I would expect <strong>ghc</strong> to be the last project to crash <strong>gcc</strong>
-as it does not do anything fancy in C land. And yet here we are.
-Minimized example:</p>
-<div class="sourceCode" id="cb24"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#pragma GCC optimize &quot;foo&quot;</span></span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#pragma GCC push_options</span></span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#pragma GCC pop_options</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ /tmp/bg/gcc/xgcc -B/tmp/bg/gcc -c a.c  -O2 -Wall
-a.c:1:9: warning: bad option ‘-ffoo’ to pragma ‘optimize’ [-Wpragmas]
-    1 | #pragma GCC optimize &quot;foo&quot;
-      |         ^~~
-a.c:3:9: internal compiler error: ‘global_options’ are modified in local context
-    3 | #pragma GCC pop_options
-      |         ^~~</code></pre>
-<p>A cryptic assert.
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=111754595cf8d3a8ae7063a42ac4cea18a304711">The fix</a>
-says that <strong>-g*</strong> option was not accounted for when option contexts are
-created and destroyed with pragmas.</p>
-<h1 id="unexpected-analyzer-ices">unexpected analyzer ICEs</h1>
-<p><a href="https://gcc.gnu.org/PR105074">analyzer/105074</a>: <strong>gcc</strong> ICE when
-tried to build <strong>gnutls</strong>.</p>
-<div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> _gnutls_log<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*);</span></span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> _gnutls_ocsp_verify_mandatory_stapling<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  _gnutls_log<span class="op">(</span>__func__<span class="op">);</span></span>
-<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> check_ocsp_response_gnutls_x509_cert_verify_peers<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>  _gnutls_ocsp_verify_mandatory_stapling<span class="op">();</span></span>
-<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ /tmp/gb/gcc/xgcc -B/tmp/gb/gcc -O2 -fanalyzer -c cert-session.c
-
-during IPA pass: analyzer
-In function ‘_gnutls_ocsp_verify_mandatory_stapling’,
-    inlined from ‘check_ocsp_response_gnutls_x509_cert_verify_peers’ at cert-session.c:7:3:
-cert-session.c:4:3: internal compiler error: Segmentation fault
-    4 |   _gnutls_log(__func__);
-      |   ^~~~~~~~~~~~~~~~~~~~~
-0xdd6bc3 crash_signal
-        gcc/toplev.cc:322
-0x8a8120 cgraph_node::get_edge(gimple*)
-        gcc/cgraph.cc:744
-0x121059c ipa_ref_requires_tracking
-        gcc/analyzer/region.cc:1192
-0x121059c symnode_requires_tracking_p
-        gcc/analyzer/region.cc:1235
-0x121059c ana::decl_region::calc_tracked_p(tree_node*)
-        gcc/analyzer/region.cc:1254
-0x1234786 ana::decl_region::decl_region(unsigned int, ana::region const*, tree_node*)</code></pre>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=1203e8f7880c9751ece5f5302e413b20f4608a00">The change</a>
-adjusts the checks for expressions without explicit declaration.</p>
-<p>On a surface side it’s an obscure <strong>-fanalyzer</strong> crash on <strong><strong>func</strong></strong>
-expression that should not pop up frequently. Perhaps <strong>gnutls</strong> is a
-rare package that enables <strong>-fanalyser</strong>?</p>
-<p>No. If we look at the source of <strong>-fanalyzer</strong> flag we’ll find that it’s
-one of default warnings of … <a href="https://git.savannah.gnu.org/cgit/gnulib.git/commit/?id=3831e2e9f355c557b0c0ed9712548b62feaf694f"><strong>gnulib(!)</strong></a>.</p>
-<p>We will probably see a lot more analyser crashes as it’s one of the
-more complex pieces of <strong>gcc</strong>.</p>
-<h1 id="ia64-rtl-mach-ice">ia64 RTL mach ICE</h1>
-<p><a href="https://gcc.gnu.org/PR105215">target/105215</a>: <strong>gcc</strong> ICE
-on <strong>openssl</strong> (<strong>ia64</strong> target).</p>
-<p>Not fixed yet.</p>
-<h1 id="ia64-rtl-mach-ice-1">ia64 RTL mach ICE</h1>
-<p><a href="https://gcc.gnu.org/PR105247">target/105247</a>: <strong>gcc</strong> ICE
-on <strong>sqlite-3.38.2</strong> (<strong>ia64</strong> target). Minimal example:</p>
-<div class="sourceCode" id="cb28"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> sqlite3CodeVerifySchemaAtToplevel_pToplevel_0<span class="op">;</span></span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> sqlite3CodeVerifySchema<span class="op">();</span></span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> sqlite3FindInIndex_pParse<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int</span> i <span class="op">=</span> <span class="op">-</span><span class="dv">8</span><span class="op">;</span></span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  sqlite3CodeVerifySchema<span class="op">(</span>sqlite3FindInIndex_pParse<span class="op">,</span> i<span class="op">);</span></span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> sqlite3CodeVerifySchema<span class="op">(</span><span class="dt">int</span><span class="op">,</span> <span class="dt">int</span> iDb<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>  sqlite3CodeVerifySchemaAtToplevel_pToplevel_0 <span class="op">|=</span> <span class="dv">1</span> <span class="op">&lt;&lt;</span> iDb<span class="op">;</span></span>
-<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>ICE:</p>
-<pre><code>$ ia64-unknown-linux-gnu-gcc -O1 -c sqlite3-sqlite3.o.c -o a.o
-
-during RTL pass: cse1
-sqlite3-sqlite3.o.c: In function 'sqlite3FindInIndex_pParse':
-sqlite3-sqlite3.o.c:7:1: internal compiler error: in decompose, at rtl.h:2288
-    7 | }
-      | ^
-0xa02263 wi::int_traits&lt;&gt;::decompose()
-        ../../gcc-12-20220410/gcc/rtl.h:2288
-0xa02263 wide_int_ref_storage&lt;&gt;::wide_int_ref_storage&lt;&gt;()
-        ../../gcc-12-20220410/gcc/wide-int.h:1024
-0xa02263 generic_wide_int&lt;&gt;::generic_wide_int&lt;&gt;()
-        ../../gcc-12-20220410/gcc/wide-int.h:782
-0xa02263 wide_int_storage::wide_int_storage&lt;&gt;()</code></pre>
-<p><a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=ba2f60499dd4a3bc1bb4e99fa12dda3bc1548519">The change</a>
-has a great explanation of the details by Jakub: arithmetic shift
-(to implement <strong>1 &lt;&lt; iDb</strong>) on <strong>ia64</strong> is slightly different from
-other targets: it’s defined only for 64-bit type (<strong>long</strong> /
-<strong>unsigned ulong</strong> types).</p>
-<h1 id="popcount-and-libgcc">popcount and libgcc</h1>
-<p><a href="https://gcc.gnu.org/PR105253">middle-end/105253</a>: <strong>gcc</strong> fails
-to build <strong>linux</strong>. Minimal example:</p>
-<div class="sourceCode" id="cb30"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span></span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>foo <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span> <span class="dt">long</span> <span class="op">*</span>p<span class="op">)</span></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int</span> i<span class="op">,</span> cnt <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">long</span> <span class="dt">long</span> elem<span class="op">;</span></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="op">(</span><span class="dv">256</span> <span class="op">/</span> <span class="dv">64</span><span class="op">);</span> i<span class="op">++)</span></span>
-<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
-<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>      elem <span class="op">=</span> p<span class="op">[</span>i<span class="op">];</span></span>
-<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>      <span class="cf">for</span> <span class="op">(;</span> elem<span class="op">;</span> cnt<span class="op">++)</span></span>
-<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>        elem <span class="op">&amp;=</span> elem <span class="op">-</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> cnt<span class="op">;</span></span>
-<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Link error:</p>
-<pre><code>ERROR: modpost: &quot;__popcountdi2&quot; [drivers/net/ethernet/broadcom/bnx2x/bnx2x.ko] undefined!
-ERROR: modpost: &quot;__popcountdi2&quot; [drivers/gpu/drm/amd/amdgpu/amdgpu.ko] undefined!</code></pre>
-<p>Long time ago <strong>gcc</strong> used to produce direct CPU instructions to
-implement this code. Nowadays <strong>gcc</strong> recognises this pattern
-and converts it to a <strong>__builtin_popcountl()</strong> call.</p>
-<p>If CPU supports <strong>popcnt</strong> instruction then <strong>gcc</strong> emits it as is.
-But if CPU has no support for it <strong>gcc</strong> generates <strong>__popcountdi2</strong>
-external function call. <strong>__popcountdi2</strong> is implemented in <strong>libgcc</strong>
-for all targets.</p>
-<p>Normally such a replacement just works. But linux kernel does not use <strong>libgcc</strong> for
-various rasons and prefers to re-implement such builtins (division,
-shifts, memcpy, strlen operations). But <strong>popcout</strong> ones did not
-occur frequently enough to be re-implemented in kernel.</p>
-<p>One of the fixes would be to extend linux kernel with <strong>popcount</strong>.
-But so far <strong>gcc</strong>
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=29c46490de4616b911fccb34a9479f768fb51e94">tweaked</a>
-cost heuristics to avoid such conversion for targets that don’t have
-efficient <strong>popcnt</strong>.</p>
-<p>Until next time perhaps :)</p>
-<h1 id="parting-words">Parting words</h1>
-<p>Most of these bugs are short-lived and would have no chance to slip
-into a release. Most ICEs are also not hard to workaround when
-encountered.</p>
-<p>The wrong-code bugs are the subtlest. These usually live for a while
-until they get noticed.</p>
-<p>Bug stats by subsystem:</p>
-<ul>
-<li>6 <strong>target</strong>: 3 vectorisation bugs, 2 <strong>ia64</strong> bugs, 1 <strong>GCH</strong> bug</li>
-<li>5 <strong>c++</strong> frontend</li>
-<li>3 <strong>middle-end</strong>: vectorisation, option parsing and popcount instruction one bug each</li>
-<li>2 <strong>tree-opt</strong>: both are atomics bugs</li>
-<li>1 <strong>ipa</strong></li>
-<li>1 <strong>analyzer</strong></li>
-</ul>
-<p>If not for <strong>ia64</strong> bugs <strong>c++</strong> would be the primary source of bugs.</p>
-<p><strong>gcc-12</strong> is very close to a release cut date. I hope it to be smooth.</p>
-<p>As usual here is a list if notable changes for upcoming release:
-<a href="https://gcc.gnu.org/gcc-12/changes.html" class="uri">https://gcc.gnu.org/gcc-12/changes.html</a></p>
-<p>If you feel like it do give the <strong>gcc</strong> snapshot a try.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on April 24, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Sun, 24 Apr 2022 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/242-gcc-12-journey.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
