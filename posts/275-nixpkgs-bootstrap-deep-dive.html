@@ -1,0 +1,1233 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: nixpkgs bootstrap deep dive</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>nixpkgs bootstrap deep dive</h1>
+
+            <h2 id="the-problem">The problem</h2>
+<p>A while ago Thomas
+<a href="https://github.com/NixOS/nixpkgs/issues/208412">noticed</a> that
+<code>libgcc_s.so</code> used by <code>nixpkgs</code> does not match <code>gcc</code> version it was
+supposed to come with. Tl;DR of the issue:</p>
+<ul>
+<li><code>aarch64</code> uses <code>gcc-11</code> as a default compiler</li>
+<li>but somehow default <code>libgcc_s.so</code> (used by many c++ programs) comes
+from <code>gcc-9</code></li>
+</ul>
+<p>This version skew causes issues because <code>gcc-11</code> relies on symbols
+exported from <code>libgcc_s.so</code> versions that were added after <code>ggc-9</code>
+release. Example taken from <a href="https://github.com/NixOS/nixpkgs/issues/201254">Issue #201254</a>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;atomic&gt;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> foo<span class="op">(</span><span class="dt">int</span> i<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>   std<span class="op">::</span>atomic<span class="op">&lt;</span><span class="dt">int</span><span class="op">&gt;</span> f<span class="op">(</span>i<span class="op">);</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>   <span class="cf">return</span> f<span class="op">.</span>fetch_add<span class="op">(</span><span class="dv">3</span><span class="op">);</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code>$ g++ --std=c++20 -c $src -o test.o
+$ g++ --std=c++20 -shared -Wl,-z,defs test.o -o libtest.so 
+
+ld: /build/test.o: in function `foo(int)':
+test.cpp:(.text+0x2c): undefined reference to `__aarch64_ldadd4_acq_rel'
+collect2: error: ld returned 1 exit status</code></pre>
+<p>Such link errors are related to atomic operations not directly supported
+by CPU. <code>gcc-11</code> and later generates fallback code to call into
+<code>libgcc_s.so</code>.</p>
+<h2 id="bootstrap-refresher">Bootstrap refresher</h2>
+<p>Not too long ago I wrote a bit about
+<a href="../posts/240-nixpkgs-bootstrap-intro.html">nixpkgs bootstrap intro</a>
+in context of bugs related to <code>glibc</code> version lookup. High-level
+overview presented there is mostly correct. But some details I got
+wrong.</p>
+<p>I’ll sort them out here to clarify why version skew happens and how
+we could fix it using existing bootstrap framework in <code>nixpksg</code>.</p>
+<h2 id="bootstrap-debugging-hacks">Bootstrap debugging hacks</h2>
+<p>Before the dive into specifics of our issue let’s explore generic
+debugging tips to see how runtime and build-time dependencies are laid
+out.</p>
+<p><strong>Tip 1</strong>: <code>stdenv.cc</code> is the compiler wrapper used to compile apps:</p>
+<pre><code>$ nix-build -A stdenv.cc
+/nix/store/wn31i3dzwahz6ccws8bs1nwyqrpgsvj7-gcc-wrapper-11.3.0
+
+$ ls result/bin/
+addr2line  c++      cpp      g++    ld       nm       ranlib   strings
+ar         cc       dwp      gcc    ld.bfd   objcopy  readelf  strip
+as         c++filt  elfedit  gprof  ld.gold  objdump  size</code></pre>
+<p>It’s called <code>wrapper</code> because <code>gcc</code> and <code>g++</code> are shell scripts that
+pass default locations to <code>glibc</code> locations and similar when call
+actual <code>gcc</code> binary. Tht hides in another package.</p>
+<p><strong>Tip 2</strong>: <code>stdenv.cc.cc</code> is the unwrapped compiler binary used by
+<code>stdenv.cc</code> wrapper:</p>
+<pre><code>$ nix-build -A stdenv.cc.cc
+/nix/store/sxdx80lmk4zkhb51f4x5dgqvxgmx55wl-gcc-11.3.0
+
+$ ls result/bin/
+c++     gcc-ranlib                    x86_64-unknown-linux-gnu-g++
+cpp     gcov                          x86_64-unknown-linux-gnu-gcc
+g++     gcov-dump                     x86_64-unknown-linux-gnu-gcc-11.3.0
+gcc     gcov-tool                     x86_64-unknown-linux-gnu-gcc-ar
+gcc-ar  lto-dump                      x86_64-unknown-linux-gnu-gcc-nm
+gcc-nm  x86_64-unknown-linux-gnu-c++  x86_64-unknown-linux-gnu-gcc-ranlib</code></pre>
+<p><strong>Tip 3</strong>: <code>stdenv.__bootPackages</code> refers to package set used to build
+<code>stdenv</code>.</p>
+<pre><code>$ nix-build -A stdenv
+/nix/store/cp65c8nk29qq5cl1wyy5qyw103cwmax7-stdenv-linux
+$ nix-build -A stdenv.__bootPackages.stdenv
+/nix/store/5ch2gc6i97iw7vlyksdhapqrh7bmiwwj-bootstrap-stage4-stdenv-linux
+$ nix-build -A stdenv.__bootPackages.stdenv.__bootPackages.stdenv
+/nix/store/f7vl4b9lwflwblqbf3g81xgjji1nldf7-bootstrap-stage3-stdenv-linux
+
+$ nix-build -A stdenv.cc.cc
+/nix/store/sxdx80lmk4zkhb51f4x5dgqvxgmx55wl-gcc-11.3.0
+
+$ ./result/bin/gcc --version | head -n1
+gcc (GCC) 11.3.0
+
+$ nix-build -A stdenv.__bootPackages.stdenv.__bootPackages.stdenv.cc.cc
+/nix/store/p4s4jf7aq6v6z9iazll1aiqwb34aqxq9-bootstrap-tools
+
+$ ./result/bin/gcc --version | head -n1
+gcc (GCC) 8.3.0</code></pre>
+<p>Here we see that final <code>stdenv.c</code> is <code>gcc-11</code>. It is different from
+<code>stage3-stdenv</code> which is <code>gcc-8</code>. This is an <code>x86_64</code> machine, on
+<code>aarch64</code> you would see <code>gcc-9</code> in <code>stage3-stdenv</code>.</p>
+<p><strong>Tip 4</strong>: <code>nix-store --query --graph $pkg</code> can tell us runtime depends
+(closure) of a given package.</p>
+<p>For example here is the <strong>runtime</strong> subset of all build-time depends
+used for final unwrapped compiler:</p>
+<pre><code>$ nix-store --query --graph $(nix-build -A stdenv.cc.cc) | dot -Tsvg &gt; gcc-runtime.svg</code></pre>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/01-gcc-runtime.svg" /></p>
+<p><strong>Tip 5</strong>: <code>nix-instantiate</code> is useful to explore the build-time graph.</p>
+<pre><code>$ nix-store --query --graph $(nix-instantiate -A stdenv.__bootPackages.stdenv.__bootPackages.stdenv.cc.cc) |
+    dot -Tsvg &gt; gcc-buildtime.svg</code></pre>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/02-gcc-buildtime.svg" /></p>
+<p>I picked bootstrap (prebuilt) <code>gcc</code> which uses 2 downloaded tarballs:</p>
+<ul>
+<li><code>busybox</code> executable</li>
+<li><code>bootstrap-tools.tar.xz</code> full of executable tools</li>
+</ul>
+<p><code>unpack-bootstrap-tools.sh</code> is a shell script used to unpack and
+relocate <code>bootstrap-tools.tar.xz</code> to final package output directory.</p>
+<p>I did not pick final <code>gcc</code> as an example because it pulls in 300
+dependencies including bootstrap <code>gcc</code>, 4 variants of <code>binutils</code> and
+all their depends. Too large to be meaningful.</p>
+<h2 id="breakage-mechanics">Breakage mechanics</h2>
+<p>Having glanced at debugging tools let’s get back to our <code>libgcc_s.so.1</code>
+problem.</p>
+<p>The version skew described in the beginning happens because
+<code>libgcc_s.so</code> gets copied into <code>glibc</code>‘s output from <code>gcc</code> it was
+compiled with. In fact all of <code>glibc</code> was compiled with <code>bootstrapTools</code>’
+<code>gcc-8</code> (and not <code>nixpkgs</code>’ <code>gcc-11</code>!):</p>
+<pre><code>$ nix-build -A glibc
+/nix/store/ayfr5l52xkqqjn3n4h9jfacgnchz1z7s-glibc-2.35-224
+$ strings ./result/lib/libgcc_s.so.1 | grep -F '(GNU)'
+GCC: (GNU) 8.3.0
+$ strings ./result/lib/libc.so.6 | grep -F '(GNU)'
+GCC: (GNU) 8.3.0</code></pre>
+<p>It would probably be not be a huge problem if bootstrap <code>gcc</code> was fresh
+enough. So why not just update bootstrap <code>gcc</code> in
+<code>bootstrap-tools.tar.xz</code> and be done with it?</p>
+<p>It is feasible, but not very practical to do on a regular basis. It is
+easy to do twice a year, but harder to do with each <code>gcc</code> update
+<code>nixpkgs</code> sees.</p>
+<p>Also having too fresh <code>bootstrapTools</code> is also a bit tricky as version
+downgrades (if we chose to rollback <code>nixpkgs</code>) would also need some
+care.</p>
+<p>Unfortunately <code>bootstrapTools</code> frequently does not get updated for a few
+years and <code>libgcc_s.so</code> is as outdated. Just rebuilding <code>bootstrapTools</code>
+would fix the problem for this instance. Until next major <code>libgcc_s.so</code>
+update. Not very predictable.</p>
+<p>What we could do instead is to update <code>gcc</code> first and then build fresh
+<code>glibc</code>.</p>
+<p>Let’s see what dependency graph our bootstrap tower has. Can we spot the
+staleness problem just by looking at the dependency references?</p>
+<p>Let’s focus on just <code>gcc</code> and <code>glibc</code> packages for now and ignore
+everything else.</p>
+<p>I suggest grepping through the build dependency graph to fish out only
+needed details.</p>
+<pre><code>nix-store --query --graph $(nix-instantiate -A stdenv) |
+    grep -P '((stdenv|bootstrap).*-&gt;.*(gcc|glibc-[^a-z]))|((gcc|glibc-[^a-z]).*-&gt;.*(stdenv|bootstrap))|[{}]' |
+    sed 's/&quot;[0-9a-z]\{32\}-/&quot;/g' | dot -Tsvg &gt; gcc-and-glibc.svg</code></pre>
+<p>It’s a scary looking grep, but it’s idea is to find two types of arrows
+in <code>.dot</code> formatted output:</p>
+<ul>
+<li>arrows from <code>stdenv</code> (or <code>bootstrap</code>) to <code>gcc</code> (or <code>glibc</code>): to find
+places where we decide to <strong>build</strong> new <code>gcc</code> (or <code>glibc</code>).</li>
+<li>arrows and from <code>gcc</code> (or <code>glibc</code>) to <code>stdenv</code> (or <code>bootstrap</code>): to
+find places where we decide to <strong>use</strong> some version of <code>gcc</code> (or
+<code>glibc</code>).</li>
+</ul>
+<p>This crude grep destorys some intermediary arrows and leaves nodes to
+hang in the air. In reality all the <code>stdenv</code> nodes are chained in
+sequence via compiler wrappers. But grep does does capture most of
+important details. Here is what <code>.dot</code> generated us
+(<a href="../posts.data/275-nixpkgs-bootstrap-deep-dive/03-gcc-and-glibc.svg">enlarge the graph</a>):</p>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/03-gcc-and-glibc.svg" /></p>
+<p>The main takeaways from this picture are (aka the Legend):</p>
+<ul>
+<li><code>glibc</code> is built once (green box) using only bootstrap <code>gcc</code></li>
+<li><code>gcc</code> is built once (red box) using only bootstrap <code>gcc</code></li>
+<li>yellow boxes are bootstrap seed binaries (<code>gcc</code>, <code>glibc</code> and many others)</li>
+</ul>
+<p>Once again <code>gcc-wrapper</code> are just wrapper scripts that add
+default paths to <code>binutils</code>, to <code>glibc</code> and similar when actual
+<code>gcc</code> executable is called. Thus <code>gcc-wrapper</code> nodes don’t denote
+<code>gcc</code> binary rebuild.</p>
+<p>Now, if we look at the definition of our <a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/glibc/default.nix#L66-L84">glibc expression</a>
+we will see how <code>libgcc_s.so</code> gets persisted there:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co"># When building glibc from bootstrap-tools, we need libgcc_s at RPATH for</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co"># any program we run, because the gcc will have been placed at a new</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co"># store path than that determined when built (as a source for the</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co"># bootstrap-tools tarball)</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Building from a proper gcc staying in the path where it was installed,</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co"># libgcc_s will now be at {gcc}/lib, and gcc's libgcc will be found without</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="co"># any special hack.</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="co"># </span><span class="al">TODO</span><span class="co">: remove this hack. Things that rely on this hack today:</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="co"># - dejagnu: during linux bootstrap tcl SIGSEGVs</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="co"># - clang-wrapper in cross-compilation</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="co"># Last attempt: https://github.com/NixOS/nixpkgs/pull/36948</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>preInstall = <span class="st">''</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="st">  if [ -f </span><span class="sc">${</span>stdenv.cc.cc<span class="sc">}</span><span class="st">/lib/libgcc_s.so.1 ]; then</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="st">      mkdir -p $out/lib</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="st">      cp </span><span class="sc">${</span>stdenv.cc.cc<span class="sc">}</span><span class="st">/lib/libgcc_s.so.1 $out/lib/libgcc_s.so.1</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a><span class="st">      # the .so It used to be a symlink, but now it is a script</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a><span class="st">      cp -a </span><span class="sc">${</span>stdenv.cc.cc<span class="sc">}</span><span class="st">/lib/libgcc_s.so $out/lib/libgcc_s.so</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a><span class="st">  fi</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a><span class="st">''</span>;</span></code></pre></div>
+<p>The snippet copies a single file from <code>stdenv.cc.cc</code> attribute path
+after <code>glibc</code> is built. In this case <code>stdenv.cc.cc</code> is <code>gcc</code> from
+<code>bootstrapTools</code> via <code>bootstrap-stage2-stdenv-linux.drv</code> version of
+<code>stdenv</code>. We can see this arrow on the picture as well.</p>
+<p>To ease tracing of the origin for this file it would be better to place
+a symlink here instead of a file copy. That way we would clearly see
+undesired reference instead of resorting to <code>strings</code> call.</p>
+<h2 id="an-ideal-bootstrap">An ideal bootstrap</h2>
+<p>Cleary our bootstrap is problematic right now as it fails to link a
+subset of binaries and seems to use suspiciously old <code>gcc</code> to build
+<code>glibc</code> that almost any other package uses.</p>
+<p>How would an ideal bootstrap look like?</p>
+<p>Let’s settle down on more specific goals our bootstrap shold achieve.</p>
+<p>If our goal is to get something that is able to link binaries we could
+just use <code>bootstrapTools</code> as our <code>stdenv</code>: no need to build anything,
+<code>gcc</code>, <code>glibc</code> and <code>libgcc_s.so</code> are all consistent (if we build it
+right).</p>
+<p>The only problem in using <code>bootstrapTools</code> directly is that patching
+<code>gcc</code> or <code>glibc</code> will require rebuilding and re-uploading
+<code>bootstrapTools</code>. It’s less convenient than just tweaking <code>.nix</code> files
+but could be done as well. It’s not that much of added automation on
+top of what hydra does today. The security aspect is more nuanced as
+these binaries are the foundation of the rest of the build. If somebody
+could sneak in malicious code there that would be problematic. Frequent
+rebuilds would probably make it simpler (or not :).</p>
+<p>Anyway, using <code>bootstrapTools</code> directly is not very convenient for local
+toolchain development.</p>
+<p>Thus we want something sliglty more complicated: we need to build new
+set of bootstrap tools using current <code>nixpkgs</code> expressions as target
+versions of <code>gcc</code>, <code>glibc</code> and friends and use that instead. This
+creates a logical recursion of <code>bootstrapTools</code> -&gt; <code>nixpkgs</code> -&gt;
+<code>new-bootstrapTools</code>. But it’s not a fundamental one: we can do one
+iteration (or, say, 10 iterations) of the resursion and declare final
+result (whatever it is) a good enough fresh set of tools. This is, after
+all, how most distributions build and provide toolchains nowadays.</p>
+<p>So, when should we stop our rebuild recursion? How do we define good
+enough?</p>
+<p>More specific goals of bootstrap process could be the following:</p>
+<ol type="1">
+<li>Get rid of all the references (or copies) of <code>bootstrapTools</code>
+binaries.</li>
+<li>Avoid use of code generators emitted by <code>bootstrapTools</code> binaries.</li>
+</ol>
+<p>Goal 2 is a moral equivalent of [1.]: if <code>bootstrapTools</code> contained
+a buggy code generator we would like to get rid of it’s effect by
+rebuilding everything using <code>nixpkgs</code> versions of code generatos.</p>
+<p>As it stands today <code>nixpkgs</code> achieves <code>[1.]</code> but not <code>[2.]</code>.</p>
+<p><code>[2.]</code> would help both in correctness and predictability of the final
+result. At least we would not get version skews of various components.</p>
+<p>On top of that new versions of code generators (like <code>gcc</code> or
+<code>binutils</code>) frequently add extra features to the output useful for
+performance, portability, safety or other.</p>
+<p>From standpoint of “what built what” our current bootstrap process looks
+like that:</p>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/04-current-bootstrap.svg" /></p>
+<p>Arrows here denote code emitted by generator.</p>
+<p>The picture can be summarised as: <code>bootstrapTools</code> build our code
+generators (<code>gcc</code>) and generate code for <code>glibc</code>.</p>
+<p><strong>Ideal</strong> bootstrap instead could look like this:</p>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/05-ideal-bootstrap.svg" /></p>
+<p>Here cyan (rebuilt) and white (used as is) boxes all use the same
+version of code generators and runtime libraries that <code>nixpkgs</code>
+provides. Completely untangled from <code>bootstrapTools</code>!</p>
+<p>The only change from current bootstrap process is an extra intermediate
+<code>gcc</code> rebuild.</p>
+<h2 id="other-caveats">Other caveats</h2>
+<p><code>gcc</code> is not the only code generator that we inherit from
+<code>bootstrapTools</code>. We also need to track generators like <code>binutils</code> and
+possibly other interpreters and non-trivial data manglers like <code>awk</code>,
+<code>bash</code>, <code>install</code>, <code>make</code> and <code>patchelf</code>.</p>
+<p>Of the list above <code>binutils</code> and <code>patchelf</code> are probably the most
+interesting.</p>
+<h2 id="stdenv-bootstrap-tower">stdenv bootstrap tower</h2>
+<p>At least now now we have a plan: add an extra <code>gcc</code> rebuild step into
+bootstrap sequence. Sounds easy. How do we do that?</p>
+<p>The rebuild stages are defined in
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/default.nix#L192-L554">pkgs/stdenv/linux/default.nix</a>.</p>
+<p>Let’s talk about stage and package structure a bit.</p>
+<p><code>nixpkgs</code> exposes users a set of packages to build. Most of these
+packages use <code>stdenv</code> (or other packages) to construct build
+environment. <code>nixpkgs</code> package structure is usually presented to
+developers as something similar to the below:</p>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/06-nixpkgs-structure-naive.svg" /></p>
+<p>The cycles in the graph of packages are forbidden (they require explicit
+handling by duplicating packages). Most packages usually pull in <code>stdenv</code>
+which exposes <code>gcc</code> in some form. Looks simple.</p>
+<p>The only annoyance is that <code>stdenv</code>’s own packages like <code>gcc</code> and <code>glibc</code> do
+take part in this graph.</p>
+<p>This might mean that <code>gcc</code> and <code>glibc</code> don’t use final <code>stdenv</code>, and they
+use previous instances of <code>stdenv</code> instead. Say, something along these lines:</p>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/06-nixpkgs-structure-recurse.svg" /></p>
+<p>This picture is a simple extension of previous picture. Given <code>pkgs1</code> set of
+packages we can construct <code>pkgs2</code> by building packages in order:</p>
+<ul>
+<li>first <code>gcc</code></li>
+<li>then <code>glibc</code></li>
+<li>and finally build <code>xz</code> (with new <code>stdenv</code>)</li>
+</ul>
+<p>In reality each bootstrap step is split into a few smaller steps where
+each handles it’s own part of <code>stdenv</code> update:</p>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/07-nixpkgs-structure-real.svg" /></p>
+<p>While this picture is closer to reality it still simplifies real graph
+a bit. Across all 4 (instead of previous 2) package sets we build the same 3
+packages as in previous picture:</p>
+<ul>
+<li>first <code>gcc</code> in <code>pkgs2</code></li>
+<li>then <code>glibc</code> in <code>pkgs3</code></li>
+<li>then <code>xz</code> in <code>pkgs4</code></li>
+</ul>
+<p>It might take quite a bit of mental effort to chase through pointers. It
+is certainly harder to reason about it.</p>
+<p>If you ever wondered how actual <code>gcc</code> attribute then is defined it’s in
+<code>pkgs/top-level/all-packages.nix</code> as:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>  inherit <span class="op">(</span><span class="kw">let</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>      <span class="va">num</span> <span class="op">=</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>        <span class="kw">if</span> <span class="op">(</span><span class="kw">with</span> stdenv.targetPlatform<span class="op">;</span> isVc4 <span class="op">||</span> libc == <span class="st">&quot;relibc&quot;</span><span class="op">)</span> <span class="kw">then</span> <span class="dv">6</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">else</span> <span class="kw">if</span> <span class="op">(</span>stdenv.targetPlatform.isAarch64 <span class="op">&amp;&amp;</span> stdenv.isLinux<span class="op">)</span> <span class="kw">then</span> <span class="dv">9</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">else</span> <span class="dv">11</span><span class="op">;</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>      <span class="va">numS</span> <span class="op">=</span> <span class="bu">toString</span> num<span class="op">;</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">in</span> <span class="op">{</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>      <span class="va">gcc</span> <span class="op">=</span> pkgs.$<span class="op">{</span><span class="st">&quot;</span>gcc<span class="sc">${</span>numS<span class="sc">}</span><span class="st">&quot;</span><span class="op">};</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>      <span class="va">gccFun</span> <span class="op">=</span> callPackage <span class="op">(</span><span class="ss">../development/compilers/gcc</span> <span class="op">+</span> <span class="st">&quot;/</span><span class="sc">${</span>numS<span class="sc">}</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">})</span> gcc gccFun;</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  gcc<span class="op">-</span>unwrapped = gcc.cc;</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>  gcc11 = lowPrio <span class="op">(</span>wrapCC <span class="op">(</span>callPackage <span class="ss">../development/compilers/gcc/11</span> <span class="op">{</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">inherit</span> noSysDirs<span class="op">;</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="va">reproducibleBuild</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>    <span class="va">profiledCompiler</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>    <span class="va">libcCross</span> <span class="op">=</span> <span class="kw">if</span> stdenv.targetPlatform <span class="op">!</span>= stdenv.buildPlatform <span class="kw">then</span> libcCross <span class="kw">else</span> <span class="cn">null</span><span class="op">;</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>    <span class="va">threadsCross</span> <span class="op">=</span> <span class="kw">if</span> stdenv.targetPlatform <span class="op">!</span>= stdenv.buildPlatform <span class="kw">then</span> threadsCross <span class="kw">else</span> <span class="op">{};</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>    <span class="va">isl</span> <span class="op">=</span> <span class="kw">if</span> <span class="op">!</span>stdenv.isDarwin <span class="kw">then</span> isl_0_20 <span class="kw">else</span> <span class="cn">null</span><span class="op">;</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>  <span class="op">}))</span>;</span></code></pre></div>
+<p>If you are not very well versed in <code>nix</code> language the above is equivalent to:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>  gcc = pkgs.gcc11;</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  gcc<span class="op">-</span>unwrapped = gcc.cc;</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  gcc11 = lowPrio <span class="op">(</span>wrapCC <span class="op">(</span>callPackage <span class="ss">../development/compilers/gcc/11</span> <span class="op">{</span> <span class="op">...</span> <span class="op">}</span></span></code></pre></div>
+<p>It’s a typically-looking package definition where package description
+hides in <code>pkgs/development/compilers/gcc/11/default.nix</code>:
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/compilers/gcc/11/default.nix" class="uri">https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/compilers/gcc/11/default.nix</a></p>
+<p>So, back to our goal: we want to add an extra bootstrap step to build <code>gcc</code>.</p>
+<p>Let’s trace through existing <code>bootstrapTools</code>’ <code>gcc</code> installation. How
+does that get injected into our <code>stdenv</code> tower? It all starts from
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/stdenv/linux/default.nix#L206">bootstrap-stage0</a>:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>  <span class="op">(</span><span class="va">prevStage</span><span class="op">:</span> stageFun prevStage <span class="op">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;bootstrap-stage0&quot;</span><span class="op">;</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="va">overrides</span> <span class="op">=</span> <span class="va">self</span><span class="op">:</span> <span class="va">super</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>      <span class="co"># We thread stage0's stdenv through under this name so downstream stages</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>      <span class="co"># can use it for wrapping gcc too. This way, downstream stages don't need</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>      <span class="co"># to refer to this stage directly, which violates the principle that each</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>      <span class="co"># stage should only access the stage that came before it.</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>      <span class="va">ccWrapperStdenv</span> <span class="op">=</span> self.stdenv<span class="op">;</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>      <span class="co"># ...</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>      <span class="va">gcc-unwrapped</span> <span class="op">=</span> bootstrapTools<span class="op">;</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>  <span class="op">})</span></span></code></pre></div>
+<p>Looks easy! We just define <code>gcc-unwrapped</code> to point to our
+<code>bootstrapTools</code> prebuilt binaries and declare it a success. We also set
+something called <code>ccWrapperStdenv</code>. These variables are used in
+<code>stageFun</code> defined a few lines above <code>bootstrap-stage0</code>:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>  <span class="co"># This function builds the various standard environments used during</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="co"># the bootstrap.  In all stages, we build an stdenv and the package</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  <span class="co"># set that can be built with that stdenv.</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  stageFun = <span class="va">prevStage</span><span class="op">:</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span> <span class="va">name</span><span class="op">,</span> <span class="va">overrides</span> <span class="op">?</span> <span class="op">(</span><span class="va">self</span><span class="op">:</span> <span class="va">super</span><span class="op">:</span> <span class="op">{}),</span> <span class="va">extraNativeBuildInputs</span> <span class="op">?</span> <span class="op">[]</span> <span class="op">}</span>:</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>      <span class="va">thisStdenv</span> <span class="op">=</span> <span class="bu">import</span> <span class="ss">../generic</span> <span class="op">{</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>        <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;</span><span class="sc">${</span>name<span class="sc">}</span><span class="st">-stdenv-linux&quot;</span><span class="op">;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>        <span class="co"># ...</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>        <span class="va">cc</span> <span class="op">=</span> <span class="kw">if</span> prevStage.gcc<span class="op">-</span>unwrapped == <span class="cn">null</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>             <span class="kw">then</span> <span class="cn">null</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>             <span class="kw">else</span> lib.makeOverridable <span class="op">(</span><span class="bu">import</span> <span class="ss">../../build-support/cc-wrapper</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>          <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;</span><span class="sc">${</span>name<span class="sc">}</span><span class="st">-gcc-wrapper&quot;</span><span class="op">;</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>          <span class="co"># ...</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>          <span class="va">cc</span> <span class="op">=</span> prevStage.gcc<span class="op">-</span>unwrapped<span class="op">;</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>          <span class="va">bintools</span> <span class="op">=</span> prevStage.binutils<span class="op">;</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>          <span class="va">libc</span> <span class="op">=</span> getLibc prevStage<span class="op">;</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>          <span class="co"># ...</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>          <span class="va">stdenvNoCC</span> <span class="op">=</span> prevStage.ccWrapperStdenv<span class="op">;</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>        <span class="co"># ...</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>      <span class="op">};</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">in</span> <span class="op">{</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a>      <span class="kw">inherit</span> config overlays<span class="op">;</span></span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a>      <span class="va">stdenv</span> <span class="op">=</span> thisStdenv<span class="op">;</span></span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>;</span></code></pre></div>
+<p>Here we define <code>stdenv = thisStdenv</code> populated with <code>cc</code> attribute that
+refers <code>prevStage.gcc-unwrapped</code> from previous stage (and place it into
+a wrapper).</p>
+<p><code>bootstrap-stage0</code> was not too bad. Let’s have a peek at <code>bootstrap-stage1</code>:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Create the first &quot;real&quot; standard environment.  This one consists</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="co"># of bootstrap tools only, and a minimal Glibc to keep the GCC</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="co"># configure script happy.</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">(</span><span class="va">prevStage</span><span class="op">:</span> stageFun prevStage <span class="op">{</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;bootstrap-stage1&quot;</span><span class="op">;</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Rebuild binutils to use from stage2 onwards.</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="va">overrides</span> <span class="op">=</span> <span class="va">self</span><span class="op">:</span> <span class="va">super</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>      <span class="va">binutils-unwrapped</span> <span class="op">=</span> super.binutils<span class="op">-</span>unwrapped.override <span class="op">{</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        <span class="va">enableGold</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>      <span class="op">};</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>      <span class="kw">inherit</span> <span class="op">(</span>prevStage<span class="op">)</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>        ccWrapperStdenv</span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>        gcc-unwrapped coreutils gnugrep<span class="op">;</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>      ${<span class="va">localSystem</span>.<span class="va">libc</span><span class="op">}</span> = getLibc prevStage<span class="op">;</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>      <span class="co"># A threaded perl build needs glibc/libpthread_nonshared.a,</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>      <span class="co"># which is not included in bootstrapTools, so disable threading.</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>      <span class="co"># This is not an issue for the final stdenv, because this perl</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>      <span class="co"># won't be included in the final stdenv and won't be exported to</span></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>      <span class="co"># top-level pkgs as an override either.</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>      <span class="va">perl</span> <span class="op">=</span> super.perl.override <span class="op">{</span> <span class="va">enableThreading</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span> <span class="va">enableCrypt</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span> <span class="op">};</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>;</span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>  }<span class="op">)</span></span></code></pre></div>
+<p>Here we use our <code>stdenv</code> to build <code>perl</code>, <code>binutils-unwrapper</code>
+and their numerous dependencies.</p>
+<p>What packages do we actually build using only <code>stdenv-stage0</code>?</p>
+<p>We rely on packages’ dependencies as specified in their <code>default.nix</code>
+files. Who knows what is there now. The simplest way to find out is to
+query the build graph directly:</p>
+<p>Here I assume that most of packages are pulling in
+<code>bootstrap-stage1-stdenv</code> directly (without any intermediate steps).</p>
+<pre><code>$ nix-store --query --graph $(nix-instantiate -A stdenv) |
+    grep -P &quot;.*bootstrap-stage1-stdenv.*-&gt;.*&quot; | sed 's/&quot;[0-9a-z]\{32\}-/&quot;/g'
+
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;perl-5.36.0.drv&quot; [color = &quot;black&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;zlib-1.2.13.drv&quot; [color = &quot;green&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;gnum4-1.4.19.drv&quot; [color = &quot;black&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;expand-response-params.drv&quot; [color = &quot;magenta&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;binutils-2.39.drv&quot; [color = &quot;green&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;binutils-wrapper-2.39.drv&quot; [color = &quot;green&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;bison-3.8.2.drv&quot; [color = &quot;burlywood&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;gettext-0.21.drv&quot; [color = &quot;red&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;xz-5.2.9.drv&quot; [color = &quot;burlywood&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;bash-5.1-p16.drv&quot; [color = &quot;blue&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;binutils-wrapper-2.39.drv&quot; [color = &quot;green&quot;];
+&quot;bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;texinfo-6.8.drv&quot; [color = &quot;green&quot;];</code></pre>
+<p><code>perl</code> and <code>binutils</code> are here. But on top of that we also got <code>zlib</code>,
+<code>gnum4</code>, <code>expand-response-params</code>, <code>bison</code>, <code>gettext</code>, <code>xz</code>, <code>bash</code>,
+<code>binutils-wrapper</code> and <code>texinfo</code>. Curiously no <code>python</code> or <code>make</code> in the
+list.</p>
+<p>Now, if we do nothing special most of these dependencies will get
+rebuilt on each of our 5 stages of bootstrap: our <code>stdenv</code> usually
+changes on each step and normally you need local <code>binutils-unwrapped</code>
+for each of them.</p>
+<p>To avoid rebuilds of every single one of them we need to pick the
+packages and propagate them further. That is done by inheriting them
+from previous stage. Just like the cyan arrow on the picture
+<a href="../posts.data/275-nixpkgs-bootstrap-deep-dive/07-nixpkgs-structure-real.svg">above</a>.</p>
+<p>Let’s peek at how <code>bootstrap-stage2</code> does that:</p>
+<pre><code>  # 2nd stdenv that contains our own rebuilt binutils and is used for
+  # compiling our own Glibc.
+  # ...
+  (prevStage: stageFun prevStage {
+    name = &quot;bootstrap-stage2&quot;;
+
+    overrides = self: super: {
+      inherit (prevStage)
+        ccWrapperStdenv
+        gcc-unwrapped coreutils gnugrep
+        perl gnum4 bison;
+      # ...
+    };
+  })</code></pre>
+<p>Note that <code>xz</code> or <code>texinfo</code> are not in the list. They will get rebuilt.
+I think it’s an omission. Let’s see how many times do we rebuild, say,
+<code>xz</code>:</p>
+<pre><code>$ nix-store --query --graph $(nix-instantiate -A stdenv) |
+    grep -P &quot;.*bootstrap-stage.*-stdenv.*-&gt;.*xz-5.2.9&quot;
+
+&quot;...-bootstrap-stage1-stdenv-linux.drv&quot; -&gt; &quot;...aw8n-xz-5.2.9.drv&quot; [color = &quot;burlywood&quot;];
+&quot;...-bootstrap-stage2-stdenv-linux.drv&quot; -&gt; &quot;...ywnn-xz-5.2.9.drv&quot; [color = &quot;green&quot;];
+&quot;...-bootstrap-stage3-stdenv-linux.drv&quot; -&gt; &quot;...mmfc-xz-5.2.9.drv&quot; [color = &quot;burlywood&quot;];
+&quot;...-bootstrap-stage4-stdenv-linux.drv&quot; -&gt; &quot;...icqq-xz-5.2.9.drv&quot; [color = &quot;green&quot;];</code></pre>
+<p>4 times: In all 4 arrows have different store paths. In every single
+stage we rebuild <code>xz</code> on and on. It’s very likely a bug. It’s a simple
+tool and we could use just one version of it until the final rebuild.</p>
+<p>Let’s do a dirty histogram of all the rebuilds we do. Maybe we have more
+of those?</p>
+<pre><code>$ nix-store --query --graph $(nix-instantiate -A stdenv) |
+    grep -P &quot; -&gt; &quot; | awk '{print $3}' | sort -u |
+    sed 's/&quot;[0-9a-z]\{32\}-/&quot;/g' | sort | uniq -c | sort -n | awk '$1 &gt; 1'
+
+      2 &quot;autoconf-2.71.drv&quot;
+      2 &quot;automake-1.16.5.drv&quot;
+      2 &quot;bootstrap-stage1-stdenv-linux.drv&quot;
+      2 &quot;bootstrap-stage2-stdenv-linux.drv&quot;
+      2 &quot;bootstrap-stage4-stdenv-linux.drv&quot;
+      2 &quot;bzip2-1.0.8.drv&quot;
+      2 &quot;file-5.43.drv&quot;
+      2 &quot;help2man-1.49.2.drv&quot;
+      2 &quot;hook.drv&quot;
+      2 &quot;libtool-2.4.7.drv&quot;
+      2 &quot;patchelf-0.15.0.drv&quot;
+      2 &quot;perl5.36.0-gettext-1.07.drv&quot;
+      3 &quot;binutils-2.39.drv&quot;
+      3 &quot;binutils-wrapper-2.39.drv&quot;
+      3 &quot;expand-response-params.drv&quot;
+      3 &quot;gettext-0.21.drv&quot;
+      3 &quot;libxcrypt-4.4.33.drv&quot;
+      3 &quot;perl-5.36.0.drv&quot;
+      3 &quot;texinfo-6.8.drv&quot;
+      3 &quot;zlib-1.2.13.drv&quot;
+      4 &quot;bash-5.1-p16.drv&quot;
+      4 &quot;xz-5.2.9.drv&quot;</code></pre>
+<p>I’d say <code>xz</code> should follow <code>bzip2</code> pattern of rebuilds. <code>bash</code> rebuild
+count also looks excessive. So does <code>binutils</code>. All are good candidates
+for cleanup.</p>
+<p>Let’s move on to existing <code>gcc</code> rebuild to see if it follows the same
+override pattern as <code>bootstrapTools</code> one. It’s override happens in
+<code>bootstrap-stage3</code>:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Construct a third stdenv identical to the 2nd, except that this</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  <span class="co"># one uses the rebuilt Glibc from stage2.  It still uses the recent</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="co"># binutils and rest of the bootstrap tools, including GCC.</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">(</span><span class="va">prevStage</span><span class="op">:</span> stageFun prevStage <span class="op">{</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;bootstrap-stage3&quot;</span><span class="op">;</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    <span class="va">overrides</span> <span class="op">=</span> <span class="va">self</span><span class="op">:</span> <span class="va">super</span><span class="op">:</span> <span class="kw">rec</span> <span class="op">{</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>      <span class="kw">inherit</span> <span class="op">(</span>prevStage<span class="op">)</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>        ccWrapperStdenv</span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>        binutils coreutils gnugrep</span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>        perl patchelf linuxHeaders gnum4 bison libidn2 libunistring<span class="op">;</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>      ${<span class="va">localSystem</span>.<span class="va">libc</span><span class="op">}</span> = getLibc prevStage<span class="op">;</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>      <span class="va">gcc-unwrapped</span> <span class="op">=</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="va">makeStaticLibrariesAndMark</span> <span class="op">=</span> <span class="va">pkg</span><span class="op">:</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>              lib.makeOverridable <span class="op">(</span>pkg.override <span class="op">{</span> <span class="va">stdenv</span> <span class="op">=</span> self.makeStaticLibraries self.stdenv<span class="op">;</span> <span class="op">})</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>                .overrideAttrs <span class="op">(</span><span class="va">a</span><span class="op">:</span> <span class="op">{</span> <span class="va">pname</span> <span class="op">=</span> <span class="st">&quot;</span><span class="sc">${</span>a.pname<span class="sc">}</span><span class="st">-stage3&quot;</span><span class="op">;</span> <span class="op">});</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>        <span class="kw">in</span> super.gcc<span class="op">-</span>unwrapped.override <span class="op">{</span></span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Link GCC statically against GMP etc.  This makes sense because</span></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a>        <span class="co"># these builds of the libraries are only used by GCC, so it</span></span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>        <span class="co"># reduces the size of the stdenv closure.</span></span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a>        <span class="va">gmp</span> <span class="op">=</span> makeStaticLibrariesAndMark super.gmp<span class="op">;</span></span>
+<span id="cb20-23"><a href="#cb20-23" aria-hidden="true" tabindex="-1"></a>        <span class="va">mpfr</span> <span class="op">=</span> makeStaticLibrariesAndMark super.mpfr<span class="op">;</span></span>
+<span id="cb20-24"><a href="#cb20-24" aria-hidden="true" tabindex="-1"></a>        <span class="va">libmpc</span> <span class="op">=</span> makeStaticLibrariesAndMark super.libmpc<span class="op">;</span></span>
+<span id="cb20-25"><a href="#cb20-25" aria-hidden="true" tabindex="-1"></a>        <span class="va">isl</span> <span class="op">=</span> makeStaticLibrariesAndMark super.isl_0_20<span class="op">;</span></span>
+<span id="cb20-26"><a href="#cb20-26" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Use a deterministically built compiler</span></span>
+<span id="cb20-27"><a href="#cb20-27" aria-hidden="true" tabindex="-1"></a>        <span class="co"># see https://github.com/NixOS/nixpkgs/issues/108475 for context</span></span>
+<span id="cb20-28"><a href="#cb20-28" aria-hidden="true" tabindex="-1"></a>        <span class="va">reproducibleBuild</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb20-29"><a href="#cb20-29" aria-hidden="true" tabindex="-1"></a>        <span class="va">profiledCompiler</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb20-30"><a href="#cb20-30" aria-hidden="true" tabindex="-1"></a>      <span class="op">};</span></span>
+<span id="cb20-31"><a href="#cb20-31" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>;</span>
+<span id="cb20-32"><a href="#cb20-32" aria-hidden="true" tabindex="-1"></a>    extraNativeBuildInputs = <span class="op">[</span> prevStage.patchelf <span class="op">]</span> <span class="op">++</span></span>
+<span id="cb20-33"><a href="#cb20-33" aria-hidden="true" tabindex="-1"></a>      <span class="co"># Many tarballs come with obsolete config.sub/config.guess that don't recognize aarch64.</span></span>
+<span id="cb20-34"><a href="#cb20-34" aria-hidden="true" tabindex="-1"></a>      lib.optional <span class="op">(!</span>localSystem.isx86 <span class="op">||</span> localSystem.libc == <span class="st">&quot;musl&quot;</span><span class="op">)</span></span>
+<span id="cb20-35"><a href="#cb20-35" aria-hidden="true" tabindex="-1"></a>                   prevStage.updateAutotoolsGnuConfigScriptsHook;</span>
+<span id="cb20-36"><a href="#cb20-36" aria-hidden="true" tabindex="-1"></a>  }<span class="op">)</span></span></code></pre></div>
+<p>Apart from enabling static library builds it’s our typical <code>gcc-unwrapped</code>
+definition.</p>
+<p>Then in <code>bootstrap-stage4</code> we explicitly define <code>gcc</code> attribute as a wrapper
+against <code>gcc-unwrapped</code> from a previous stage:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Construct a fourth stdenv that uses the new GCC.  But coreutils is</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="co"># still from the bootstrap tools.</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">(</span><span class="va">prevStage</span><span class="op">:</span> stageFun prevStage <span class="op">{</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;bootstrap-stage4&quot;</span><span class="op">;</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    <span class="va">overrides</span> <span class="op">=</span> <span class="va">self</span><span class="op">:</span> <span class="va">super</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>      <span class="co"># Zlib has to be inherited and not rebuilt in this stage,</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>      <span class="co"># because gcc (since JAR support) already depends on zlib, and</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>      <span class="co"># then if we already have a zlib we want to use that for the</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>      <span class="co"># other purposes (binutils and top-level pkgs) too.</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>      <span class="kw">inherit</span> <span class="op">(</span>prevStage<span class="op">)</span> gettext gnum4 bison perl texinfo zlib linuxHeaders libidn2 libunistring<span class="op">;</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>      ${<span class="va">localSystem</span>.<span class="va">libc</span><span class="op">}</span> = getLibc prevStage<span class="op">;</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>      <span class="va">binutils</span> <span class="op">=</span> super.binutils.override <span class="op">{</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Don't use stdenv's shell but our own</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>        <span class="va">shell</span> <span class="op">=</span> self.bash <span class="op">+</span> <span class="st">&quot;/bin/bash&quot;</span><span class="op">;</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>        <span class="co"># Build expand-response-params with last stage like below</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>        <span class="va">buildPackages</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>          <span class="kw">inherit</span> <span class="op">(</span>prevStage<span class="op">)</span> stdenv<span class="op">;</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>      <span class="op">};</span></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>      <span class="co"># force gmp to rebuild so we have the option of dynamically linking</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>      <span class="co"># libgmp without creating a reference path from:</span></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>      <span class="co">#   stage5.gcc -&gt; stage4.coreutils -&gt; stage3.glibc -&gt; bootstrap</span></span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>      <span class="va">gmp</span> <span class="op">=</span> lib.makeOverridable <span class="op">(</span>super.gmp.override <span class="op">{</span> <span class="va">stdenv</span> <span class="op">=</span> self.stdenv<span class="op">;</span> <span class="op">})</span>.overrideAttrs <span class="op">(</span><span class="va">a</span><span class="op">:</span> <span class="op">{</span> <span class="va">pname</span> <span class="op">=</span> <span class="st">&quot;</span><span class="sc">${</span>a.pname<span class="sc">}</span><span class="st">-stage4&quot;</span><span class="op">;</span> <span class="op">});</span></span>
+<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>      <span class="co"># To allow users' overrides inhibit dependencies too heavy for</span></span>
+<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>      <span class="co"># bootstrap, like guile: https://github.com/NixOS/nixpkgs/issues/181188</span></span>
+<span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a>      <span class="va">gnumake</span> <span class="op">=</span> super.gnumake.override <span class="op">{</span> <span class="va">inBootstrap</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span> <span class="op">};</span></span>
+<span id="cb21-31"><a href="#cb21-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-32"><a href="#cb21-32" aria-hidden="true" tabindex="-1"></a>      <span class="va">gcc</span> <span class="op">=</span> lib.makeOverridable <span class="op">(</span><span class="bu">import</span> <span class="ss">../../build-support/cc-wrapper</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb21-33"><a href="#cb21-33" aria-hidden="true" tabindex="-1"></a>        <span class="va">nativeTools</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb21-34"><a href="#cb21-34" aria-hidden="true" tabindex="-1"></a>        <span class="va">nativeLibc</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb21-35"><a href="#cb21-35" aria-hidden="true" tabindex="-1"></a>        <span class="va">isGNU</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb21-36"><a href="#cb21-36" aria-hidden="true" tabindex="-1"></a>        <span class="va">buildPackages</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb21-37"><a href="#cb21-37" aria-hidden="true" tabindex="-1"></a>          <span class="kw">inherit</span> <span class="op">(</span>prevStage<span class="op">)</span> stdenv<span class="op">;</span></span>
+<span id="cb21-38"><a href="#cb21-38" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb21-39"><a href="#cb21-39" aria-hidden="true" tabindex="-1"></a>        <span class="va">cc</span> <span class="op">=</span> prevStage.gcc<span class="op">-</span>unwrapped<span class="op">;</span></span>
+<span id="cb21-40"><a href="#cb21-40" aria-hidden="true" tabindex="-1"></a>        <span class="va">bintools</span> <span class="op">=</span> self.binutils<span class="op">;</span></span>
+<span id="cb21-41"><a href="#cb21-41" aria-hidden="true" tabindex="-1"></a>        <span class="va">libc</span> <span class="op">=</span> getLibc self<span class="op">;</span></span>
+<span id="cb21-42"><a href="#cb21-42" aria-hidden="true" tabindex="-1"></a>        <span class="kw">inherit</span> lib<span class="op">;</span></span>
+<span id="cb21-43"><a href="#cb21-43" aria-hidden="true" tabindex="-1"></a>        <span class="kw">inherit</span> <span class="op">(</span>self<span class="op">)</span> stdenvNoCC coreutils gnugrep<span class="op">;</span></span>
+<span id="cb21-44"><a href="#cb21-44" aria-hidden="true" tabindex="-1"></a>        <span class="va">shell</span> <span class="op">=</span> self.bash <span class="op">+</span> <span class="st">&quot;/bin/bash&quot;</span><span class="op">;</span></span>
+<span id="cb21-45"><a href="#cb21-45" aria-hidden="true" tabindex="-1"></a>      <span class="op">};</span></span>
+<span id="cb21-46"><a href="#cb21-46" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>;</span>
+<span id="cb21-47"><a href="#cb21-47" aria-hidden="true" tabindex="-1"></a>    <span class="co"># ...</span></span>
+<span id="cb21-48"><a href="#cb21-48" aria-hidden="true" tabindex="-1"></a>  }<span class="op">)</span></span></code></pre></div>
+<p>We re-wrap <code>binutils</code> and <code>gcc</code> against previous <code>stdenv</code>. That is a bit
+more complicated than our initial <code>bootstrapTools</code> dance. I think it’s
+only needed to construct final <code>gcc</code> and <code>binutils</code> attributes. It’s not
+crucial for bootstrap process but important for final package set.
+Packages normally rely rely on <code>stdenv.cc</code> attribute as a compiler and
+don’t usually refer <code>gcc</code> attribute itself directly.</p>
+<p>Thus we have a pattern of how to splice an extra stage with <code>gcc</code>
+rebuild:</p>
+<ul>
+<li>in our new stage we need to pass through all the tools next stage
+inherits to avoid unnecessary rebuilds and we need to define
+<code>gcc-unwrapped</code>.</li>
+<li>in stage after we’ll get our result in <code>stdenv</code> automatically.</li>
+</ul>
+<p>Simple!</p>
+<h2 id="first-attempt-at-the-override">First attempt at the override</h2>
+<p>The natural place to plug our <code>gcc</code> rebuild is between
+<code>bootstrap-stage1</code> (<code>binutils-unwrapped</code> rebuild) and <code>bootstrap-stage2</code>
+(where we build special runtime dependencies for <code>glibc</code>).</p>
+<p>I copied <code>boostrap-stage2</code> into <code>bootstrap-stage1.5-gcc-unwrapped</code>
+and added only <code>gcc-unwrapped</code> definiton there:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/linux/default.nix</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/linux/default.nix</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -278,6 +278,73 @@ in</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>     };</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>   })</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  (prevStage: stageFun prevStage {</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="va">+    name = &quot;bootstrap-stage1.5-gcc-unwrapped&quot;;</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a><span class="va">+    overrides = self: super: {</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a><span class="va">+      inherit (prevStage)</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a><span class="va">+        ccWrapperStdenv</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a><span class="va">+        coreutils gnugrep</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a><span class="va">+        perl gnum4 bison;</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a><span class="va">+      ${localSystem.libc} = getLibc prevStage;</span></span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a><span class="va">+      gcc-unwrapped =</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a><span class="va">+        let makeStaticLibrariesAndMark = pkg:</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a><span class="va">+              lib.makeOverridable (pkg.override { stdenv = self.makeStaticLibraries self.stdenv; })</span></span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a><span class="va">+                .overrideAttrs (a: { pname = &quot;${a.pname}-stage3&quot;; });</span></span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a><span class="va">+        in super.gcc-unwrapped.override {</span></span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a><span class="va">+        # Link GCC statically against GMP etc.  This makes sense because</span></span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a><span class="va">+        # these builds of the libraries are only used by GCC, so it</span></span>
+<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a><span class="va">+        # reduces the size of the stdenv closure.</span></span>
+<span id="cb22-26"><a href="#cb22-26" aria-hidden="true" tabindex="-1"></a><span class="va">+        gmp = makeStaticLibrariesAndMark super.gmp;</span></span>
+<span id="cb22-27"><a href="#cb22-27" aria-hidden="true" tabindex="-1"></a><span class="va">+        mpfr = makeStaticLibrariesAndMark super.mpfr;</span></span>
+<span id="cb22-28"><a href="#cb22-28" aria-hidden="true" tabindex="-1"></a><span class="va">+        libmpc = makeStaticLibrariesAndMark super.libmpc;</span></span>
+<span id="cb22-29"><a href="#cb22-29" aria-hidden="true" tabindex="-1"></a><span class="va">+        isl = makeStaticLibrariesAndMark super.isl_0_20;</span></span>
+<span id="cb22-30"><a href="#cb22-30" aria-hidden="true" tabindex="-1"></a><span class="va">+        # Use a deterministically built compiler</span></span>
+<span id="cb22-31"><a href="#cb22-31" aria-hidden="true" tabindex="-1"></a><span class="va">+        # see https://github.com/NixOS/nixpkgs/issues/108475 for context</span></span>
+<span id="cb22-32"><a href="#cb22-32" aria-hidden="true" tabindex="-1"></a><span class="va">+        reproducibleBuild = true;</span></span>
+<span id="cb22-33"><a href="#cb22-33" aria-hidden="true" tabindex="-1"></a><span class="va">+        profiledCompiler = false;</span></span>
+<span id="cb22-34"><a href="#cb22-34" aria-hidden="true" tabindex="-1"></a><span class="va">+      };</span></span>
+<span id="cb22-35"><a href="#cb22-35" aria-hidden="true" tabindex="-1"></a><span class="va">+    };</span></span>
+<span id="cb22-36"><a href="#cb22-36" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb22-37"><a href="#cb22-37" aria-hidden="true" tabindex="-1"></a><span class="va">+    # `libtool` comes with obsolete config.sub/config.guess that don't recognize Risc-V.</span></span>
+<span id="cb22-38"><a href="#cb22-38" aria-hidden="true" tabindex="-1"></a><span class="va">+    extraNativeBuildInputs =</span></span>
+<span id="cb22-39"><a href="#cb22-39" aria-hidden="true" tabindex="-1"></a><span class="va">+      lib.optional (localSystem.isRiscV) prevStage.updateAutotoolsGnuConfigScriptsHook;</span></span>
+<span id="cb22-40"><a href="#cb22-40" aria-hidden="true" tabindex="-1"></a><span class="va">+  })</span></span></code></pre></div>
+<p>It’s a big but mechanical change. We need to pay some attention to
+<code>inherit (prevStage) ...</code> to pass through enough dependencies to
+avoid unnecessary rebuilds. I used histograms command above to check
+if we are doing something reasonable.</p>
+<p>Let’s try if it works!</p>
+<pre><code>$ nix build -f. stdenv
+...
+ld: dwp.o: in function
+  `__gnu_cxx::new_allocator&lt;gold::Dwp_output_file::Contribution&gt;
+    ::allocate(unsigned long, void const*)':
+/nix/store/...-gcc-11.3.0/include/c++/11.3.0/ext/new_allocator.h:116:
+    undefined reference to `std::__throw_bad_array_new_length()'
+...
+collect2: error: ld returned 1 exit status
+...
+For full logs, run 'nix log /nix/store/...-binutils-2.39.drv'.</code></pre>
+<p>Didn’t work.</p>
+<p>This is a typical build failure caused by mismatch between code
+generated by <code>g++</code> (<code>gcc-11</code> in this case) and symbols provided by
+<code>libstdc++</code> (<code>gcc-8</code> in this case). Outdated <code>libstdc++</code> comes from
+<code>bootstrapTools</code>’ <code>/lib</code> directory. The same directory where rest of
+libraries sits.</p>
+<p>Normally other distributions (and <code>gcc</code>’s default build system) use
+version-specific paths to <code>libstdc++</code>, like <code>.../lib/gcc/x86_64-pc-linux-gnu/11.3.0/libstdc++.so</code>.
+That way parallel <code>gcc</code> installs have a chance to keep their <code>c++</code>
+business to themselves and not interfere with one another.</p>
+<p>Let’s fix this error the simialr way by moving it out of default <code>lib</code>
+path:</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/linux/bootstrap-tools/scripts/unpack-bootstrap-tools.sh</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/linux/bootstrap-tools/scripts/unpack-bootstrap-tools.sh</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -17,6 +17,15 @@ else</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    LD_BINARY=$out/lib/ld-*so.?</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a> fi</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="va">+# path to version-specific libraries, like libstdc++.so</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a><span class="va">+LIBSTDCXX_SO_DIR=$(echo $out/lib/gcc/*/*)</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a><span class="va">+# Move version-specific libraries out to avoid library mix when we</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a><span class="va">+# upgrade gcc.</span></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a><span class="va">+# TODO(trofi): update bootstrap tarball script and tarballs to put them</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a><span class="va">+# into expected location directly.</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a><span class="va">+LD_LIBRARY_PATH=$out/lib $LD_BINARY $out/bin/mv $out/lib/libstdc++.* $LIBSTDCXX_SO_DIR/</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a> # On x86_64, ld-linux-x86-64.so.2 barfs on patchelf'ed programs.  So</span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a> # use a copy of patchelf.</span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a> LD_LIBRARY_PATH=$out/lib $LD_BINARY $out/bin/cp $out/bin/patchelf .</span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -25,8 +34,8 @@ for i in $out/bin/* $out/libexec/gcc/*/*/*; do</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>     if [ -L &quot;$i&quot; ]; then continue; fi</span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>     if [ -z &quot;${i##*/liblto*}&quot; ]; then continue; fi</span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>     echo patching &quot;$i&quot;</span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a><span class="st">-    LD_LIBRARY_PATH=$out/lib $LD_BINARY \</span></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a><span class="st">-        ./patchelf --set-interpreter $LD_BINARY --set-rpath $out/lib --force-rpath &quot;$i&quot;</span></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a><span class="va">+    LD_LIBRARY_PATH=$out/lib:$LIBSTDCXX_SO_DIR $LD_BINARY \</span></span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a><span class="va">+        ./patchelf --set-interpreter $LD_BINARY --set-rpath $out/lib:$LIBSTDCXX_SO_DIR --force-rpath &quot;$i&quot;</span></span>
+<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a> done</span>
+<span id="cb24-28"><a href="#cb24-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-29"><a href="#cb24-29" aria-hidden="true" tabindex="-1"></a> for i in $out/lib/librt-*.so $out/lib/libpcre*; do</span></code></pre></div>
+<p>The only binary using <code>libstdc++</code> in <code>bootstrapTools</code> is <code>patchelf</code>. We
+had to extend it’s <code>RUNPATH</code> as well.</p>
+<p>Once we fixed that the next failure happens way later, in <code>bootstrap-stage4-gcc</code>:</p>
+<pre><code>../../gcc-11.3.0/gcc/ggc-common.c: In function 'void report_heap_memory_use()':
+../../gcc-11.3.0/gcc/ggc-common.c:1018:23:
+  error: 'mallinfo2' was not declared in this scope; did you mean 'mallinfo'?
+ 1018 |   #define MALLINFO_FN mallinfo2
+      |                       ^~~~~~~~~
+
+For full logs, run 'nix log /nix/store/..-gcc-11.3.0.drv'.</code></pre>
+<p><code>mallinfo2</code> is a somewhat recent <code>glibc</code> symbol from <code>glibc-2.33</code>. Our
+<code>bootstrapTools</code>’ <code>glibc</code> version is <code>2.27</code>. Our <code>nixpkgs</code> <code>glibc</code> version
+is <code>2.35</code>.</p>
+<p><code>bootstrap-stage4</code> should already have a <code>nixpkgs</code> <code>glibc</code>. Unless I
+broke it’s wrapper registration after I rebuilt <code>gcc</code>.</p>
+<p>Normally <code>gcc</code> should be reasonably portable across older <code>glibc</code>
+versions (and even non-<code>glibc</code>).</p>
+<p>Checking <code>gcc</code>’s source code it indeed looks reasonable:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Somewhere in gcc/ggc-common.cc</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>report_heap_memory_use <span class="op">()</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined(HAVE_MALLINFO) || defined(HAVE_MALLINFO2)</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef HAVE_MALLINFO2</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>  <span class="pp">#define MALLINFO_FN mallinfo2</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>  <span class="pp">#define MALLINFO_FN mallinfo</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(!</span>quiet_flag<span class="op">)</span></span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>    fprintf <span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot; {heap &quot;</span> PRsa <span class="op">(</span><span class="dv">0</span><span class="op">)</span> <span class="st">&quot;}&quot;</span><span class="op">,</span></span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>             SIZE_AMOUNT <span class="op">(</span>MALLINFO_FN <span class="op">().</span>arena<span class="op">));</span></span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Let’s check it’s <code>config.log</code> to see why <code>HAVE_MALLINFO2</code> was
+detected as available.</p>
+<p>I ran the stdenv build with <code>--keep-failed</code> to get full <code>gcc</code>’s
+build tree around when it fails:</p>
+<pre><code>nix-build -A stdenv --keep-failed
+...
+note: keeping build directory '/tmp/nix-build-gcc-11.3.0.drv-1'
+error: builder for '/nix/store/8vx2w68ihszs71kfysm145y71lkp79mj-gcc-11.3.0.drv' failed with exit code 2;
+
+$ fgrep -A3 mallinfo2 /tmp/nix-build-gcc-11.3.0.drv-1/build/gcc/config.log
+configure:10410: checking for mallinfo2
+configure:10410: g++ -std=c++11 -o conftest -g    -static-libstdc++ -static-libgcc   conftest.cpp  &gt;&amp;5
+configure:10410: $? = 0
+configure:10410: result: yes
+
+$ fgrep TARGET_GLIBC /tmp/nix-build-gcc-11.3.0.drv-1/build/gcc/config.log
+#define TARGET_GLIBC_MAJOR 2
+#define TARGET_GLIBC_MINOR 35</code></pre>
+<p><code>gcc</code> and <code>glibc</code> both look fresh enough. That means I failed at
+registering new <code>glibc</code> headers maybe? Let’s check.</p>
+<p>Making sure we test a reasonable attribute:</p>
+<pre><code>$ nix-build -A stdenv.__bootPackages.stdenv.cc.cc
+...
+../../gcc-11.3.0/gcc/ggc-common.c: In function 'void report_heap_memory_use()':
+../../gcc-11.3.0/gcc/ggc-common.c:1018:23: error: 'mallinfo2' was not declared in this scope; did you mean 'mallinfo'?
+ 1018 |   #define MALLINFO_FN mallinfo2
+      |                       ^~~~~~~~~</code></pre>
+<p>Diving into expression:</p>
+<pre><code>$ nix develop -i -f. stdenv.__bootPackages.stdenv.cc.cc
+bash-5.1$ dev&gt; unpackPhase
+unpacking source archive /nix/store/lask01x6hyji5sd06f6yc9nz3rxcf2ia-gcc-11.3.0.tar.xz
+source root is gcc-11.3.0
+setting SOURCE_DATE_EPOCH to timestamp 1650529937 of file gcc-11.3.0/MD5SUMS
+
+bash-5.1$ dev&gt;cd gcc-11.3.0
+bash-5.1$ dev&gt;configurePhase
+fixing libtool script ./libgo/config/ltmain.sh
+...
+config.status: creating Makefile
+
+bash-5.1$ dev&gt;buildPhase
+...
+In file included from ../.././gcc/ggc-common.c:25:
+../.././gcc/ggc-common.c: In function ‘void report_heap_memory_use()’:
+../.././gcc/ggc-common.c:1018:23: error: ‘mallinfo2’ was not declared in this scope; did you mean ‘mallinfo’?
+ 1018 |   #define MALLINFO_FN mallinfo2
+      |                       ^~~~~~~~~
+...
+make[3]: Leaving directory '/home/slyfox/dev/git/nixpkgs-staging-bootstrap/gcc-11.3.0/host-x86_64-unknown-linux-gnu/gcc'
+make[2]: *** [Makefile:4793: all-stage1-gcc] Error 2</code></pre>
+<p>Success! We got the same build failure!</p>
+<p>Now we can run the command manually to explore it’s breakage:</p>
+<pre><code>bash-5.1$ dev&gt;cd host-x86_64-unknown-linux-gnu/gcc
+bash-5.1$ dev&gt;g++ -std=c++11  -fno-PIE -c   -g -DIN_GCC     -fno-exceptions -fno-rtti -fasynchronous-unwind-tables -W -Wall -Wno-narrowing -Wwrite-strings -Wcast-qual -Wno-error=format-diag -Wno-format -Wmissing-format-attribute -Woverloaded-virtual -pedantic -Wno-long-long -Wno-variadic-macros -Wno-overlength-strings -fno-common  -DHAVE_CONFIG_H -I. -I. -I../.././gcc -I../.././gcc/. -I../.././gcc/../include -I../.././gcc/../libcpp/include -I../.././gcc/../libcody -I/nix/store/14vlw51dg2n6kb0r6qgb077v6ryb638g-gmp-with-cxx-stage3-6.2.1-dev/include -I/nix/store/kfk03b53z547gydfslv474sfarza17sm-mpfr-stage3-4.1.1-dev/include -I/nix/store/l4x6j77hakm6lwgzvc50hb4i45ck92a0-libmpc-stage3-1.2.1/include  -I../.././gcc/../libdecnumber -I../.././gcc/../libdecnumber/bid -I../libdecnumber -I../.././gcc/../libbacktrace -I/nix/store/qjdmf5pwdlgzf73lkkvpxm9s6l32wf2f-isl-stage3-0.20/include  -o ggc-common.o -MT ggc-common.o -MMD -MP -MF ./.deps/ggc-common.TPo ../.././gcc/ggc-common.c
+In file included from ../.././gcc/ggc-common.c:25:
+../.././gcc/ggc-common.c: In function ‘void report_heap_memory_use()’:
+../.././gcc/ggc-common.c:1018:23: error: ‘mallinfo2’ was not declared in this scope; did you mean ‘mallinfo’?
+ 1018 |   #define MALLINFO_FN mallinfo2
+      |                       ^~~~~~~~~
+../.././gcc/system.h:1262:26: note: in definition of macro ‘SIZE_SCALE’
+ 1262 | #define SIZE_SCALE(x) (((x) &lt; 10 * ONE_K \
+      |                          ^
+../.././gcc/ggc-common.c:1024:14: note: in expansion of macro ‘SIZE_AMOUNT’
+ 1024 |              SIZE_AMOUNT (MALLINFO_FN ().arena));
+      |              ^~~~~~~~~~~
+../.././gcc/ggc-common.c:1024:27: note: in expansion of macro ‘MALLINFO_FN’
+ 1024 |              SIZE_AMOUNT (MALLINFO_FN ().arena));
+      |                           ^~~~~~~~~~~</code></pre>
+<p>Let’s check include order by adding ‘-v’ option:</p>
+<pre><code>bash-5.1$ dev&gt;g++ -v -std=c++11  -fno-PIE ... ../.././gcc/ggc-common.c
+#include &lt;...&gt; search starts here:
+ .
+ ../.././gcc
+ ../.././gcc/../include
+ ../.././gcc/../libcpp/include
+ ../.././gcc/../libcody
+ ../.././gcc/../libdecnumber
+ ../.././gcc/../libdecnumber/bid
+ ../libdecnumber
+ ../.././gcc/../libbacktrace
+ /run/current-system/sw/include
+ /nix/store/xa81wrm1vpbfy090448mjsg6zh5sifbb-gettext-0.21/include
+ /nix/store/14vlw51dg2n6kb0r6qgb077v6ryb638g-gmp-with-cxx-stage3-6.2.1-dev/include
+ /nix/store/kfk03b53z547gydfslv474sfarza17sm-mpfr-stage3-4.1.1-dev/include
+ /nix/store/gdkid16s49qn2g5cbyr9xq6yqj55xgk0-gmp-with-cxx-6.2.1-dev/include
+ /nix/store/l4x6j77hakm6lwgzvc50hb4i45ck92a0-libmpc-stage3-1.2.1/include
+ /nix/store/v6za3bc8gpddggqgivjs1adzgc9c86mz-libxcrypt-4.4.33/include
+ /nix/store/qjdmf5pwdlgzf73lkkvpxm9s6l32wf2f-isl-stage3-0.20/include
+ /nix/store/5hzpyz2m5ipsdsv017y6pzgg39p10ici-zlib-1.2.13-dev/include
+ /nix/store/x6p2wal4jlvqky4bh69447dbv1fndr0m-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/../../../../include/c++/11.3.0
+ /nix/store/x6p2wal4jlvqky4bh69447dbv1fndr0m-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/../../../../include/c++/11.3.0/x86_64-unknown-linux-gnu
+ /nix/store/x6p2wal4jlvqky4bh69447dbv1fndr0m-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/../../../../include/c++/11.3.0/backward
+ /nix/store/x6p2wal4jlvqky4bh69447dbv1fndr0m-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/include
+ /nix/store/x6p2wal4jlvqky4bh69447dbv1fndr0m-gcc-11.3.0/include
+ /nix/store/x6p2wal4jlvqky4bh69447dbv1fndr0m-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/include-fixed
+ /nix/store/nm7fxi26avig3arwpasfy0avfwyb41i3-bootstrap-stage0-glibc-bootstrap/include
+ /nix/store/jn50ph1kl1h9x4qjs6hd6944afijaadh-glibc-2.35-224-dev/include</code></pre>
+<p>Last two lines are the culprit: we see both headers from bootstrap
+<code>...-bootstrap-stage0-glibc-bootstrap/include</code> (goes first) and from
+<code>...-glibc-2.35-224-dev/include</code> (goes second).</p>
+<p>That is part of our problem. It would not be too bad if this include
+order was consistent across compiler calls and we would use bootstrap
+<code>glibc</code> consistently.</p>
+<p><code>glibc-bootstrap</code> header lookup path was embedded into <code>gcc</code> when we
+built it at <code>bootstrap-stage1.5</code> step.</p>
+<p>Build log for that <code>gcc</code> contains
+<code>--with-native-system-header-dir=/nix/store/nm7fxi26avig3arwpasfy0avfwyb41i3-bootstrap-stage0-glibc-bootstrap/include</code>
+reference. Ideally we should have a way to make it lower priority than
+<code>/nix/store/jn50ph1kl1h9x4qjs6hd6944afijaadh-glibc-2.35-224-dev/include</code>.</p>
+<p><code>-I</code> inserts headers too early: it prepends <code>fixincludes</code> and
+<code>gcc</code>-wrapped headers. <code>-idirafter</code> inserts headers too late: after an
+existing <code>...-bootstrap-stage0-glibc-bootstrap/include</code> entry.</p>
+<p>How can we do something in the middle?</p>
+<p>Luckily there is a workaround: if we pass <code>--sysroot=...</code> to the
+compiler it will throw away default <code>--with-native-system-header-dir</code>
+value as if it was never passed. And it also keeps the rest of includes:
+<code>fixincludes</code>, <code>c++-headers</code> and so on.</p>
+<p>Thus the hack:</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/build-support/cc-wrapper/default.nix</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/build-support/cc-wrapper/default.nix</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -336,7 +336,7 @@ stdenv.mkDerivation {</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>       touch &quot;$out/nix-support/libc-ldflags&quot;</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>       echo &quot;-B${libc_lib}${libc.libdir or &quot;/lib/&quot;}&quot; &gt;&gt; $out/nix-support/libc-crt1-cflags</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>     '' + optionalString (!(cc.langD or false)) ''</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a><span class="st">-      echo &quot;-idirafter ${libc_dev}${libc.incdir or &quot;/include&quot;}&quot; &gt;&gt; $out/nix-support/libc-cflags</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a><span class="va">+      echo &quot;--sysroot=/nix/dir/does/not/exist -idirafter ${libc_dev}${libc.incdir or &quot;/include&quot;}&quot; &gt;&gt; $out/nix-support/libc-cflags</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>     '' + optionalString (isGNU &amp;&amp; (!(cc.langD or false))) ''</span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>       for dir in &quot;${cc}&quot;/lib/gcc/*/*/include-fixed; do</span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>         echo '-idirafter' ''${dir} &gt;&gt; $out/nix-support/libc-cflags</span></code></pre></div>
+<p>With the above I could build <code>stdenv</code>!</p>
+<pre><code>$ nix build -f. stdenv</code></pre>
+<p>Yay?</p>
+<p>Let’s try something more sunstantial:</p>
+<pre><code>nix-build -A libffi
+error: builder for '/nix/store/dsi4dkc04wgcz5fr0z1zrn92269g03zd-dejagnu-1.6.3.drv' failed with exit code 2;
+       last 10 log lines:
+       &gt;
+       &gt; # of expected passes            300
+       &gt; DejaGnu version    1.6.3
+       &gt; Expect version   5.45.4
+       &gt; Tcl version     8.6
+       &gt;
+       &gt; /nix/store/jkk3n9lgqryg76w103ix62gxh32b4ywa-bash-5.2-p15/bin/bash: line 4:  2854 Aborted                 (core dumped) ../runtest --tool $tool --srcdir $srcdir
+       &gt; make[1]: *** [Makefile:1097: check-DEJAGNU] Error 1
+       &gt; make[1]: Leaving directory '/build/dejagnu-1.6.3/build'
+       &gt; make: *** [Makefile:1307: check-am] Error 2
+       For full logs, run 'nix log /nix/store/dsi4dkc04wgcz5fr0z1zrn92269g03zd-dejagnu-1.6.3.drv'.
+error: 1 dependencies of derivation '/nix/store/y2a8jwf1fx3vjnfwnayrj7yqcpb3r6gr-libffi-3.4.4.drv' failed to build</code></pre>
+<p>The crash fails due to missing <code>libgcc_s.so</code> in <code>glibc</code>’s output:</p>
+<pre><code>$ nix-build -A glibc
+$ ls result/lib/libgcc_s.so
+ls: cannot access 'result/lib/libgcc_s.so': No such file or directory</code></pre>
+<p>But it was there before. And caused us all sorts of problems.</p>
+<p>Adding a bit of logging to see if the <code>glibc</code> file copy hook executed
+at all:</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/libraries/glibc/default.nix</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/libraries/glibc/default.nix</span></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -75,6 +75,9 @@ callPackage ./common.nix { inherit stdenv; } {</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>     # - clang-wrapper in cross-compilation</span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>     # Last attempt: https://github.com/NixOS/nixpkgs/pull/36948</span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>     preInstall = ''</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a><span class="va">+      echo &quot;We are in preInstall hook. Does ${stdenv.cc.cc} provide a libgcc?&quot;</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a><span class="va">+      ls -l ${stdenv.cc.cc}/lib</span></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>       if [ -f ${stdenv.cc.cc}/lib/libgcc_s.so.1 ]; then</span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>           mkdir -p $out/lib</span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>           cp ${stdenv.cc.cc}/lib/libgcc_s.so.1 $out/lib/libgcc_s.so.1</span></code></pre></div>
+<p>Hook did execute and shown no files there. No copying happens because
+thse libraries hide in a non-default <code>.lib</code> output of <code>stdenv.cc.cc</code>:</p>
+<pre><code>$ nix-build -A stdenv.cc.cc
+/nix/store/sxdx80lmk4zkhb51f4x5dgqvxgmx55wl-gcc-11.3.0
+
+$ nix-build -A stdenv.cc.cc.lib
+/nix/store/wprxx5zkkk13hpj6k1v6qadjylh3vq9m-gcc-11.3.0-lib
+
+$ ls /nix/store/sxdx80lmk4zkhb51f4x5dgqvxgmx55wl-gcc-11.3.0/lib
+gcc        libasan_preinit.o  libcc1.a   libgomp.spec  libitm.spec  liblsan_preinit.o  libsanitizer.spec  libssp_nonshared.a  libstdc++fs.a  libtsan.a          libubsan.a
+libasan.a  libatomic.a        libgomp.a  libitm.a      liblsan.a    libquadmath.a      libssp.a           libstdc++.a         libsupc++.a    libtsan_preinit.o
+
+$ ls /nix/store/wprxx5zkkk13hpj6k1v6qadjylh3vq9m-gcc-11.3.0-lib/lib
+libasan.la        libatomic.so        libcc1.so.0      libgomp.so        libitm.so.1      liblsan.so.0.0.0      libssp.la            libstdc++fs.la       libstdc++.so.6.0.29-gdb.py  libtsan.so.0.0.0
+libasan.so        libatomic.so.1      libcc1.so.0.0.0  libgomp.so.1      libitm.so.1.0.0  libquadmath.la        libssp_nonshared.la  libstdc++.la         libsupc++.la                libubsan.la
+libasan.so.6      libatomic.so.1.2.0  libgcc_s.so      libgomp.so.1.0.0  liblsan.la       libquadmath.so        libssp.so            libstdc++.so         libtsan.la                  libubsan.so
+libasan.so.6.0.0  libcc1.la           libgcc_s.so.1    libitm.la         liblsan.so       libquadmath.so.0      libssp.so.0          libstdc++.so.6       libtsan.so                  libubsan.so.1
+libatomic.la      libcc1.so           libgomp.la       libitm.so         liblsan.so.0     libquadmath.so.0.0.0  libssp.so.0.0.0      libstdc++.so.6.0.29  libtsan.so.0                libubsan.so.1.0.0</code></pre>
+<p>It happened to work because <code>bootstrapTools</code> is a derivation with single
+<code>out</code> output and <code>gcc</code> from <code>nixpkgs</code> has slightly different structure.
+Thus making the copy hack more portable:</p>
+<div class="sourceCode" id="cb38"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/libraries/glibc/default.nix</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/libraries/glibc/default.nix</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -75,11 +75,11 @@ callPackage ./common.nix { inherit stdenv; } {</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>     # - clang-wrapper in cross-compilation</span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>     # Last attempt: https://github.com/NixOS/nixpkgs/pull/36948</span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>     preInstall = ''</span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a><span class="st">-      if [ -f ${stdenv.cc.cc}/lib/libgcc_s.so.1 ]; then</span></span>
+<span id="cb38-8"><a href="#cb38-8" aria-hidden="true" tabindex="-1"></a><span class="va">+      if [ -f ${lib.getLib stdenv.cc.cc}/lib/libgcc_s.so.1 ]; then</span></span>
+<span id="cb38-9"><a href="#cb38-9" aria-hidden="true" tabindex="-1"></a>           mkdir -p $out/lib</span>
+<span id="cb38-10"><a href="#cb38-10" aria-hidden="true" tabindex="-1"></a><span class="st">-          cp ${stdenv.cc.cc}/lib/libgcc_s.so.1 $out/lib/libgcc_s.so.1</span></span>
+<span id="cb38-11"><a href="#cb38-11" aria-hidden="true" tabindex="-1"></a><span class="va">+          cp ${lib.getLib stdenv.cc.cc}/lib/libgcc_s.so.1 $out/lib/libgcc_s.so.1</span></span>
+<span id="cb38-12"><a href="#cb38-12" aria-hidden="true" tabindex="-1"></a>           # the .so It used to be a symlink, but now it is a script</span>
+<span id="cb38-13"><a href="#cb38-13" aria-hidden="true" tabindex="-1"></a><span class="st">-          cp -a ${stdenv.cc.cc}/lib/libgcc_s.so $out/lib/libgcc_s.so</span></span>
+<span id="cb38-14"><a href="#cb38-14" aria-hidden="true" tabindex="-1"></a><span class="va">+          cp -a ${lib.getLib stdenv.cc.cc}/lib/libgcc_s.so $out/lib/libgcc_s.so</span></span>
+<span id="cb38-15"><a href="#cb38-15" aria-hidden="true" tabindex="-1"></a>       fi</span>
+<span id="cb38-16"><a href="#cb38-16" aria-hidden="true" tabindex="-1"></a>     '';</span></code></pre></div>
+<p>Trying again:</p>
+<pre><code>$ ls $(nix-build -A glibc)/lib/libgcc_s.so.1
+...
+/nix/store/li0dy2746f4731kd15y76qcr072b0szp-glibc-2.35-224/lib/libgcc_s.so.1</code></pre>
+<p>At last!</p>
+<p>There is one minot annoyance we need to sort out: <code>libgcc_s.so.1</code> remembers
+<code>glibc</code> it was linked against in it’s <code>RUNPATH</code>:</p>
+<pre><code>$ readelf -aW $(nix-build -A glibc)/lib/libgcc_s.so.1 | fgrep RUNPATH
+0x000000000000001d (RUNPATH)            Library runpath:
+    [/nix/store/nm7fxi26avig3arwpasfy0avfwyb41i3-bootstrap-stage0-glibc-bootstrap/lib]</code></pre>
+<p>It should refer instead to <code>glibc</code> we just built. Let’s clobber the runpath:</p>
+<div class="sourceCode" id="cb41"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/libraries/glibc/default.nix</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/libraries/glibc/default.nix</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -80,6 +80,9 @@ callPackage ./common.nix { inherit stdenv; } {</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>           cp ${lib.getLib stdenv.cc.cc}/lib/libgcc_s.so.1 $out/lib/libgcc_s.so.1</span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>           # the .so It used to be a symlink, but now it is a script</span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>           cp -a ${lib.getLib stdenv.cc.cc}/lib/libgcc_s.so $out/lib/libgcc_s.so</span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a><span class="va">+          # wipe out reference to previous libc it was built against</span></span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a><span class="va">+          chmod +w $out/lib/libgcc_s.so.1</span></span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a><span class="va">+          patchelf --set-rpath $out/lib $out/lib/libgcc_s.so.1</span></span>
+<span id="cb41-10"><a href="#cb41-10" aria-hidden="true" tabindex="-1"></a>       fi</span>
+<span id="cb41-11"><a href="#cb41-11" aria-hidden="true" tabindex="-1"></a>     '';</span></code></pre></div>
+<p>It’s a safe operation in this case as we simulate <code>glibc</code> binary upgrade.
+As <code>glibc</code> is backwards compatible it should not cause issues.
+And in practice <code>libgcc_s.so.1</code> has almost no code that depends on <code>glibc</code>.</p>
+<p>Now it looks better:</p>
+<pre><code>$ readelf -aW $(nix-build -A glibc)/lib/libgcc_s.so.1 | fgrep RUNPATH
+...
+ 0x000000000000001d (RUNPATH)            Library runpath:
+     [/nix/store/mjf0zgkdd7prfaqh1y00q4xmphmz87p5-glibc-2.35-224/lib]</code></pre>
+<p>After that I was able to build full <code>stdenv</code> and a few <code>c++</code> programs.</p>
+<p>Proposed the change as
+<a href="https://github.com/NixOS/nixpkgs/pull/209063">PR #209063</a>.</p>
+<h2 id="the-clang-wrapper">The clang wrapper</h2>
+<p>Surely done now?!</p>
+<p>Over night I ran the build against my whole set of system packages. Most
+of them succeeded, but <code>vte</code> failed as:</p>
+<pre><code>&gt; C compiler for the host machine: clang (clang 11.1.0 &quot;clang version 11.1.0&quot;)
+&gt; C linker for the host machine: clang ld.bfd 2.39
+&gt;
+&gt; meson.build:17:0: ERROR: Compiler clang++ can not compile programs.
+&gt;
+&gt; A full log can be found at /build/vte-0.70.2/build/meson-logs/meson-log.txt
+For full logs, run 'nix log /nix/store/rj77v58780gsrf38pi6qxjs89d4lrf6p-vte-0.70.2.drv'.</code></pre>
+<p>Apparently the <code>--sysroot=...</code> hack changed search path in <code>clang</code> from
+native paths to cross paths:</p>
+<pre><code>$ printf &quot;int main(){}&quot; | clang++ -x c++ -
+$ printf &quot;int main(){}&quot; | clang++ --sysroot=/ -x c++ -
+$ printf &quot;int main(){}&quot; | clang++ --sysroot=/does/not/exist -x c++ -
+ld: cannot find -lstdc++: No such file or directory</code></pre>
+<p>Here is the patch lookup change behaviour. Good case:</p>
+<pre><code>$ printf &quot;int main(){}&quot; | clang++ -x c++ - -Wl,--verbose |&amp; grep -F stdc++
+attempt to open /nix/store/...-glibc-2.35-224/lib/libstdc++.so failed
+attempt to open /nix/store/...-glibc-2.35-224/lib/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0-lib/x86_64-unknown-linux-gnu/lib/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0-lib/x86_64-unknown-linux-gnu/lib/libstdc++.a failed
+attempt to open /nix/store/...-clang-11.1.0-lib/lib/libstdc++.so failed
+attempt to open /nix/store/...-clang-11.1.0-lib/lib/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/../../../../lib64/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/../../../../lib64/libstdc++.a succeeded
+/nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/../../../../lib64/libstdc++.a</code></pre>
+<p>Note that <code>clang++</code> does try target-specific <code>x86_64-unknown-linux-gnu</code>
+paths first. But then falls backs to generic paths.</p>
+<p>Bad case:</p>
+<pre><code>$ printf &quot;int main(){}&quot; | clang++ --sysroot=/does/not/exist -x c++ - -Wl,--verbose |&amp; grep -F stdc++
+attempt to open /nix/store/...-glibc-2.35-224/lib/libstdc++.so failed
+attempt to open /nix/store/...-glibc-2.35-224/lib/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0/lib/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0-lib/x86_64-unknown-linux-gnu/lib/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0-lib/x86_64-unknown-linux-gnu/lib/libstdc++.a failed
+attempt to open /nix/store/...-clang-11.1.0-lib/lib/libstdc++.so failed
+attempt to open /nix/store/...-clang-11.1.0-lib/lib/libstdc++.a failed
+attempt to open /nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.so failed
+attempt to open /nix/store/...-gcc-11.3.0/lib64/gcc/x86_64-unknown-linux-gnu/11.3.0/libstdc++.a failed
+attempt to open /nix/store/...-binutils-2.39/x86_64-unknown-linux-gnu/lib64/libstdc++.so failed
+attempt to open /nix/store/...-binutils-2.39/x86_64-unknown-linux-gnu/lib64/libstdc++.a failed
+attempt to open /nix/store/...-binutils-2.39/lib64/libstdc++.so failed
+attempt to open /nix/store/...-binutils-2.39/lib64/libstdc++.a failed
+attempt to open /nix/store/...-binutils-2.39/x86_64-unknown-linux-gnu/lib/libstdc++.so failed
+attempt to open /nix/store/...-binutils-2.39/x86_64-unknown-linux-gnu/lib/libstdc++.a failed
+attempt to open /nix/store/...-binutils-2.39/lib/libstdc++.so failed
+attempt to open /nix/store/...-binutils-2.39/lib/libstdc++.a failed
+/nix/store/...-binutils-2.39/bin/ld: cannot find -lstdc++: No such file or directory</code></pre>
+<p>It’s roughly the same search order, but generic paths are not looked up.</p>
+<p>I think it’s a somewhat minor <code>clang</code> bug. <code>--sysroot</code> is not about a
+different target but about different offset for system library locations.
+It should not affect compiler-specific library locations even if these
+libraries are from <code>gcc</code> compiler and not <code>clang</code>.</p>
+<p>But then again <code>nixpkgs</code> has it’s own slightly deviating notion of what
+is cross-compiling compared other distributions. We could say that
+<code>nixpkgs</code> has empty <code>sysroot</code> and always passes all the library and
+include paths explicitly.</p>
+<p>We can safely work around lookup paths by adding <code>$target -&gt; .</code> symlink
+to <code>gcc</code> to simulate cross case:</p>
+<div class="sourceCode" id="cb47"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/compilers/gcc/11/default.nix</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/compilers/gcc/11/default.nix</span></span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -221,6 +221,7 @@ stdenv.mkDerivation ({</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>   };</span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>   targetConfig = if targetPlatform != hostPlatform then targetPlatform.config else null;</span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  targetPlatformConfig = targetPlatform.config;</span></span>
+<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb47-9"><a href="#cb47-9" aria-hidden="true" tabindex="-1"></a>   buildFlags = optional</span>
+<span id="cb47-10"><a href="#cb47-10" aria-hidden="true" tabindex="-1"></a>     (targetPlatform == hostPlatform &amp;&amp; hostPlatform == buildPlatform)</span>
+<span id="cb47-11"><a href="#cb47-11" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/pkgs/development/compilers/gcc/builder.sh b/pkgs/development/compilers/gcc/builder.sh</span></span>
+<span id="cb47-12"><a href="#cb47-12" aria-hidden="true" tabindex="-1"></a>index 113bd83ea53..71a997a7df9 100644</span>
+<span id="cb47-13"><a href="#cb47-13" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/compilers/gcc/builder.sh</span></span>
+<span id="cb47-14"><a href="#cb47-14" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/compilers/gcc/builder.sh</span></span>
+<span id="cb47-15"><a href="#cb47-15" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -203,6 +203,17 @@ preInstall() {</span></span>
+<span id="cb47-16"><a href="#cb47-16" aria-hidden="true" tabindex="-1"></a>         ln -s lib &quot;$out/${targetConfig}/lib32&quot;</span>
+<span id="cb47-17"><a href="#cb47-17" aria-hidden="true" tabindex="-1"></a>         ln -s lib &quot;${!outputLib}/${targetConfig}/lib32&quot;</span>
+<span id="cb47-18"><a href="#cb47-18" aria-hidden="true" tabindex="-1"></a>     fi</span>
+<span id="cb47-19"><a href="#cb47-19" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb47-20"><a href="#cb47-20" aria-hidden="true" tabindex="-1"></a><span class="va">+    # cc-wrappers uses --sysroot=/nix/dir/does/not/exist as a way to</span></span>
+<span id="cb47-21"><a href="#cb47-21" aria-hidden="true" tabindex="-1"></a><span class="va">+    # drop default sysheaders search path. Unfortunately that switches</span></span>
+<span id="cb47-22"><a href="#cb47-22" aria-hidden="true" tabindex="-1"></a><span class="va">+    # clang++ into searching libraries in gcc in cross-compiler paths:</span></span>
+<span id="cb47-23"><a href="#cb47-23" aria-hidden="true" tabindex="-1"></a><span class="va">+    #   from ${!outputLib}/lib (native)</span></span>
+<span id="cb47-24"><a href="#cb47-24" aria-hidden="true" tabindex="-1"></a><span class="va">+    #   to ${!outputLib}/${targetPlatformConfig}/lib</span></span>
+<span id="cb47-25"><a href="#cb47-25" aria-hidden="true" tabindex="-1"></a><span class="va">+    # We create the symlink to make both native and cross paths</span></span>
+<span id="cb47-26"><a href="#cb47-26" aria-hidden="true" tabindex="-1"></a><span class="va">+    # available even if the toolchain is not the cross-compiler.</span></span>
+<span id="cb47-27"><a href="#cb47-27" aria-hidden="true" tabindex="-1"></a><span class="va">+    if [ ! -e ${!outputLib}/${targetPlatformConfig} ] ; then</span></span>
+<span id="cb47-28"><a href="#cb47-28" aria-hidden="true" tabindex="-1"></a><span class="va">+        ln -s . ${!outputLib}/${targetPlatformConfig}</span></span>
+<span id="cb47-29"><a href="#cb47-29" aria-hidden="true" tabindex="-1"></a><span class="va">+    fi</span></span>
+<span id="cb47-30"><a href="#cb47-30" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<h2 id="are-we-done-yet">Are we done yet?</h2>
+<p>We managed to update <code>libgcc_s.so.1</code> in <code>glibc</code> to match default version
+of <code>gcc</code> used by <code>nixpkgs</code>, but there is one minor catch: we built it
+against <code>bootstrapTools</code>’ <code>glibc</code>. Or more specifically here is the
+current layout:</p>
+<ul>
+<li>good: it is built as part of <code>nixpkgs</code> <code>gcc</code> (and by <code>nixpkgs</code> <code>gcc</code>
+as part of bootstrap that <code>gcc</code> package does internally).</li>
+<li>good: it is built by <code>binutils</code> (with help of <code>gas</code> and <code>ld</code>) from
+<code>nixpkgs</code></li>
+<li>suboptimal: it is linked against <code>bootstrapTools</code>’ <code>glibc</code>, which means
+that:
+<ul>
+<li>minor: it is linked against symbol versions defined by <code>libc.so.6</code></li>
+<li>medium: it is linked against <code>bootstrapTools</code>’ glibc’s startup object files:
+<ul>
+<li><code>crti.o</code>: trivial <code>_init</code> / <code>_fini</code> global constructor handling</li>
+<li><code>crtn.o</code>: trivial <code>.init</code> / <code>.fini</code> sections for global constructors</li>
+<li><code>libc_nonshared.a</code>: small amount of target-specific stubs that refer
+<code>__dso_handle</code> or really dislike dynamic relocations: <code>atexit</code>,
+<code>at_quick_exit</code>, <code>__pthread_atfork</code>, <code>__stack_chk_fail_local</code>.</li>
+</ul></li>
+</ul></li>
+</ul>
+<p>Of all the above <code>libc_nonshared.a</code> is mildly annoying. That should not
+cause any problems as glibc allows upgrades of libc.so.6 without
+breaking already linked libraries or executables. But it’s still a
+problem of reliance on a tiny bit of <code>bootstrapTools</code> code.</p>
+<p>Ideally I would like to delete <code>libgcc_s.so.1</code> out of <code>glibc</code>’s <code>lib/</code>
+directory entirely and it will solve this problem completely.</p>
+<p>I’m not sure how exactly do it just yet, but I have a vague idea.</p>
+<p>A while ago I wondered why cross-compiled <code>glibc</code> was missing
+<code>libgcc_s.so.1</code> while native had it. Now it’s clear: it’s an unexpected
+native/cross difference in <code>gcc.lib</code>
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/glibc/default.nix#L78-L83">library path</a>
+(and also
+<a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/glibc/common.nix#L271">manual hook removal</a>).
+Once tha main change lands I should be able to fix it as well one way or
+another.</p>
+<p>Thus no, we are not done yet. But it can wait when changes derived here
+will land in <code>nixpkgs</code>. It looks like a clear improvement.</p>
+<h2 id="next-steps">Next steps</h2>
+<p>I tried to understand <code>nixpkgs</code> bootstrap process in depth and it’s
+relation to the toolchain setup a few times in the past:</p>
+<ul>
+<li>to sort out <code>glibc</code> <a href="../posts/240-nixpkgs-bootstrap-intro.html">objects mismatch</a>
+(landed)</li>
+<li>to fix <code>binutils</code> <a href="https://github.com/NixOS/nixpkgs/pull/188544">LTO plumbing</a>
+(failed, needs more research)</li>
+<li>to sort <code>musl</code> <a href="https://github.com/NixOS/nixpkgs/issues/142066">include order</a>
+(pending, needs more reearch)</li>
+<li>to fix incomplete <code>mingw</code> <a href="https://github.com/NixOS/nixpkgs/issues/156343">library list</a>
+(pending, needs more research)</li>
+<li>to fix <code>include-what-you-use</code> <a href="https://github.com/NixOS/nixpkgs/issues/189753">headers path</a>
+(pending, needs more research)</li>
+</ul>
+<p>I failed more frequently than I succeeded.</p>
+<p>Until today I never felt I qute grasped the details. There were
+always minor things I did not look at: how does <code>nixpkgs</code> define
+include header order? How does it track what are compiler-specific
+libraries and what are libc-specific ones? Does it care? And other ones
+like that. This time I managed to uncover almost all of that.</p>
+<p>In most of the cases above it’s very clear why things are broken and why
+they usually work in other distributions. The answer is almost always:
+default paths have reasonable values there and <code>nixpkgs</code> does not use
+default paths machinery. I always felt <code>nixpkgs</code> way of setting paths is
+a bit broken. Now I have some evidence how exactly it is broken. That
+gives me a hope I can amend at least part of it and eventually fix the
+issues above without resorting to hacks like <code>--sysroot=...</code>.</p>
+<p>Still unfixed lower hanging fruits are:</p>
+<ul>
+<li>reduction of needless rebuild redundancy of <code>binutils</code> and binary-only
+tools used in bootstrap.</li>
+<li>static build of <code>gcc</code> dependencies also looks like a workaround of
+<code>bootstrapTools</code> placing everything into one directory</li>
+</ul>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nixpkgs</code> bootstrap process is simple at a high level: we build <code>gcc</code>,
+<code>glibc</code> and friends enough times to declare the result stable enough.
+When we don’t expect future rebuilds to change the output we declare
+sucess.</p>
+<p>The simplest way to explore bootstrap dependencies is probably to grep
+and render parts of the graph produced by
+<code>nix-store --query --graph $(nix-build -A stdenv.cc.cc)</code>.</p>
+<p>The precise mechanics of it are somewhat involved due to toolchain
+specifics but not too complicated.</p>
+<p>The bootstrap is a bit fragile as <code>nixpkgs</code> assumes that it should
+be feasible to swap <code>glibc</code> from under active toolchain by redirecting
+headers. It could be solved by another round of rebuilds instead of
+using less known compiler options. Or by using path priority override
+closer to what vailla <code>gcc</code> does (I still did not find best options for
+that).</p>
+<p>Along the way I found a few minor infelicities in <code>nixpkgs</code>:</p>
+<ul>
+<li>inconsistent <code>libgcc_s.so.1</code> copying: <a href="https://github.com/NixOS/nixpkgs/pull/209055">PR #209055</a></li>
+<li><code>libstdc++</code> search path pollution in <code>bootstrapTools</code>: <a href="https://github.com/NixOS/nixpkgs/pull/209054">PR #209054</a></li>
+<li>missing cross-link for native toolchains: <a href="https://github.com/NixOS/nixpkgs/pull/209153">PR #209153</a></li>
+</ul>
+<p>And in the end I ended up with <a href="https://github.com/NixOS/nixpkgs/pull/209063">PR #209063</a>
+to get <code>libgcc_s.so.1</code> up to date enough.</p>
+<p>Initially I tought that adding one <code>gcc</code> rebuild is an easy problem.
+I tried adding magic lines to <code>pkgs/stdenv/linux/default.nix</code> a few
+times and failed. I did not feel I could make it work.</p>
+<p>Instead of giving up I started this post. I logged what was failing and
+why I think should be fixed to make it work. It took me 4 days to finish
+it! I got <code>libgcc_s.so.1</code> updated in the end!</p>
+<p>Here is the final bootstrap tree I arrived at (<a href="../posts.data/275-nixpkgs-bootstrap-deep-dive/08-nixpkgs-bootstrap-tree.svg">enlarge</a>):</p>
+<pre><code>$ nix-store --query --graph $(nix-instantiate -A stdenv) |
+    grep -vP '[.](sh|tar|bash|patch|c|diff)|bash52-0|wrapper|hook|expand-response-params' |
+    dot -Tsvg &gt; /tmp/a.svg; firefox /tmp/a.svg</code></pre>
+<p><img src="../posts.data/275-nixpkgs-bootstrap-deep-dive/08-nixpkgs-bootstrap-tree.svg" /></p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on January  5, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
