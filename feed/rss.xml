@@ -22,7 +22,7 @@ supposed to come with. Tl;DR of the issue:</p>
 from <code>gcc-9</code></li>
 </ul>
 <p>This version skew causes issues because <code>gcc-11</code> relies on symbols
-exported from <code>libgcc_s.so</code> versions that were added after <code>ggc-9</code>
+exported from <code>libgcc_s.so</code> versions that were added after <code>gcc-9</code>
 release. Example taken from <a href="https://github.com/NixOS/nixpkgs/issues/201254">Issue #201254</a>:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;atomic&gt;</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -47,7 +47,7 @@ in context of bugs related to <code>glibc</code> version lookup. High-level
 overview presented there is mostly correct. But some details I got
 wrong.</p>
 <p>I’ll sort them out here to clarify why version skew happens and how
-we could fix it using existing bootstrap framework in <code>nixpksg</code>.</p>
+we could fix it using existing bootstrap framework in <code>nixpkgs</code>.</p>
 <h2 id="bootstrap-debugging-tips">Bootstrap debugging tips</h2>
 <p>Before the dive into specifics of our issue let’s explore generic
 debugging tips to see how runtime and build-time dependencies are laid
@@ -164,7 +164,7 @@ places where we decide to <strong>build</strong> new <code>gcc</code> (or <code>
 find places where we decide to <strong>use</strong> some version of <code>gcc</code> (or
 <code>glibc</code>).</li>
 </ul>
-<p>This crude grep destorys some intermediary arrows and leaves nodes to
+<p>This crude grep destroys some intermediary arrows and leaves nodes to
 hang in the air. In reality all the <code>stdenv</code> nodes are chained in
 sequence via compiler wrappers. But grep does capture most of important
 details. Here is what <code>.dot</code> generated us
@@ -209,11 +209,11 @@ after <code>glibc</code> is built. In this case <code>stdenv.cc.cc</code> is <co
 a symlink here instead of a file copy. That way we would clearly see
 undesired reference instead of resorting to <code>strings</code> call.</p>
 <h2 id="an-ideal-bootstrap">An ideal bootstrap</h2>
-<p>Cleary our bootstrap is problematic right now as it fails to link a
+<p>Clearly our bootstrap is problematic right now as it fails to link a
 subset of binaries and seems to use suspiciously old <code>gcc</code> to build
 <code>glibc</code> that almost any other package uses.</p>
 <p>How would an ideal bootstrap look like?</p>
-<p>Let’s settle down on more specific goals our bootstrap shold achieve.</p>
+<p>Let’s settle down on more specific goals our bootstrap should achieve.</p>
 <p>If our goal is to get something that is able to link binaries we could
 just use <code>bootstrapTools</code> as our <code>stdenv</code>: no need to build anything,
 <code>gcc</code>, <code>glibc</code> and <code>libgcc_s.so</code> are all consistent.</p>
@@ -227,7 +227,7 @@ could sneak in malicious code there that would be problematic. Frequent
 rebuilds would probably make it simpler (or not :).</p>
 <p>Anyway, using <code>bootstrapTools</code> directly is not very convenient for local
 toolchain development.</p>
-<p>Thus we want something sliglty more complicated: we need to build new
+<p>Thus we want something slightly more complicated: we need to build new
 set of bootstrap tools using current <code>nixpkgs</code> expressions as target
 versions of <code>gcc</code>, <code>glibc</code> and friends and use that instead. This
 creates a logical recursion of <code>bootstrapTools</code> -&gt; <code>nixpkgs</code> -&gt;
@@ -245,7 +245,7 @@ binaries.</li>
 </ol>
 <p>Goal 2 is a moral equivalent of [1.]: if <code>bootstrapTools</code> contained
 a buggy code generator we would like to get rid of its effect by
-rebuilding everything using <code>nixpkgs</code> versions of code generatos.</p>
+rebuilding everything using <code>nixpkgs</code> versions of code generators.</p>
 <p>As it stands today <code>nixpkgs</code> achieves <code>[1.]</code> but not <code>[2.]</code>.</p>
 <p><code>[2.]</code> would help both in correctness and predictability of the final
 result. At least we would not get version skews of various components.</p>
@@ -628,7 +628,7 @@ inherits to avoid unnecessary rebuilds and we need to define
 <code>bootstrap-stage1</code> (<code>binutils-unwrapped</code> rebuild) and <code>bootstrap-stage2</code>
 (where we build special runtime dependencies for <code>glibc</code>).</p>
 <p>I copied <code>boostrap-stage2</code> into <code>bootstrap-stage1.5-gcc-unwrapped</code>
-and added only <code>gcc-unwrapped</code> definiton there:</p>
+and added only <code>gcc-unwrapped</code> definition there:</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/linux/default.nix</span></span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/linux/default.nix</span></span>
 <span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -278,6 +278,73 @@ in</span></span>
@@ -1144,7 +1144,7 @@ relation to the toolchain setup a few times in the past:</p>
 <li>to fix <code>binutils</code> <a href="https://github.com/NixOS/nixpkgs/pull/188544">LTO plumbing</a>
 (failed, needs more research)</li>
 <li>to sort <code>musl</code> <a href="https://github.com/NixOS/nixpkgs/issues/142066">include order</a>
-(pending, needs more reearch)</li>
+(pending, needs more research)</li>
 <li>to fix incomplete <code>mingw</code> <a href="https://github.com/NixOS/nixpkgs/issues/156343">library list</a>
 (pending, needs more research)</li>
 <li>to fix <code>include-what-you-use</code> <a href="https://github.com/NixOS/nixpkgs/issues/189753">headers path</a>
@@ -1194,7 +1194,7 @@ that).</p>
 </ul>
 <p>And in the end I ended up with <a href="https://github.com/NixOS/nixpkgs/pull/209063">PR #209063</a>
 to get <code>libgcc_s.so.1</code> up to date enough.</p>
-<p>Initially I tought that adding one <code>gcc</code> rebuild is an easy problem.
+<p>Initially I thought that adding one <code>gcc</code> rebuild is an easy problem.
 I tried adding magic lines to <code>pkgs/stdenv/linux/default.nix</code> a few
 times and failed. I did not feel I could make it work.</p>
 <p>Instead of giving up I started this post. I logged what was failing and
