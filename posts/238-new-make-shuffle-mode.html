@@ -24,30 +24,30 @@
             <h1>New make --shuffle mode</h1>
 
             <h1 id="tldr">TL;DR:</h1>
-<p>I implemented new <strong>--shuffle</strong> option for <strong>GNU make</strong> to simulate
+<p>I implemented new <code>--shuffle</code> option for <code>GNU make</code> to simulate
 non-deterministic build order in parallel makefiles.</p>
 <h1 id="background">Background</h1>
 <p>About 11 years ago I was a year old Gentoo dev who just started getting
-downstream bug reports on mysterious <strong>ghc</strong> build failures like
+downstream bug reports on mysterious <code>ghc</code> build failures like
 <a href="https://bugs.gentoo.org/326347" class="uri">https://bugs.gentoo.org/326347</a>.</p>
-<p>The symptoms were seemingly simple: some file was inacessible while
+<p>The symptoms were seemingly simple: some file was inaccessible while
 it was being written to, or executed.</p>
-<p>Years later I mastered the intricacies of <strong>ghc</strong>’s build system on how
+<p>Years later I mastered the intricacies of <code>ghc</code>’s build system on how
 to debug it effectively. But at that time I did not really know what to
 do. My main working machine was a Core 2 duo HP laptop which could not do
-more than <strong>-j2</strong>. And even that required a bit of swap for <strong>ghc</strong>’s
+more than <strong>-j2</strong>. And even that required a bit of swap for <code>ghc</code>’s
 linking stage. Throwing more parallelism was not really an option to
 trigger such bugs.</p>
 <h1 id="makefile-target-ordering">Makefile target ordering</h1>
-<p><strong>Makefiles</strong> are fundamentally simple: it’s a graph of dependencies
+<p><code>Makefile</code>s are fundamentally simple: it’s a graph of dependencies
 with a sequence of shell commands attached to a node. There are numerous
 caveats, but they should not break this model too much.</p>
-<p>In theory you can topologically sort the graph and execute the dependencies
-in various conformant orders and expect the same result. Modulo missing
-dependencies in the graph.</p>
-<p>In practice <strong>GNU make</strong> happens to traverse the graph in very specific
+<p>In theory you can topologically sort the graph and execute the
+dependencies in various conforming orders and expect the same result.
+Modulo missing dependencies in the graph.</p>
+<p>In practice <code>GNU make</code> happens to traverse the graph in very specific
 topological order: it maintains syntactic order as much as possible.</p>
-<p>Here is an example <strong>Makefile</strong>:</p>
+<p>Here is an example <code>Makefile</code>:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat Makefile</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> a b c</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -71,9 +71,9 @@ c1
 c2
 c3
 c</code></pre>
-<p>The seen order is exactly <strong>all</strong>’s prerequisites left-to-right
+<p>The seen order is exactly <code>all</code>’s prerequisites left-to-right
 recursively.</p>
-<p>Adding parallelism does not change the order too much: <strong>make</strong> still
+<p>Adding parallelism does not change the order too much: <code>make</code> still
 traverses prerequisites in the same order and starts as many targets
 with satisfied dependencies as possible.</p>
 <p>Parallel example:</p>
@@ -94,26 +94,26 @@ b
 
 c</code></pre>
 <p>I added newlines where 1-second pauses visibly happen.</p>
-<p>Note that in this example <strong>a1</strong> does not depend on
-<strong>c2</strong>. But <strong>c2</strong> practically always starts execution after <strong>a1</strong>
+<p>Note that in this example <code>a1</code> does not depend on
+<code>c2</code>. But <code>c2</code> practically always starts execution after <code>a1</code>
 finishes.</p>
-<p>The “only” way to run <strong>a1</strong> and <strong>c2</strong> in parallel is to run
-<strong>make</strong> with at least <strong>-j8</strong>. Which is a lot.</p>
+<p>The “only” way to run <code>a1</code> and <code>c2</code> in parallel is to run
+<code>make</code> with at least <code>-j8</code>. Which is a lot.</p>
 <p>Or do something with the system that stalls task execution for
 indefinite amount of time (like, adding various nice levels
 or put system under high memory or CPU pressure).</p>
 <p>Very occasionally already stressed system naturally gets into
 unusual task execution order. You get the one-off failure and
 struggle to repeat it ever again. Which makes it very hard to
-test the fix unless you know where exactly to put the <strong>sleep</strong>
+test the fix unless you know where exactly to put the <code>sleep</code>
 command to make it more reproducible.</p>
 <h1 id="an-old-idea">An old idea</h1>
 <p>Even then it was clear that CPU count per device will only increase
 and it will be increasingly painful to work with sequentially built
 projects :) Bugs will come back again and again on you the more cores
-you throw at the <strong>Makefiles</strong>.</p>
+you throw at the <code>Makefile</code>s.</p>
 <p>I had a silly idea back then (post <a href="../posts/143-make-idea.html">in russian</a>):
-what if we arbitrarily reorder the prerequisites in <strong>Makefile</strong>s? Or
+what if we arbitrarily reorder the prerequisites in <code>Makefile</code>s? Or
 maybe even trace spawned processes to know for sure what files targets
 access? That might allow us to weed out most of the parallel bugs with
 some sort of stress test on a low-core machine.</p>
@@ -121,9 +121,9 @@ some sort of stress test on a low-core machine.</p>
 in <a href="https://discourse.nixos.org/t/rfc-make-stdenv-to-build-in-parallel-by-default/15684/8">nixpkgs</a>.
 A few packages still had <a href="../posts/230-when-make-j-nproc-fails.html">some issues</a>.</p>
 <p>I recalled the idea and tried to implement target random shuffle within
-<strong>GNU make</strong>!</p>
+<code>GNU make</code>!</p>
 <h1 id="better-reproducer-make---shuffle">Better reproducer: make --shuffle</h1>
-<p>Initial idea was very simple: pick target order at <strong>Makefile</strong>
+<p>Initial idea was very simple: pick target order at <code>Makefile</code>
 parse time and reshuffle the lists randomly. To pick an example
 above one of the example shuffles would be:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ch">$ </span>cat Makefile</span>
@@ -154,9 +154,9 @@ c
 b
 a</code></pre>
 <p>Paul did not seem to object too much to the idea and pointed out
-that implementation will break more complex <strong>Makefiles</strong> as there
+that implementation will break more complex <code>Makefiles</code> as there
 is a simple way to refer to individual prerequisites by number.</p>
-<p>To pick Pauls’ example:</p>
+<p>To pick Paul’s example:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o :</span><span class="dt"> %.c</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">$(</span><span class="dt">CC</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span> -c -o <span class="ch">$@</span> <span class="ch">$&lt;</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -173,46 +173,49 @@ syntactic and shuffled and posted patch as
 <a href="https://lists.gnu.org/archive/html/bug-make/2022-02/msg00042.html" class="uri">https://lists.gnu.org/archive/html/bug-make/2022-02/msg00042.html</a>.</p>
 <h1 id="running-make---shuffle-on-real-projects">Running ‘make --shuffle’ on real projects</h1>
 <p>While I was waiting for the feedback I ran the build tests against
-<strong>nixpkgs</strong> packages.</p>
-<p>First, I almost instantly got build failures on the projects that already
-explicitly disable parallel builds to avoid known failures: <strong>groff</strong>,
-<strong>source-highlight</strong>, <strong>portaudio</strong>, <strong>slang</strong>, <strong>gnu-efi</strong>, <strong>bind</strong>,
-<strong>pth</strong>, <strong>libomxil</strong>, <strong>dhcp</strong>, <strong>directfb</strong>, <strong>doxygen</strong>, <strong>gpm</strong>,
-<strong>judy</strong> and a few others. That was a good sign.</p>
+<code>nixpkgs</code> packages.</p>
+<p>First, I almost instantly got build failures on the projects that
+already explicitly disable parallel builds to avoid known failures:
+<code>groff</code>, <code>source-highlight</code>, <code>portaudio</code>, <code>slang</code>, <code>gnu-efi</code>, <code>bind</code>,
+<code>pth</code>, <code>libomxil</code>, <code>dhcp</code>, <code>directfb</code>, <code>doxygen</code>, <code>gpm</code>, <code>judy</code> and a
+few others. That was a good sign.</p>
 <p>A bit later I started getting failures I did not encounter before in
-<strong>ghc</strong>(!), <strong>gcc</strong>(!!), <strong>automake</strong>(!!!), <strong>pulseaudio</strong>,
-<strong>libcanberra</strong>, many <strong>ocaml</strong> and some <strong>perl</strong> packages.</p>
+<code>ghc</code>(!), <code>gcc</code>(!!), <code>automake</code>(!!!), <code>pulseaudio</code>,
+<code>libcanberra</code>, many <code>ocaml</code> and some <code>perl</code> packages.</p>
 <p>All the failures looked genuine missing dependencies. For example
-<strong>gcc</strong>’s <strong>libgfortran</strong> is missing a <strong>libquadmath</strong> build dependency.
-It is natural not to encounter it in real world as <strong>libquadmath</strong> is
-usually built along with other small runtimes way before <strong>g++</strong> or
-<strong>gfortran</strong> is ready.</p>
-<p>Fun fact: while running the build I stumbled on a <strong>GNU make</strong> bug
-not related to my change: <a href="https://lists.gnu.org/archive/html/bug-make/2022-02/msg00037.html" class="uri">https://lists.gnu.org/archive/html/bug-make/2022-02/msg00037.html</a>.
-The following snippet tricks <strong>GNU make</strong> to loop for a while until
+<code>gcc</code>’s <code>libgfortran</code> is missing a <code>libquadmath</code> build dependency.
+It is natural not to encounter it in real world as <code>libquadmath</code> is
+usually built along with other small runtimes way before <code>g++</code> or
+<code>gfortran</code> is ready.</p>
+<p>Fun fact: while running the build I stumbled on a <code>GNU make</code> bug
+not related to my change:
+<a href="https://lists.gnu.org/archive/html/bug-make/2022-02/msg00037.html" class="uri">https://lists.gnu.org/archive/html/bug-make/2022-02/msg00037.html</a>.
+The following snippet tricks <code>GNU make</code> to loop for a while until
 it crashes with argument list exhaustion (or inode exhaustion in
-<strong>/tmp</strong>):</p>
+<code>/tmp</code>):</p>
 <pre><code>$ printf 'all:\n\techo $(CC)' | ./make -sf -
 &lt;hung&gt;</code></pre>
 <p>This bug is not present in any releases yet. And hopefully will not be.</p>
-<p>I’d like to land the <strong>--shuffle</strong> change upstream in some form before
-sending bug reports and trivial fixes to upstreams.</p>
+<p>I’d like to land the <code>--shuffle</code> change upstream in some form before
+sending bug reports and trivial fixes to upstream projects.</p>
 <h1 id="how-you-can-test-it">How you can test it</h1>
-<p>If you are keen to try this shuffling mode on your <strong>make</strong>-based
-projects (be it manually written, <strong>automake</strong>-based ro <strong>cmake</strong>-based)
+<p>If you are keen to try this shuffling mode on your <code>make</code>-based
+projects (be it manually written, <code>automake</code>-based or <code>cmake</code>-based)
 here is a rough instruction to do it:</p>
 <ul>
-<li>grab current git tree of <strong>GNU make</strong> at <a href="https://git.savannah.gnu.org/git/make.git" class="uri">https://git.savannah.gnu.org/git/make.git</a></li>
-<li>apply <a href="https://savannah.gnu.org/bugs/download.php?file_id=52908">v4-0001-Add-shuffle-argument-support.patch</a> from <a href="https://savannah.gnu.org/bugs/index.php?62100" class="uri">https://savannah.gnu.org/bugs/index.php?62100</a></li>
-<li>build <strong>make</strong> as typical <strong>./bothstrap &amp;&amp; configure &amp;&amp; make</strong></li>
-<li>use it as <strong>path/to/make --shuffle &lt;your-typical-make-arguments&gt;</strong> against your project</li>
+<li>grab current git tree of <code>GNU make</code> at <a href="https://git.savannah.gnu.org/git/make.git" class="uri">https://git.savannah.gnu.org/git/make.git</a></li>
+<li>apply <a href="https://savannah.gnu.org/bugs/download.php?file_id=52908">v4-0001-Add-shuffle-argument-support.patch</a>
+from <a href="https://savannah.gnu.org/bugs/index.php?62100" class="uri">https://savannah.gnu.org/bugs/index.php?62100</a></li>
+<li>build <code>make</code> as typical <code>./bootstrap &amp;&amp; configure &amp;&amp; make</code></li>
+<li>use it as <code>path/to/make --shuffle &lt;your-typical-make-arguments&gt;</code>
+against your project</li>
 <li>check if the build succeeds, run it a few times</li>
 </ul>
 <p>Both sequential and parallel modes should work fine. I suggest trying
 both. The shuffling overhead should be negligible.</p>
 <h1 id="how-do-failures-look-like">How do failures look like</h1>
-<p>When build fails it reports the shuffling mode and seed used. Let’s try it
-on a concrete <strong>cramfsswap</strong> example:</p>
+<p>When build fails it reports the shuffling mode and seed used. Let’s try
+it on a concrete <code>cramfsswap</code> example:</p>
 <pre><code>$ git clone https://github.com/julijane/cramfsswap.git
 $ cd cramfsswap
 
@@ -224,10 +227,10 @@ strip cramfsswap
 $ ~/dev/git/make/make clean &amp;&amp; ~/dev/git/make/make
 rm -f cramfsswap
 strip cramfsswap
-/nix/store/v56r6fqg2z5yc5nyjn737hiakc2xm0gh-binutils-2.38/bin/strip: 'cramfsswap': No such file
+strip: 'cramfsswap': No such file
 make: *** [Makefile:10: strip] Error 1 --shuffle=1645603370</code></pre>
 <p>Here we see a successful run and a failed run. Failed run reports
-specific seed that might trigger the failure: <strong>--shuffle=1645603370</strong>.</p>
+specific seed that might trigger the failure: <code>--shuffle=1645603370</code>.</p>
 <p>We can use this seed explicitly:</p>
 <pre><code>$ ~/dev/git/make/make --shuffle=1645603370
 strip cramfsswap
@@ -247,8 +250,8 @@ make: *** [Makefile:10: strip] Error 1 --shuffle=1645603370</code></pre>
 it earlier :) The result instantly found existing and new missing
 dependencies in a small subset of real projects. Some of these failures
 are very hard to trigger otherwise.</p>
-<p>It would be nice to get <strong>--shuffle</strong> upstreamed to ease reporting
-ordering problems to other projects without too much detail on how to get
+<p>It would be nice to get <code>--shuffle</code> upstream to ease reporting ordering
+problems to other projects without too much detail on how to get
 unusual build orders. Otherwise this post would have to do.</p>
 <p>Have fun!</p>
 
