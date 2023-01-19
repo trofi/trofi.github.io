@@ -8,8 +8,155 @@
         <name>Sergei Trofimovich</name>
         <email>slyich@gmail.com</email>
     </author>
-    <updated>2023-01-05T00:00:00Z</updated>
+    <updated>2023-01-19T00:00:00Z</updated>
     <entry>
+    <title>nix-olde - find outdated NixOS packages</title>
+    <link href="http://trofi.github.io/posts/276-nix-olde-find-outdated-nixos-packages.html" />
+    <id>http://trofi.github.io/posts/276-nix-olde-find-outdated-nixos-packages.html</id>
+    <published>2023-01-19T00:00:00Z</published>
+    <updated>2023-01-19T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<h2 id="tldr">Tl;DR</h2>
+<p>I wrote a <a href="https://github.com/trofi/nix-olde">nix-olde</a> tool to print
+outdated packages on your <code>NixOS</code> system. Run it as:</p>
+<pre><code>$ git clone https://github.com/trofi/nix-olde
+$ cd nix-olde
+$ cargo build &amp;&amp; target/debug/nix-olde
+...
+Fetching 'installed' ...
+Fetching 'repology' ...
+Fetching 'available' ...
+... 'available' done.
+... 'installed' done.
+... 'repology' done.
+repology a52dec &quot;0.8.0&quot; | nixpkgs {&quot;0.7.4&quot;} {&quot;nixos.a52dec&quot;}
+repology alsa-lib &quot;1.2.8&quot; | nixpkgs {&quot;1.2.7.2&quot;} {&quot;nixos.alsa-lib&quot;}
+...
+repology xterm &quot;378&quot; | nixpkgs {&quot;377&quot;} {&quot;nixos.xterm&quot;}
+repology xz &quot;5.4.1&quot; | nixpkgs {&quot;5.4.0&quot;} {&quot;nixos.xz&quot;}
+repology zxing-cpp-nu-book &quot;2.0.0&quot; | nixpkgs {&quot;1.4.0&quot;} {&quot;nixos.zxing-cpp&quot;}</code></pre>
+<p>Here we see all sorts of packages outdated in <code>nixpkgs</code> along with their
+versions and versions known to <code>repology.org</code> database and a package
+attribute name.</p>
+<p>I wrote it for the purpose of tricking you (and myself) to send pull
+requests against <a href="https://github.com/NixOS/nixpkgs">nixpkgs</a> to update
+some of those outdated packages :). Most of the time there is no major
+reason why a specific package is outdated.</p>
+<h2 id="more-words">More words</h2>
+<p><a href="http://trofi.github.io/posts/272-peeking-at-stale-nixpkgs-packages.html">A while ago</a> I
+shared a set of hacks I use to get a list of outdated packages. My
+system has ~1550 packages. How many of them are actually outdated?
+Let’s compare that hack with <code>nix-olde</code> result.</p>
+<p>The hack looked good enough to catch packages with simple naming scheme
+that patches upstream, <code>nixpkgs</code> and <code>repology</code>. It returned 240
+packages (about 15%). It’s quite a lot. I would expect not that many.</p>
+<p>Moreover, some packages never got into the list: none of <code>python</code>,
+<code>perl</code> or <code>haskell</code> are in the report either. I skimmed through all
+outdated <a href="https://repology.org/projects/?inrepo=nix_unstable&amp;outdated=1">nix unstable package known to repology</a>
+and found a few <code>python</code> and <code>haskell</code> I use. Not good.</p>
+<h2 id="nix-olde-improvements"><code>nix-olde</code> improvements</h2>
+<p>My hack clearly failed to map some of packages back to <code>repology</code> names.
+If I could just print unmapped packages maybe it would be a good
+starting point to see what I fail to cover. Thus the tool’s idea was
+born.</p>
+<p>The idea was simple:</p>
+<ul>
+<li>get local package list of <strong>installed</strong> packages</li>
+<li>get local package list of <strong>available</strong> packages with their <code>nix</code>
+attributes out of <code>&lt;nixpkgs&gt;</code> path.</li>
+<li><strong>fetch repology list</strong> of available and outdated packages in <code>nixpkgs</code></li>
+</ul>
+<p>Having looked at <code>list of available packages</code> I realized it’s exactly
+the source <code>nixpkgs</code> uses to tell <code>repology</code> what’s in <code>nixpkgs</code>!
+It’s hidden in <a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/top-level/make-tarball.nix#L67">make-tarball.nix</a>:</p>
+<pre><code>echo -n '{&quot;version&quot;:2,&quot;packages&quot;:' &gt; tmp
+nix-env -f . -I nixpkgs=$src -qa --meta --json --arg config 'import ${./packages-config.nix}' &gt;&gt; tmp
+echo -n '}'</code></pre>
+<p>Here we extract metadata around <code>&lt;nixpkgs&gt;</code> attributes by passing a
+special <code>config</code> that untangles metadata from current system.</p>
+<p>Thus, the mapping from installed to available packages is trivial using
+the same technique and the same output data.</p>
+<p>With help of <a href="https://serde.rs/">serde</a> <code>rust</code> crate I was able to get a
+trivial <code>json</code> reader in 2 lines of code.</p>
+<p><code>nix-olde</code> reports 391 outdated package (151 more, or about 25% of
+packages). That is a substantial improvement over a hack. New additions
+are mainly <code>python</code> and <code>perl</code> packages.</p>
+<p>As a bonus with <code>--verbose</code> flag I can see now what packages fail to map
+an attribute to <code>repology</code> database:</p>
+<pre><code>$ ./mkrun.bash -n ~/n --verbose
+...
+Installed packages missing in available list: [&quot;antlr-runtime-cpp-4.9.3&quot;,
+&quot;binutils-patchelfed-ld-2.40&quot;, &quot;binutils-patchelfed-ld-wrapper-2.40&quot;,
+&quot;boost-build-boost-1.79.0&quot;, &quot;bootstrap-stage0-binutils-wrapper-&quot;,
+&quot;bootstrap-stage0-glibc-bootstrap&quot;, &quot;bootstrap-stage1-gcc-wrapper-&quot;,
+&quot;bootstrap-stage2-gcc-wrapper-&quot;, &quot;bootstrap-stage3-gcc-wrapper-&quot;,
+&quot;bootstrap-stage4-gcc-wrapper-13.0.0&quot;, &quot;cargo-bootstrap-1.65.0&quot;,
+&quot;catalog-legacy-uris.patch&quot;, &quot;compiler-rt-static-wasm32-unknown-wasi-12.0.1&quot;,
+&quot;d3-flame-graph-templates-4.1.3&quot;, &quot;dejavu-fonts-full-2.37&quot;,
+&quot;dejavu-fonts-minimal-2.37&quot;, &quot;eglexternalplatform-1.1&quot;, &quot;gfortran-13.0.0&quot;,
+&quot;gmp-with-cxx-stage3-6.2.1&quot;, &quot;gmp-with-cxx-stage4-6.2.1&quot;,
+&quot;i686-w64-mingw32-binutils-2.40&quot;, &quot;i686-w64-mingw32-binutils-wrapper-2.40&quot;,
+&quot;i686-w64-mingw32-stage-final-gcc-13.0.0&quot;,
+&quot;i686-w64-mingw32-stage-final-gcc-wrapper-13.0.0&quot;,
+&quot;i686-w64-mingw32-stage-static-gcc-13.0.0&quot;,
+&quot;i686-w64-mingw32-stage-static-gcc-wrapper-13.0.0&quot;, &quot;isl-stage3-0.20&quot;,
+&quot;libcxx-static-wasm32-unknown-wasi-12.0.1&quot;,
+&quot;libcxxabi-static-wasm32-unknown-wasi-12.0.1&quot;, &quot;libmpc-stage3-1.3.1&quot;,
+&quot;linux-config-6.1.6&quot;, &quot;linux-headers-static-6.1&quot;,
+&quot;mcfgthreads-i686-w64-mingw32-git&quot;, &quot;mcfgthreads-x86_64-w64-mingw32-git&quot;,
+&quot;mingw-w64-i686-w64-mingw32-10.0.0&quot;, &quot;mingw-w64-x86_64-w64-mingw32-10.0.0&quot;,
+&quot;mpfr-stage3-4.2.0&quot;, &quot;musl-static-x86_64-unknown-linux-musl-1.2.3&quot;,
+&quot;nixos-version&quot;, &quot;nss-cacert-certdata-3.86&quot;,
+&quot;python3.10-cryptography-vectors-38.0.4&quot;,
+&quot;python3.10-pycryptodome-test-vectors-1.0.10&quot;,
+&quot;rakshasa-libtorrent-0.13.8+date=2021-08-07&quot;, &quot;ruby2.7.6-msgpack-1.5.1&quot;,
+&quot;ruby2.7.6-neovim-0.9.0&quot;, &quot;rubygems-3.3.20&quot;, &quot;rustc-bootstrap-1.65.0&quot;,
+&quot;rustfmt-nightly-1.66.1&quot;, &quot;systemtap-4.5&quot;, &quot;texlive-bin-2022&quot;,
+&quot;texlive-core-big.bin-2022&quot;, &quot;vkd3d-1.5&quot;, &quot;wasilibc-static-wasm32-unknown-wasi-17&quot;,
+&quot;wasm32-unknown-wasi-clang-wrapper-12.0.1&quot;,
+&quot;wasm32-unknown-wasi-llvm-binutils-wrapper-12.0.1&quot;,
+&quot;x86_64-unknown-linux-musl-binutils-2.40&quot;,
+&quot;x86_64-unknown-linux-musl-binutils-wrapper-2.40&quot;,
+&quot;x86_64-unknown-linux-musl-stage-final-gcc-13.0.0&quot;,
+&quot;x86_64-unknown-linux-musl-stage-final-gcc-wrapper-13.0.0&quot;,
+&quot;x86_64-unknown-linux-musl-stage-static-gcc-13.0.0&quot;,
+&quot;x86_64-unknown-linux-musl-stage-static-gcc-wrapper-13.0.0&quot;,
+&quot;x86_64-w64-mingw32-binutils-2.40&quot;, &quot;x86_64-w64-mingw32-binutils-wrapper-2.40&quot;,
+&quot;x86_64-w64-mingw32-stage-final-gcc-13.0.0&quot;,
+&quot;x86_64-w64-mingw32-stage-final-gcc-wrapper-13.0.0&quot;,
+&quot;x86_64-w64-mingw32-stage-static-gcc-13.0.0&quot;,
+&quot;x86_64-w64-mingw32-stage-static-gcc-wrapper-13.0.0&quot;,
+&quot;xmms2-unstable-2022-12-30&quot;]</code></pre>
+<p>Entries like <code>bootstrap-stage3-gcc-wrapper</code> are not very interesting:
+they are synthetic packages built for bootstrap and should be an alias
+to a <code>nixpkgs</code>-specific shell wrapper. I’ll try to filter them out by
+default.</p>
+<p>Entries like <code>gfortran</code> are <code>nixpkgs</code>-specific forms of <code>gcc</code>. It would
+be nice to somehow alias those back to <code>gcc</code> as well. Maybe we should
+provide a bit of extra fields in <code>meta</code> section of <code>nixpkgs</code> package
+descriptions to make it machine-generated.</p>
+<p>Entries like <code>xmms2</code> are the packages from my local overlays. It is
+expected to be in the list.</p>
+<p>Entries like <code>systemtap</code> look like a mapping bug. Needs more
+investigation. At least these are a minority and are easily debuggable
+to make <code>nix-olde</code> better reflect.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nix-olde</code> was the first non-trivial program I wrote in <code>rust</code>. The
+experience is very pleasant: option parsing and <code>json</code> parsing is
+trivial, data types are naive and yet good enough to get the job done.</p>
+<p><code>nixpkgs</code> has quite a few outdated packages in base install for my
+desktop system: around 25%. Worth improving individual packages and
+extending them to add auto-update scripts for <a href="https://ryantm.github.io/nixpkgs-update/r-ryantm/">r-ryantm</a>
+to help humans in this task.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on January 19, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>nixpkgs bootstrap deep dive</title>
     <link href="http://trofi.github.io/posts/275-nixpkgs-bootstrap-deep-dive.html" />
     <id>http://trofi.github.io/posts/275-nixpkgs-bootstrap-deep-dive.html</id>
@@ -8371,30 +8518,6 @@ $ ./result-1/bin/vcmiclient</code></pre>
 
 <div class="info">
     Posted on June 11, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>dropping disqus comments</title>
-    <link href="http://trofi.github.io/posts/246-dropping-disqus-comments.html" />
-    <id>http://trofi.github.io/posts/246-dropping-disqus-comments.html</id>
-    <published>2022-06-01T00:00:00Z</published>
-    <updated>2022-06-01T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>This personal blog gets roughly one comment a month. For some reason
-disqus decided to add automatically generated advertisement section
-around comments.</p>
-<p>I think disqus decided that this page does not qualify as a personal
-blog anymore.</p>
-<p>I dropped the integration. Now each post has a footer with an
-<a href="mailto:slyich@gmail.com">email</a> and <a href="https://github.com/trofi/trofi.github.io.gen">GitHub repo</a>
-reference.</p>
-<p>I do understand that it’s very inconvenient in case you want to reach
-out. My apologies.</p>
-
-<div class="info">
-    Posted on June  1, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
