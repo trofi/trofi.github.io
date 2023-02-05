@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: trying out flakes</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/highlighting-kate.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>trying out flakes</h1>
+
+            <h2 id="tldr">Tl;DR</h2>
+<p>If you are tempted to try <code>flake</code>-based system configuration on your
+flake-less <code>NixOS</code> but are a bit afraid of breaking existing setup
+it can be done in a few lines of <code>flake.nix</code> without breaking backwards
+compatibility. I did it this way:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="va">description</span> <span class="op">=</span> <span class="st">&quot;Desktop system config&quot;</span><span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">inputs</span>.<span class="va">nixpkgs</span>.<span class="va">url</span> <span class="op">=</span> <span class="st">&quot;github:NixOS/nixpkgs/nixos-22.11&quot;</span><span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="va">outputs</span> <span class="op">=</span> <span class="op">{</span> <span class="va">self</span><span class="op">,</span> <span class="va">nixpkgs</span> <span class="op">}</span>: <span class="op">{</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="va">nixosConfigurations</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>      <span class="va">nz</span> <span class="op">=</span> nixpkgs.lib.nixosSystem <span class="op">{</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>        <span class="va">system</span> <span class="op">=</span> <span class="st">&quot;x86_64-linux&quot;</span><span class="op">;</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>        <span class="va">modules</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>          <span class="ss">./configuration.nix</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>          <span class="co"># Remove the need for `&lt;nixos&gt;` / `&lt;nixos-config&gt;`</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>          <span class="co"># management by `root` channel.</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>          <span class="op">({</span><span class="va">config</span><span class="op">,</span> <span class="va">pkgs</span><span class="op">,</span> <span class="op">...}</span>: <span class="op">{</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>            <span class="va">nix</span>.<span class="va">nixPath</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>              <span class="st">&quot;nixpkgs=</span><span class="sc">${</span>nixpkgs<span class="sc">}</span><span class="st">&quot;</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>              <span class="st">&quot;nixos-config=/etc/nixos/configuration.nix&quot;</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>            <span class="op">];</span> <span class="op">})</span> <span class="op">];</span> <span class="op">};</span> <span class="op">};</span> <span class="op">};</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The only thing you need to do on top is to create <code>git</code> repository out
+of <code>/etc/nixos</code> and you are done:</p>
+<pre><code># cd /etc/nixos
+# git init
+# git add flake.nix # and maybe a few more files you have there
+# nixos-rebuild --impure swith</code></pre>
+<p>Done! Chances are you don’t even need <code>--impure</code>. One more touch is to
+adapt automatic updates if you have those:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="op">...</span> <span class="op">}</span>:</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">system</span>.<span class="va">autoUpgrade</span>.<span class="va">enable</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="co"># workaround unrecognized --no-build-output</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">system</span>.<span class="va">autoUpgrade</span>.<span class="va">flake</span> <span class="op">=</span> <span class="st">&quot;/etc/nixos&quot;</span><span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="va">system</span>.<span class="va">autoUpgrade</span>.<span class="va">flags</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># did not move out home directory overlay definition yet</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--impure&quot;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="co"># why not all inputs then?</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--update-input&quot;</span> <span class="st">&quot;nixpkgs&quot;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--commit-lock-file&quot;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>  <span class="op">];</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Now it’s all done!</p>
+<h2 id="long-story">Long story</h2>
+<p>When I started using <code>nix</code> daily I only heard of
+<a href="https://nixos.wiki/wiki/Flakes">nix flakes</a> a bit. I did not dare to
+try using them. Either for local development or for system-wide
+configuration. From the documentation and notes around it felt
+incompatible to current channel-based system configuration approach.</p>
+<p>My biggest achievement was to run packages right off <code>github</code> pull
+requests like:</p>
+<pre><code>$ nix run github:NixOS/nixpkgs/pull/175618/merge#firefox</code></pre>
+<p>That felt like magic: no need to clone a repository or reconfigure
+anything in the system. You just build-and-run the expression out of
+internet. But I was not sure I wanted more of <code>flakes</code> :)</p>
+<h2 id="the-need-arose">The need arose</h2>
+<p>Things have changed when Sandro tried
+<a href="https://github.com/trofi/nix-olde/">nix-olde</a> on <code>flake</code>-based system
+and got <a href="https://github.com/trofi/nix-olde/issues/2">cryptic backtraces</a>
+back.</p>
+<p>I realized I completely forgot about <code>flakes</code> existence. By now I had
+about a year of experience dealing with channel-based system
+configuration. I took it as a good opportunity to have a more detailed
+look at <code>flakes</code>.</p>
+<p>Normally <code>nix-olde</code> instantiates system derivation out of <code>&lt;nixpkgs&gt;</code>
+expression via:</p>
+<pre><code>$ nix-instantiate '&lt;nixpkgs/nixos&gt;' -A system
+/nix/store/66db0cgpvcbdfmqaz86wfv264w7k63n8-nixos-system-nz-23.05pre-git.drv</code></pre>
+<p>And then parses the <code>.drv</code> to extract the details about outdated
+packages. <code>&lt;nixpkgs&gt;</code> is usually maintained by <code>root</code> via
+<code>nix-channel</code>.</p>
+<p>But what about <code>flakes</code>? Now does the equivalent work there if we build
+the whole system out of it?</p>
+<p>I made the simplest conversion possible by defining my system flake out
+of existing <code>/etc/nixos/configuration.nix</code>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /etc/nixos/flake.nix</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">description</span> <span class="op">=</span> <span class="st">&quot;Desktop system config&quot;</span><span class="op">;</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">inputs</span>.<span class="va">nixpkgs</span>.<span class="va">url</span> <span class="op">=</span> <span class="st">&quot;github:NixOS/nixpkgs&quot;</span><span class="op">;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  <span class="va">outputs</span> <span class="op">=</span> <span class="op">{</span> <span class="va">self</span><span class="op">,</span> <span class="va">nixpkgs</span> <span class="op">}</span>: <span class="op">{</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="va">nixosConfigurations</span>.<span class="va">nz</span> <span class="op">=</span> nixpkgs.lib.nixosSystem <span class="op">{</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>      <span class="va">system</span> <span class="op">=</span> <span class="st">&quot;x86_64-linux&quot;</span><span class="op">;</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>      <span class="va">modules</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>        <span class="ss">./configuration.nix</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>      <span class="op">];</span> <span class="op">};</span> <span class="op">};</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Surprisingly that was enough to make <code>nixos-rebuild --impure switch</code>
+build my system successfully. Note: I intentionally build it from
+<code>nixpkgs</code> <code>master</code> branch and not an <code>unstable</code> channel.</p>
+<p>Then I removed <code>&lt;nixpkgs&gt;</code> channel defined by <code>root</code> user. I’m not sure
+if I’m holding it wrong but it was enough to break <code>nix-olde</code>. I
+<a href="https://github.com/trofi/nix-olde/commit/96cade0106689918c455fa0c9b78a2079aaf29c6">updated</a>
+<code>nix-olde</code> to support <code>flake</code> configuration. The gist of it is to
+instantiate the system with a new path:</p>
+<pre><code>$ nix eval --impure --raw /etc/nixos#nixosConfigurations.$(hostname).config.system.build.toplevel.drvPath
+/nix/store/x93fsz8451b0vxyz07db9879gllaq7a5-nixos-system-nz-23.05.20230205.b030e4a.drv</code></pre>
+<p>Then I noticed that <code>nix-update</code> and even <code>nix develop -f.</code> relies on
+<code>&lt;nixpkgs&gt;</code> variable to be present. I defined compatible variable to
+match system’s <code>nixpkgs</code> checkout:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /etc/nixos/flake.nix</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">description</span> <span class="op">=</span> <span class="st">&quot;Desktop system config&quot;</span><span class="op">;</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">inputs</span>.<span class="va">nixpkgs</span>.<span class="va">url</span> <span class="op">=</span> <span class="st">&quot;github:NixOS/nixpkgs&quot;</span><span class="op">;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="va">outputs</span> <span class="op">=</span> <span class="op">{</span> <span class="va">self</span><span class="op">,</span> <span class="va">nixpkgs</span> <span class="op">}</span>: <span class="op">{</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    <span class="va">nixosConfigurations</span>.<span class="va">nz</span> <span class="op">=</span> nixpkgs.lib.nixosSystem <span class="op">{</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>      <span class="va">system</span> <span class="op">=</span> <span class="st">&quot;x86_64-linux&quot;</span><span class="op">;</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>      <span class="va">modules</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>        <span class="ss">./configuration.nix</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">({</span><span class="va">config</span><span class="op">,</span> <span class="va">pkgs</span><span class="op">,</span> <span class="op">...}</span>: <span class="op">{</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>          <span class="va">nix</span>.<span class="va">nixPath</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;nixpkgs=</span><span class="sc">${</span>nixpkgs<span class="sc">}</span><span class="st">&quot;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;nixos-config=/etc/nixos/configuration.nix&quot;</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>          <span class="op">];</span> <span class="op">})</span> <span class="op">];</span> <span class="op">};</span> <span class="op">};</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>That way I could still rebuild my system with
+<code>nix build -f nixos system</code> and similar commands. And I did not change
+<code>flake.nix</code> since. I still can use all the existing tools that rely on
+<code>&lt;nixpkgs&gt;</code> path.</p>
+<p>To fix auto-upgrade I had to reconfigure it slightly:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /etc/nixos/configuration.nix</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">config</span><span class="op">,</span> <span class="va">pkgs</span><span class="op">,</span> <span class="op">...</span> <span class="op">}</span>:</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">system</span>.<span class="va">autoUpgrade</span>.<span class="va">enable</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="co"># workaround unrecognized --no-build-output</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="va">system</span>.<span class="va">autoUpgrade</span>.<span class="va">flake</span> <span class="op">=</span> <span class="st">&quot;/etc/nixos&quot;</span><span class="op">;</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  <span class="va">system</span>.<span class="va">autoUpgrade</span>.<span class="va">flags</span> <span class="op">=</span> <span class="op">[</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    <span class="co"># did not move out home directory overlay definition yet</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--impure&quot;</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    <span class="co"># why not all inputs then?</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--update-input&quot;</span> <span class="st">&quot;nixpkgs&quot;</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--commit-lock-file&quot;</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="co"># Give all the CPUs to one job at a time.</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;--max-jobs&quot;</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  <span class="op">];</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>--impure</code> allows file access outside explicit <code>input</code>s (I have a
+few overlays lying all over the system). And <code>--update-input nixpkgs</code>
+pulls <code>nixpkgs</code> update every time the system tries to update.</p>
+<p>The result is not as scary as I initially suspected. This setup did not
+break most of my workflows around local <code>nixpkgs</code> checkouts.</p>
+<p>Now I can run other packages (similar to <code>nixpkgs</code> input) right from
+<code>git</code> state. For example my typical <code>uselex</code> package is defined via git
+snapshot:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat cat ~/overlays/uselex/default.nix</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">lib</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">stdenv</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">fetchFromGitHub</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">ruby_3_1</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">binutils-unwrapped-all-targets</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">unstableGitUpdater</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>:</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>stdenv.mkDerivation <span class="kw">rec</span> <span class="op">{</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>  <span class="va">pname</span> <span class="op">=</span> <span class="st">&quot;uselex&quot;</span><span class="op">;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>  <span class="va">version</span> <span class="op">=</span> <span class="st">&quot;unstable-2022-08-29&quot;</span><span class="op">;</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="va">src</span> <span class="op">=</span> fetchFromGitHub <span class="op">{</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    <span class="va">owner</span> <span class="op">=</span> <span class="st">&quot;trofi&quot;</span><span class="op">;</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>    <span class="va">repo</span> <span class="op">=</span> <span class="st">&quot;uselex&quot;</span><span class="op">;</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    <span class="va">rev</span> <span class="op">=</span> <span class="st">&quot;5cf79a872f3331ce87171e66cf27c430585f65af&quot;</span><span class="op">;</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>    <span class="va">sha256</span> <span class="op">=</span> <span class="st">&quot;sha256-0aFJaGLcrrEkOH3cFs2uHjkCUw9ndckngfnb0J1FK7c=&quot;</span><span class="op">;</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a><span class="co"># ... more stucff</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I was able to define it’s <code>live</code> version by passing an input explicitly:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat ~/overlays/flake.nix</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">description</span> <span class="op">=</span> <span class="st">&quot;trofi's overlay&quot;</span><span class="op">;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">inputs</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">nixpkgs</span>.<span class="va">url</span> <span class="op">=</span> <span class="st">&quot;github:NixOS/nixpkgs&quot;</span><span class="op">;</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    <span class="va">uselex</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>      <span class="va">url</span> <span class="op">=</span> <span class="st">&quot;github:trofi/uselex&quot;</span><span class="op">;</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>      <span class="va">flake</span> <span class="op">=</span> <span class="cn">false</span><span class="op">;</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>  <span class="va">outputs</span> <span class="op">=</span> <span class="op">{</span> <span class="va">self</span><span class="op">,</span> <span class="va">nixpkgs</span><span class="op">,</span> <span class="va">uselex</span> <span class="op">}</span>@<span class="va">inputs</span><span class="op">:</span> <span class="kw">let</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>    <span class="va">np</span> <span class="op">=</span> <span class="bu">import</span> nixpkgs <span class="op">{</span> <span class="va">system</span> <span class="op">=</span> <span class="st">&quot;x86_64-linux&quot;</span><span class="op">;</span> <span class="op">};</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>  <span class="kw">in</span> <span class="op">{</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="va">packages</span>.<span class="st">&quot;</span>x86_64-linux<span class="st">&quot;</span> <span class="op">=</span> <span class="kw">rec</span> <span class="op">{</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>      <span class="va">uselex</span> <span class="op">=</span> np.callPackage <span class="ss">./uselex</span> <span class="op">{};</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>      <span class="va">uselex_live</span> <span class="op">=</span> uselex.overrideAttrs <span class="op">(</span><span class="va">oa</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>        <span class="va">version</span> <span class="op">=</span> inputs.uselex.shortRev<span class="op">;</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>        <span class="va">src</span> <span class="op">=</span> inputs.uselex<span class="op">;</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>      <span class="op">});</span> <span class="op">};</span> <span class="op">};</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here I defined 2 packages:</p>
+<ul>
+<li><code>uselex</code>: a package as it’s defined in <code>uselex/default.nix</code></li>
+<li><code>uselex_live</code>: a package that uses <code>master</code> branch from <code>git</code> and
+reuses rest of <code>uselex</code> definition.</li>
+</ul>
+<p>Now I can build both as:</p>
+<pre><code>$ cd ~/overlays
+$ nix build .#uselex .#uselex_live
+
+$ nix flake info
+warning: 'nix flake info' is a deprecated alias for 'nix flake metadata'
+warning: Git tree '/home/slyfox/.config/nixpkgs' is dirty
+Resolved URL:  git+file:///home/slyfox/overlays/nixpkgs
+Locked URL:    git+file:///home/slyfox/overlays/nixpkgs
+Description:   trofi's overlay
+Path:          /nix/store/s2b6pagz9i55jq71jfp3ml9y2dyl0mlr-source
+Last modified: 2023-01-26 22:07:27
+Inputs:
+├───nixpkgs: github:NixOS/nixpkgs/f69c8b761a683940edeed0c23da1a5b8bd50bed3
+└───uselex: github:trofi/uselex/5cf79a872f3331ce87171e66cf27c430585f65af</code></pre>
+<p>Using <code>--override-input</code> flag we can redirect default target commit to
+locally modified tree or any other commit:</p>
+<pre><code># no overrides:
+$ nix build .#uselex_live
+
+$ ls -ld result result-1
+result -&gt; /nix/store/76qkbdna1y4adbkk9k2g7znw2v3yyr7s-uselex-5cf79a8
+
+# redirect to the local tree:
+$ nix build .#uselex_live --override-input uselex ~/dev/git/uselex
+
+• Updated input 'uselex':
+    'github:trofi/uselex/5cf79a872f3331ce87171e66cf27c430585f65af' (2022-08-29)
+  → 'git+file:///home/slyfox/dev/git/uselex?ref=refs%2fheads%2fmaster&amp;rev=5cf79a872f3331ce87171e66cf27c430585f65af' (2022-08-29)
+$ ls -ld result result-1
+result -&gt; /nix/store/76qkbdna1y4adbkk9k2g7znw2v3yyr7s-uselex-5cf79a8
+
+# redirect to the arbitrary commit or branch:
+$ nix build .#uselex_live --override-input uselex github:trofi/uselex/fe54bc12013a2a28f1638bdd5faa2f81d4d8fd1c
+
+• Updated input 'uselex':
+    'github:trofi/uselex/5cf79a872f3331ce87171e66cf27c430585f65af' (2022-08-29)
+  → 'github:trofi/uselex/fe54bc12013a2a28f1638bdd5faa2f81d4d8fd1c' (2017-07-28)
+$ ls -ld result result-1
+result -&gt; /nix/store/82maym4hks1nfcprharxwrpvf7ck6hz4-uselex-fe54bc1</code></pre>
+<p>Note how input reports new commit it switches to and encodes it into
+package name (as we requested it with <code>version = inputs.uselex.shortRev;</code>).</p>
+<p>One can even add a short alias for an arbitrary flake repository:</p>
+<pre><code>$ nix registry add ul github:trofi/uselex-flake
+$ nix run ul#uselex_live --no-write-lock-file
+...
+ == SYNOPSIS (uselex-0.0.1)
+
+      uselex.rb - look for USEless EXports in object files
+
+$ nix registry remove ul</code></pre>
+<p>And for completeness here is how <code>flake.lock</code> looks like:</p>
+<pre><code>{
+  &quot;nodes&quot;: {
+    &quot;nixpkgs&quot;: {
+      &quot;locked&quot;: {
+        &quot;lastModified&quot;: 1675628371,
+        &quot;narHash&quot;: &quot;sha256-KsAGKX6R5OZ4mvX0v9I8rXoQD62NG8bNq2vDh731fUk=&quot;,
+        &quot;owner&quot;: &quot;NixOS&quot;,
+        &quot;repo&quot;: &quot;nixpkgs&quot;,
+        &quot;rev&quot;: &quot;461ef24010bec9df46f9f982e27441d83a856563&quot;,
+        &quot;type&quot;: &quot;github&quot;
+      },
+      &quot;original&quot;: {
+        &quot;owner&quot;: &quot;NixOS&quot;,
+        &quot;repo&quot;: &quot;nixpkgs&quot;,
+        &quot;type&quot;: &quot;github&quot;
+      }
+    },
+    &quot;root&quot;: {
+      &quot;inputs&quot;: {
+        &quot;nixpkgs&quot;: &quot;nixpkgs&quot;,
+        &quot;uselex&quot;: &quot;uselex&quot;
+      }
+    },
+    &quot;uselex&quot;: {
+      &quot;flake&quot;: false,
+      &quot;locked&quot;: {
+        &quot;lastModified&quot;: 1661761258,
+        &quot;narHash&quot;: &quot;sha256-0aFJaGLcrrEkOH3cFs2uHjkCUw9ndckngfnb0J1FK7c=&quot;,
+        &quot;owner&quot;: &quot;trofi&quot;,
+        &quot;repo&quot;: &quot;uselex&quot;,
+        &quot;rev&quot;: &quot;5cf79a872f3331ce87171e66cf27c430585f65af&quot;,
+        &quot;type&quot;: &quot;github&quot;
+      },
+      &quot;original&quot;: {
+        &quot;owner&quot;: &quot;trofi&quot;,
+        &quot;repo&quot;: &quot;uselex&quot;,
+        &quot;type&quot;: &quot;github&quot;
+      }
+    }
+  },
+  &quot;root&quot;: &quot;root&quot;,
+  &quot;version&quot;: 7
+}</code></pre>
+<h2 id="parting-words">Parting words</h2>
+<p>You don’t have to start from scratch if you are migrating from a typical
+<code>/etc/nixos/configuration.nix</code> to <code>flake.nix</code>.</p>
+<p>While slightly verbose <code>flakes</code> are not too scary as a concept. They
+allow one to encode (and persist) all external inputs into <code>/nix/store</code>
+and optionally write it into the <code>flake.lock</code> to be able to restore
+exact build environment when needed.</p>
+<p><code>flakes</code> still provide flexibility of switching the revisions back and
+forth for individual inputs for test purposes.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on February  5, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
