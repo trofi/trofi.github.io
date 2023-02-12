@@ -7,8 +7,250 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 05 Feb 2023 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sat, 11 Feb 2023 00:00:00 UT</lastBuildDate>
         <item>
+    <title>xmms2 0.9.2 is out</title>
+    <link>http://trofi.github.io/posts/279-xmms2-0.9.2-is-out.html</link>
+    <description><![CDATA[<p>Tl;DR: <code>xmms2-0.9.2</code> is out and you can get it at
+<a href="https://github.com/xmms2/xmms2-devel/releases/tag/0.9.2" class="uri">https://github.com/xmms2/xmms2-devel/releases/tag/0.9.2</a>!</p>
+<p><a href="https://en.wikipedia.org/wiki/XMMS2">xmms2</a> is still a music player
+daemon with various plugins to support stream decoding and
+transformation. See
+<a href="http://trofi.github.io/posts/244-xmms2-0.9.1-is-out.html">previous announcement</a> on how to
+get started with <code>xmms2</code>.</p>
+<h2 id="highlights">Highlights</h2>
+<p>The guest star of this release is <code>libvisual</code> plugin!</p>
+<figure>
+<img src="http://trofi.github.io/posts.data/279-xmms2-0.9.2-is-out/2023-02-11-21-22-44.png" alt="xmms2 libvisual demo" />
+<figcaption aria-hidden="true">xmms2 libvisual demo</figcaption>
+</figure>
+<p>Apart from that <code>FLAC</code> playback hangup
+<a href="http://trofi.github.io/posts/274-xmms2-flac-hangup-fix.html">fix</a> went into the release. The
+rest of changes are cosmetic.</p>
+<h2 id="libvisual-rabbit-hole">libvisual rabbit hole</h2>
+<p>In <code>xmms2-0.9.1</code> <code>libvisual</code> plugin did no work for me. I did not pay
+attention to that until Sebastian sent the
+<a href="https://github.com/xmms2/xmms2-devel/pull/15">PR #15</a> that fixes render
+stutter when player is on pause. I was not able to verify the fix and
+accepted the PR as is. The change looked reasonable. A while after
+Sebastian helped me to debug problems on my system and rule out the
+video subsystem.</p>
+<p>Quiz question: why do you think <code>libvisual</code> did not work for me? Was it
+a misconfiguration on my side? A bug in <code>xmms2</code> or somewhere else in
+it’s dependencies?</p>
+<p><a href="https://github.com/Libvisual/libvisual">libvisual</a> is a library to
+visualize your music! If you remember the times of Media Player in
+Windows 98 it’s that kind of visualization.</p>
+<p>There are various plugins that render different videos. An example may
+look this way: <a href="https://www.youtube.com/watch?v=cAM-lhiSYcY" class="uri">https://www.youtube.com/watch?v=cAM-lhiSYcY</a>.</p>
+<p><code>xmms2</code> provides <code>xmms2-libvisual</code> client application that you can run
+and see the visualization. In theory you can just run it and
+get the result:</p>
+<pre><code>$ xmms2-libvisual
+Controls: Arrow keys switch between plugins, TAB toggles fullscreen, ESC quits.
+          Each plugin can has its own mouse/key bindings, too.
+Note: you can give your favourite libvisual plugin as command line argument.
+&lt;hung&gt;</code></pre>
+<p>But in my case nothing happened: the client app just hung.</p>
+<p>By running <code>strace</code> over it I noticed that <code>xmms2-libvisual</code> used <code>UDP</code>
+protocol to connect to server. That was unusual. I expected <code>xmms2</code> to
+use shared memory when ran on a local machine.</p>
+<p>This was an <code>xmmsclient</code> bug: as some point build system stopped
+enabling <code>semtimedop()</code> presence and always fell back to <code>UDP</code>.
+Restoring <code>semtimedop()</code> was
+<a href="https://github.com/xmms2/xmms2-devel/commit/3d737ed05f8bb7d4449042d617e830f03774bc50">easy</a>:
+we needed to set <code>HAVE_SEMTIMEDOP</code> define in visualization client:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/clients/lib/xmmsclient/wscript</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/clients/lib/xmmsclient/wscript</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -37,7 +37,10 @@ def build(bld):</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>         uselib = 'socket time',</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>         use = 'xmmsipc xmmssocket xmmsutils xmmstypes xmmsvisualization',</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>         vnum = '6.0.0',</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="st">-        defines = 'XMMSC_LOG_DOMAIN=&quot;xmmsclient&quot;'</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="va">+        defines = [</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="va">+            'XMMSC_LOG_DOMAIN=&quot;xmmsclient&quot;',</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="va">+            &quot;HAVE_SEMTIMEDOP=%d&quot; % int(bld.env.have_semtimedop),</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="va">+        ]</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>         )</span></code></pre></div>
+<p>After the fix the error changed:</p>
+<pre><code>$ xmms2-libvisual
+Controls: Arrow keys switch between plugins, TAB toggles fullscreen, ESC quits.
+          Each plugin can has its own mouse/key bindings, too.
+Note: you can give your favourite libvisual plugin as command line argument.
+Available plugins:
+Error: Actor plugin not found!</code></pre>
+<p>This happens because <code>libvisual</code> itself does not render images without
+plugins. And it does not provide any default plugins. I needed to
+install <code>libvisual-plugins</code> to get something to render!</p>
+<p>Due to some specifics of <code>nixpkgs</code> there is no easy way to share plugin
+load path by both <code>libvisual</code> and <code>libvisual-plugins</code>. To work it around
+I added a
+<a href="https://github.com/xmms2/xmms2-devel/commit/749bb0c0f4b45230501a5893eb1cebe659b3bcb7">–libvisual-plugins flag</a>
+to be able to load it from arbitrary location.</p>
+<p>After that I got empty window. Sebastian helped me with that by
+configuring <code>VIS</code> output:</p>
+<pre><code>$ xmms2 server config effect.order.0 = visualization</code></pre>
+<p>And I got the video back:</p>
+<figure>
+<img src="http://trofi.github.io/posts.data/279-xmms2-0.9.2-is-out/2023-02-12-10-38-47.png" alt="xmms2 libvisual demo" />
+<figcaption aria-hidden="true">xmms2 libvisual demo</figcaption>
+</figure>
+<p>Yay!</p>
+<p>Later I returned to <code>UDP</code> protocol. It ought to work! I added a
+<a href="https://github.com/xmms2/xmms2-devel/commit/7ab91c1ec1ba2ff2cd681ac19a80bea957d3fc28">bit of logging</a>
+to see if client gets anything from the server:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/clients/lib/xmmsclient/visualization/udp.c</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/clients/lib/xmmsclient/visualization/udp.c</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -21,7 +21,8 @@ udp_timediff (int32_t id, int socket) {</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a> 	for (i = 0; i &lt; 10; ++i) {</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a> 		send (socket, packet, packet_d.size, 0);</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a> 	}</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="st">-	printf (&quot;Syncing &quot;);</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="va">+	printf (&quot;Syncing UDP time &quot;);</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="va">+	fflush (stdout);</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a> 	do {</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a> 		if ((recv (socket, packet, packet_d.size, 0) == packet_d.size) &amp;&amp; (*packet_d.__unaligned_type == 'T')) {</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a> 			struct timeval rtv;</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -45,6 +46,7 @@ udp_timediff (int32_t id, int socket) {</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a> 			       net2ts (packet_d.serverstamp), net2ts (packet_d.clientstamp), tv2ts (&amp;time));</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a> 			 end of debug */</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a> 			putchar('.');</span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="va">+			fflush (stdout);</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a> 		}</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a> 	} while (diffc &lt; 10);</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a> 	free (packet);</span></code></pre></div>
+<p><code>fflush ()</code> confirmed that server did not answer to client’s requests:</p>
+<pre><code>$ xmms2-libvisual
+...
+Syncing UDP time &lt;cursror here&gt;</code></pre>
+<p>This hangup happens due to an interesting case of handling dual-stack
+<code>IPv4+IPv6</code> setup this machine has:</p>
+<ul>
+<li>clients usually try to connect to <code>IPv4</code> first, then <code>IPv6</code> (following
+sequence of <code>getaddrinfo()</code> results)</li>
+<li>servers on the other hand try to bind to <code>IPv4</code> first, then <code>IPv6</code>.</li>
+</ul>
+<p>As a result <code>IPv6</code> client was failing to connect <code>IPv4</code> server on the
+same machine.</p>
+<p>The fix is straightforward: server should bind not to the first
+<code>getaddrinfo()</code> address, but all the <code>getaddrinfo()</code> addresses. The only
+caveat is that binding on <code>IPv6+IPv4</code> fails if <code>IPv4</code> was already bound.
+Setting <code>IPV6_V6ONLY</code> allowed disabling dual-stack default on bound
+socket.</p>
+<p><a href="https://github.com/xmms2/xmms2-devel/commit/d9d64c1d303593205251494ea4c8847174dd5e9b">The change</a>
+is a bit long as it added support for multiple server sockets in the
+event loop. It’s gist is around:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/xmms/visualization/udp.c</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/xmms/visualization/udp.c</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -122,41 +119,76 @@ init_udp (xmms_visualization_t *vis, int32_t id, xmms_error_t *err)</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a> 		hints.ai_flags = AI_PASSIVE;</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a> 		hints.ai_protocol = 0;</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a> 		if ((s = getaddrinfo (NULL, G_STRINGIFY (XMMS_DEFAULT_UDP_PORT), &amp;hints, &amp;result)) != 0)</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a> 		// ...</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="va">+		for (rp = result; rp != NULL; rp = rp-&gt;ai_next) {</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="va">+			int sock;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="va">+			xmms_vis_server_t *s = &amp;servers[opened_servers];</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="va">+			sock = socket (rp-&gt;ai_family, rp-&gt;ai_socktype, rp-&gt;ai_protocol);</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="va">+			if (!xmms_socket_valid (sock)) {</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a> 				continue;</span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a> 			}</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a><span class="st">-			if (bind (vis-&gt;socket, rp-&gt;ai_addr, rp-&gt;ai_addrlen) != -1) {</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a><span class="st">-				break;</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a><span class="st">-			} else {</span></span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a><span class="st">-				close (vis-&gt;socket);</span></span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a><span class="va">+			if (bind (sock, rp-&gt;ai_addr, rp-&gt;ai_addrlen) == -1) {</span></span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a><span class="va">+				/* In case we already bound v4 socket</span></span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a><span class="va">+				 * and v6 are attempting to set up</span></span>
+<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a><span class="va">+				 * dual-stack v4+v6. Try again v6-only</span></span>
+<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a><span class="va">+				 * mode. */</span></span>
+<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a><span class="va">+				if (rp-&gt;ai_family == AF_INET6 &amp;&amp; errno == EADDRINUSE) {</span></span>
+<span id="cb7-28"><a href="#cb7-28" aria-hidden="true" tabindex="-1"></a><span class="va">+					int v6only = 1;</span></span>
+<span id="cb7-29"><a href="#cb7-29" aria-hidden="true" tabindex="-1"></a><span class="va">+					if (setsockopt (sock, IPPROTO_IPV6, IPV6_V6ONLY, &amp;v6only, sizeof (v6only)) == -1) {</span></span>
+<span id="cb7-30"><a href="#cb7-30" aria-hidden="true" tabindex="-1"></a><span class="va">+						close (socket);</span></span>
+<span id="cb7-31"><a href="#cb7-31" aria-hidden="true" tabindex="-1"></a><span class="va">+						continue;</span></span>
+<span id="cb7-32"><a href="#cb7-32" aria-hidden="true" tabindex="-1"></a><span class="va">+					}</span></span>
+<span id="cb7-33"><a href="#cb7-33" aria-hidden="true" tabindex="-1"></a><span class="va">+					if (bind (sock, rp-&gt;ai_addr, rp-&gt;ai_addrlen) == -1) {</span></span>
+<span id="cb7-34"><a href="#cb7-34" aria-hidden="true" tabindex="-1"></a><span class="va">+						close (socket);</span></span>
+<span id="cb7-35"><a href="#cb7-35" aria-hidden="true" tabindex="-1"></a><span class="va">+						continue;</span></span>
+<span id="cb7-36"><a href="#cb7-36" aria-hidden="true" tabindex="-1"></a><span class="va">+					}</span></span></code></pre></div>
+<p>After the change I got working visualization over <code>UDP</code> a swell.</p>
+<h2 id="libvisual-udp-protocol">libvisual UDP protocol</h2>
+<p>While debugging stuck <code>visualization</code> stream I got the following picture
+of how <code>visual</code> <code>UDP</code> clients are expected to interact with <code>xmms2</code>
+server on the wire level:</p>
+<ol type="1">
+<li>First <code>xmms2-libvisual</code> connects over <code>TCP</code> (or UNIX socket) to
+<code>xmms2</code> server using standard <code>XMMS_PATH</code> environment variable. Let’s
+call it “control channel” socket.</li>
+<li>Then over over “control channel” client sends a
+<code>visualization.register()</code> RPC and gets the numeric ID back. At this
+point client does not know if it’s an <code>SHM</code> or <code>UDP</code> transport.</li>
+<li>Then client tries to open an <code>SHM</code> object with this numeric ID by
+sending <code>visualization.init_shm(id)</code> RPC. If it fails client falls back
+to try <code>UDP</code> instead.</li>
+<li>The client sends <code>visualization.init_udp(id)</code> RPC.</li>
+<li>As a response to client RPC server opens <code>UDP</code> socket on a fixed
+<code>9667</code> port and waits for incoming messages.</li>
+</ol>
+<p>Now client and server are ready to negotiate VIS-specific <code>UDP</code> channel.
+There are a few types of messages that pass arhound:</p>
+<ul>
+<li>‘H’ message (hearbeat): <code>"H&lt;id&gt;"</code> (5 bytes)</li>
+<li>‘V’ message (data): <code>"V&lt;grace&gt;&lt;server-ts&gt;&lt;size&gt;&lt;samples&gt;"</code> (up to 4k)</li>
+<li>‘T’ message (sync): <code>"T&lt;id&gt;&lt;cilent-ts&gt;&lt;server-ts&gt;"</code> (21 bytes)</li>
+<li>‘K’ message (disconnect): <code>"K"</code> (1 byte)</li>
+</ul>
+<p><code>Timestamps</code> are 8 bytes long and consist of a par of 2 values:
+4 bytes for seconds and 4 bytes for nanoseconds. Each data <code>sample</code> is a
+16-bit value. Usually of PCM format.</p>
+<p><code>UDP</code> side of the protocol looks like that:</p>
+<ul>
+<li>client -&gt; server: sends <code>"H&lt;id&gt;"</code> packet to announce it’s presence.</li>
+<li>client -&gt; server: sends <code>"T&lt;id&gt;&lt;client-ts&gt;&lt;server-ts&gt;"</code> to synchronize
+time difference and start tracking client staleness.</li>
+<li>server -&gt; client: responds with the same
+<code>"T&lt;id&gt;&lt;client-ts&gt;&lt;server-ts&gt;"</code> type of packet.</li>
+<li>server -&gt; client: periodically send
+<code>"V&lt;server-ts&gt;&lt;format&gt;&lt;size&gt;&lt;samples&gt;"</code> data where ‘samples’ contain
+an array of PCM values, usually 2048 entries. For 44100Hz
+that would cover for about 20ms of data.</li>
+<li>server -&gt; client: Eventually client stops sending sync messages (‘T’)
+and server sends <code>"K"</code> message and cleans up client handling.</li>
+</ul>
+<p>It’s not a very robust or secure protocol. But it’s so simple. It allows
+for multiple parallel visualization clients to co-exist.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>xmms2</code> is back with <code>libvisual</code> support! <code>VIS</code> protocol is not very
+complicated.</p>
+<p>To answer the quiz question above the problem was in all of the proposed
+cases:</p>
+<ul>
+<li><code>xmms2</code> did not use <code>UNIXSHM</code> for <code>visualization</code> and fell back to
+<code>UDP</code></li>
+<li><code>xmms2</code> did not bind to both <code>IPv4</code>+<code>IPv6</code> sockets on dual-stack
+system.</li>
+<li><code>nixpkgs</code> did not provide <code>libvisual-plugins</code> in any form. A required
+dependency to show anything.</li>
+<li>I did not configure <code>xmms2</code> server to have a <code>visualization</code> sink.</li>
+</ul>
+<p>After fixing all of the above I hope more people will be able to play
+with <code>libvisual</code>.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on February 11, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Sat, 11 Feb 2023 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/279-xmms2-0.9.2-is-out.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>trying out flakes</title>
     <link>http://trofi.github.io/posts/278-trying-out-flakes.html</link>
     <description><![CDATA[<h2 id="tldr">Tl;DR</h2>
@@ -8525,78 +8767,6 @@ of <strong>ABI</strong> breakage of the past.</p>
 ]]></description>
     <pubDate>Sun, 10 Jul 2022 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/250-dynamic-linking-is-hard-superh-version.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>A small update on 'make --shuffle' mode</title>
-    <link>http://trofi.github.io/posts/249-an-update-on-make-shuffle.html</link>
-    <description><![CDATA[<h1 id="tldr">Tl;DR</h1>
-<p>GNU Make <code>--shuffle</code> mode was releases as part of GNU make 4.4 \o/.</p>
-<p>Note that <code>--shuffle</code> is not enabled by default. You can enable it
-by any of below methods whichever matches best your environment:</p>
-<ul>
-<li><p>Run <code>make --shuffle</code>. For casual testing.</p></li>
-<li><p>Export <code>GNUMAKEFLAGS=--shuffle</code> environment variable. For
-day-to-day development or distribution-wide testing. It is also a
-safe value for <code>GNU make</code> that does not yet understand <code>--shuffle</code>
-option.</p>
-<p>Update: changed <del>MAKEFLAGS</del> to <code>GNUMAKEFLAGS</code> as <code>bmake</code> does not
-skip unknown options and fails. Noticed by Toralf.</p></li>
-<li><p>Apply <a href="https://slyfox.uni.cx/distfiles/make/make-4.3.90.20220619-random-by-default.patch" class="uri">https://slyfox.uni.cx/distfiles/make/make-4.3.90.20220619-random-by-default.patch</a>
-on top of snapshot tarball. Useful for environments where there is no
-easy way to pass a parameter to <code>make</code> or to set <code>GNUMAKEFLAGS</code>
-variable.</p></li>
-</ul>
-<h1 id="minor-improvements">minor improvements</h1>
-<p>Compared to the initial patch announced as a
-<a href="http://trofi.github.io/posts/238-new-make-shuffle-mode.html">proof of concept</a>
-there is one extra change: presence of <code>.NOTPARALLEL:</code> directive
-in a <code>Makefile</code> now disables shuffling in that file.</p>
-<p>It was done to accommodate rare projects that rely on execution order
-specified in <code>Makefile</code> and don’t plan to make dependencies correct
-in near future. The example is <code>netpbm</code>:
-<a href="https://sourceforge.net/p/netpbm/code/HEAD/tree/trunk/GNUmakefile#l110" class="uri">https://sourceforge.net/p/netpbm/code/HEAD/tree/trunk/GNUmakefile#l110</a></p>
-<h1 id="failure-examples">failure examples</h1>
-<p>A few new bugs were found and/or fixed:</p>
-<ul>
-<li>vim: <a href="https://github.com/vim/vim/pull/9978" class="uri">https://github.com/vim/vim/pull/9978</a></li>
-<li>groff: <a href="https://savannah.gnu.org/bugs/?62084" class="uri">https://savannah.gnu.org/bugs/?62084</a></li>
-<li>gpm: <a href="https://github.com/telmich/gpm/pull/43" class="uri">https://github.com/telmich/gpm/pull/43</a></li>
-<li>gnu-efi: <a href="https://sourceforge.net/p/gnu-efi/patches/84/" class="uri">https://sourceforge.net/p/gnu-efi/patches/84/</a></li>
-<li>cmigemo: <a href="https://github.com/koron/cmigemo/pull/29" class="uri">https://github.com/koron/cmigemo/pull/29</a></li>
-<li>harvid: <a href="https://github.com/NixOS/nixpkgs/pull/178647" class="uri">https://github.com/NixOS/nixpkgs/pull/178647</a></li>
-<li>subversion: <a href="https://issues.apache.org/jira/browse/SVN-4901" class="uri">https://issues.apache.org/jira/browse/SVN-4901</a></li>
-<li>ocamlbuild: <a href="https://github.com/ocaml/ocamlbuild/pull/318" class="uri">https://github.com/ocaml/ocamlbuild/pull/318</a></li>
-<li>ghc(!): <a href="https://gitlab.haskell.org/ghc/ghc/-/merge_requests/8531" class="uri">https://gitlab.haskell.org/ghc/ghc/-/merge_requests/8531</a></li>
-<li>slang: fixed in slang-pre2.3.3-77 snapshot in 5d36d7c2410cbd640470a9c97cc544d257c64660 commit. Could not find web UI for repository.</li>
-<li>strace: <a href="https://github.com/strace/strace/pull/215" class="uri">https://github.com/strace/strace/pull/215</a></li>
-<li>ski: <a href="https://github.com/trofi/ski/commit/7cc1ced067bf3822ef87c323b6110f38bc0ca1b5" class="uri">https://github.com/trofi/ski/commit/7cc1ced067bf3822ef87c323b6110f38bc0ca1b5</a></li>
-<li>heimdal: <a href="https://github.com/heimdal/heimdal/pull/999" class="uri">https://github.com/heimdal/heimdal/pull/999</a></li>
-<li>src-highlite: <a href="https://savannah.gnu.org/patch/index.php?10262" class="uri">https://savannah.gnu.org/patch/index.php?10262</a></li>
-<li>gcc: <a href="https://gcc.gnu.org/PR106162" class="uri">https://gcc.gnu.org/PR106162</a>, <a href="https://gcc.gnu.org/pipermail/gcc-patches/2022-September/601708.html" class="uri">https://gcc.gnu.org/pipermail/gcc-patches/2022-September/601708.html</a></li>
-<li>openipmi: <a href="https://sourceforge.net/p/openipmi/patches/37/" class="uri">https://sourceforge.net/p/openipmi/patches/37/</a></li>
-<li>avldrums.lv2: <a href="https://github.com/x42/avldrums.lv2/pull/22" class="uri">https://github.com/x42/avldrums.lv2/pull/22</a></li>
-<li>exifprobe: <a href="https://github.com/hfiguiere/exifprobe/pull/21" class="uri">https://github.com/hfiguiere/exifprobe/pull/21</a></li>
-<li>x264: <a href="https://code.videolan.org/videolan/x264/-/merge_requests/114" class="uri">https://code.videolan.org/videolan/x264/-/merge_requests/114</a></li>
-<li>ispell: will be fixed in 3.4.06. Could not find web UI for the repository.</li>
-<li>mingw-w64: <a href="https://sourceforge.net/p/mingw-w64/mingw-w64/ci/e1b0c1420bbd52ef505c71737c57393ac1397b0a/" class="uri">https://sourceforge.net/p/mingw-w64/mingw-w64/ci/e1b0c1420bbd52ef505c71737c57393ac1397b0a/</a></li>
-<li>notion: <a href="https://github.com/raboof/notion/pull/346" class="uri">https://github.com/raboof/notion/pull/346</a></li>
-<li>jhead: <a href="https://github.com/Matthias-Wandel/jhead/pull/67" class="uri">https://github.com/Matthias-Wandel/jhead/pull/67</a></li>
-<li>ldns: <a href="https://github.com/NLnetLabs/ldns/pull/192" class="uri">https://github.com/NLnetLabs/ldns/pull/192</a></li>
-<li>bitlbee-facebook: <a href="https://github.com/bitlbee/bitlbee-facebook/pull/217" class="uri">https://github.com/bitlbee/bitlbee-facebook/pull/217</a></li>
-<li>blahtexml: <a href="https://github.com/gvanas/blahtexml/pull/9" class="uri">https://github.com/gvanas/blahtexml/pull/9</a></li>
-</ul>
-<p>Nothing complicated. Just a few missing dependencies.</p>
-<p>Give it a try!</p>
-
-<div class="info">
-    Posted on June 21, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Tue, 21 Jun 2022 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/249-an-update-on-make-shuffle.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
