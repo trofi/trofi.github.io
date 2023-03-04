@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: a signal from the stars</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>a signal from the stars</h1>
+
+            <h2 id="the-distress-beacon">The distress beacon</h2>
+<p>A few days ago after another reboot into a new kernel I noticed that
+disk led on my desktop started blinking incessantly even when my system
+was idle:</p>
+<figure>
+<img src="../posts.data/281-a-signal-from-the-stars/01-shimmer.gif" alt="suspicious shimmer" />
+<figcaption aria-hidden="true">suspicious shimmer</figcaption>
+</figure>
+<p>I was not sure if it was a real thing caused by workload or a
+glitch in the led. Flashing looked a bit too frequent for a machine that
+does nothing. I was worried if it was trying to wear out my SSD as
+quickly as possible.</p>
+<h2 id="getting-the-clues">Getting the clues</h2>
+<p>So I started debugging … a led /o\.</p>
+<p>I closed all the applications including browser and window manager. I
+ran <code>sync</code> to commit all the in-flight writes to disk. Disk led was
+still flashing rapidly.</p>
+<p>I ran <code>iotop -a</code>. It claimed there was no visible I/O happening. Does it
+mean it’s just a led problem?</p>
+<p>I tried heavyweight hammer and ran <code>perf ftrace</code> to see if kernel is
+doing anything related to NVME:</p>
+<pre><code># perf ftrace -a -T 'nvme*' | cat
+
+# tracer: function
+#
+# entries-in-buffer/entries-written: 0/0   #P:16
+#
+#           TASK-PID     CPU#     TIMESTAMP  FUNCTION
+#              | |         |         |         |
+    kworker/6:1H-298     [006]   2569.645201: nvme_setup_cmd &lt;-nvme_queue_rq
+    kworker/6:1H-298     [006]   2569.645205: nvme_setup_discard &lt;-nvme_setup_cmd
+    kworker/6:1H-298     [006]   2569.749198: nvme_setup_cmd &lt;-nvme_queue_rq
+    kworker/6:1H-298     [006]   2569.749202: nvme_setup_discard &lt;-nvme_setup_cmd
+    kworker/6:1H-298     [006]   2569.853204: nvme_setup_cmd &lt;-nvme_queue_rq
+    kworker/6:1H-298     [006]   2569.853209: nvme_setup_discard &lt;-nvme_setup_cmd
+    kworker/6:1H-298     [006]   2569.958198: nvme_setup_cmd &lt;-nvme_queue_rq
+    kworker/6:1H-298     [006]   2569.958202: nvme_setup_discard &lt;-nvme_setup_cmd</code></pre>
+<p>Here we see that every 100ms kernel runs <code>nvme_setup_discard</code> function
+from kernel’s <code>kworker</code> thread. These requests looked suspicious.</p>
+<p>This trace was from <code>linux-6.2</code>. When I booted back to <code>linux-6.1</code> this
+<code>discard</code> storm disappeared. All was quiet.</p>
+<p>In case you are not familiar with SSD <code>discard</code> (or <code>trim</code>) is an
+operation that gives a hint to device that a particular block of data
+does not contain useful data and can be recycled for other uses.
+<code>discard</code> is neither read nor write operation. That’s why <code>iotop -a</code> did
+not see it.</p>
+<p>Are these discards useful or harmful? Are they intentional? Why
+<code>linux-6.1</code> was unaffected? No idea!</p>
+<h2 id="bisecting-the-kernel">Bisecting the kernel</h2>
+<p>Given that it’s seemingly a behaviour change between <code>6.1</code> and <code>6.2</code>
+kernel versions I attempted to bisect the kernel.</p>
+<p>Bisecting it was easy: I redirected local <code>linux</code> kernel package
+definition to local <code>linux.git</code> checkout and rebuilt my system against
+it.</p>
+<p>Here is a diff against <code>nixpkgs</code> I used at some point:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/os-specific/linux/kernel/common-config.nix</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/os-specific/linux/kernel/common-config.nix</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -839,8 +833,6 @@ let</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>       DVB_DYNAMIC_MINORS = option yes; # we use udev</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>       EFI_STUB            = yes; # EFI bootloader in the bzImage itself</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="st">-      EFI_GENERIC_STUB_INITRD_CMDLINE_LOADER =</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="st">-          whenOlder &quot;6.2&quot; (whenAtLeast &quot;5.8&quot; yes); # initrd kernel parameter for EFI</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>       CGROUPS             = yes; # used by systemd</span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>       FHANDLE             = yes; # used by systemd</span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>       SECCOMP             = yes; # used by systemd &gt;= 231</span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/os-specific/linux/kernel/linux-6.2.nix</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/os-specific/linux/kernel/linux-6.2.nix</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -3,7 +3,7 @@</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a> with lib;</span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a> buildLinux (args // rec {</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="st">-  version = &quot;6.2&quot;;</span></span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="va">+  version = &quot;6.1.0-rc8&quot;;</span></span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>   # modDirVersion needs to be x.y.z, will automatically add .0 if needed</span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>   modDirVersion = versions.pad 3 version;</span>
+<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -11,8 +11,9 @@ buildLinux (args // rec {</span></span>
+<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>   # branchVersion needs to be x.y</span>
+<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>   extraMeta.branch = versions.majorMinor version;</span>
+<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="st">-  src = fetchurl {</span></span>
+<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a><span class="va">+  src_ = fetchurl {</span></span>
+<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>     url = &quot;mirror://kernel/linux/kernel/v6.x/linux-${version}.tar.xz&quot;;</span>
+<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>     sha256 = &quot;sha256-dIYvqKtA7a6FuzOFwLcf4QMoi85RhSbWMZeACzy97LE=&quot;;</span>
+<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>   };</span>
+<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a><span class="va">+  src = builtins.fetchGit /home/slyfox/linux.git;</span></span>
+<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a> } // (args.argsOverride or { }))</span>
+<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/top-level/linux-kernels.nix</span></span>
+<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/top-level/linux-kernels.nix</span></span>
+<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -171,9 +171,9 @@ in {</span></span>
+<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-38"><a href="#cb2-38" aria-hidden="true" tabindex="-1"></a>     linux_6_2 = callPackage ../os-specific/linux/kernel/linux-6.2.nix {</span>
+<span id="cb2-39"><a href="#cb2-39" aria-hidden="true" tabindex="-1"></a>       kernelPatches = [</span>
+<span id="cb2-40"><a href="#cb2-40" aria-hidden="true" tabindex="-1"></a><span class="st">-        kernelPatches.bridge_stp_helper</span></span>
+<span id="cb2-41"><a href="#cb2-41" aria-hidden="true" tabindex="-1"></a><span class="st">-        kernelPatches.request_key_helper</span></span>
+<span id="cb2-42"><a href="#cb2-42" aria-hidden="true" tabindex="-1"></a><span class="st">-        kernelPatches.fix-em-ice-bonding</span></span>
+<span id="cb2-43"><a href="#cb2-43" aria-hidden="true" tabindex="-1"></a><span class="va">+        #kernelPatches.bridge_stp_helper</span></span>
+<span id="cb2-44"><a href="#cb2-44" aria-hidden="true" tabindex="-1"></a><span class="va">+        #kernelPatches.request_key_helper</span></span>
+<span id="cb2-45"><a href="#cb2-45" aria-hidden="true" tabindex="-1"></a><span class="va">+        #kernelPatches.fix-em-ice-bonding</span></span>
+<span id="cb2-46"><a href="#cb2-46" aria-hidden="true" tabindex="-1"></a>       ];</span>
+<span id="cb2-47"><a href="#cb2-47" aria-hidden="true" tabindex="-1"></a>     };</span></code></pre></div>
+<p>Here I did a few things:</p>
+<ul>
+<li>removed explicit <code>EFI_GENERIC_STUB_INITRD_CMDLINE_LOADER</code> <code>.config</code>
+setting as it disappeared somewhere between <code>6.1</code> and <code>6.2</code></li>
+<li>redirected kernel source to local checkout with
+<code>src = builtins.fetchGit /home/slyfox/linux.git;</code></li>
+<li>dropped any backported patches as they failed to apply (and were not
+relevant to storage changes)</li>
+</ul>
+<p>That was enough for me to build the system against that kernel with:</p>
+<pre><code>$ sudo nixos-rebuild switch --impure --override-input nixpkgs .</code></pre>
+<p>The minor complication was in the fact that just booting into a bad
+kernel was not always enough to trigger instant <code>discard</code> storm.
+Sometimes I had to run an I/O-heavy application.</p>
+<p>In my case running <code>firefox</code> for 30 minutes was a solid way to trigger
+the problem.</p>
+<p>After a few evenings of slow bisect I ended up at
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=63a7cb13071842966c1ce931edacbc23573aada5">this commit</a>:</p>
+<pre><code>$ git bisect good
+63a7cb13071842966c1ce931edacbc23573aada5 is the first bad commit
+commit 63a7cb13071842966c1ce931edacbc23573aada5
+Author: David Sterba
+Date:   Tue Jul 26 20:54:10 2022 +0200
+
+    btrfs: auto enable discard=async when possible
+
+    There's a request to automatically enable async discard for capable
+    devices. We can do that, the async mode is designed to wait for larger
+    freed extents and is not intrusive, with limits to iops, kbps or latency.
+
+    The status and tunables will be exported in /sys/fs/btrfs/FSID/discard .
+
+    The automatic selection is done if there's at least one discard capable
+    device in the filesystem (not capable devices are skipped). Mounting
+    with any other discard option will honor that option, notably mounting
+    with nodiscard will keep it disabled.
+
+    Link: https://lore.kernel.org/linux-btrfs/CAEg-Je_b1YtdsCR0zS5XZ_SbvJgN70ezwvRwLiCZgDGLbeMB=w@xxxxxxxxxxxxxx/
+    Reviewed-by: Boris Burkov
+    Signed-off-by: David Sterba
+
+ fs/btrfs/ctree.h   |  1 +
+ fs/btrfs/disk-io.c | 14 ++++++++++++++
+ fs/btrfs/super.c   |  2 ++
+ fs/btrfs/volumes.c |  3 +++
+ fs/btrfs/volumes.h |  2 ++
+ 5 files changed, 22 insertions(+)</code></pre>
+<p>It’s a seemingly benign <code>btrfs</code> change: it only enables <code>discard=async</code>
+mount option by default for good enough devices. It does not change
+anything about <code>btrfs</code> implementation:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/fs/btrfs/volumes.c</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/fs/btrfs/volumes.c</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -641,6 +641,9 @@ static int btrfs_open_one_device(struct btrfs_fs_devices *fs_devices,</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a> 	if (!bdev_nonrot(bdev))</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a> 		fs_devices-&gt;rotating = true;</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="va">+	if (bdev_max_discard_sectors(bdev))</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="va">+		fs_devices-&gt;discardable = true;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a> 	device-&gt;bdev = bdev;</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a> 	clear_bit(BTRFS_DEV_STATE_IN_FS_METADATA, &amp;device-&gt;dev_state);</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a> 	device-&gt;mode = flags;</span></code></pre></div>
+<h2 id="the-workaround">The workaround</h2>
+<p>To restore previous behaviour (until we find out if it’s expected) I
+added <code>"nodiscard"</code> mount option at startup and got an old behaviour on
+<code>6.2</code>!</p>
+<p>I also sent <a href="https://www.spinics.net/lists/linux-btrfs/msg133128.html">the question</a>
+to <code>linux-btrfs@</code> ML to se if it’s an expected behaviour.</p>
+<h2 id="digging-deeper">Digging deeper</h2>
+<p>Now that we have a workaround let’s try to explore where these <code>discard</code>
+requests come from.</p>
+<p>I re-enabled <code>discard=async</code> with <code>sudo mount -oremount,discard=async /</code>
+and spent some time in <code>firefox</code> to trigger the storm condition again
+when disk led started flashing again.</p>
+<p>I checked discards still get generated (and while at it confirmed it’s
+related to <code>btrfs</code>):</p>
+<pre><code>$ sudo perf ftrace -a -T '*btrfs*discard*' -T '**nvme*' | cat
+
+  kworker/u64:10-1437018 [010]  34878.171198: btrfs_discard_update_discardable &lt;-__btrfs_add_free_space
+  kworker/u64:10-1437018 [010]  34878.171198: __btrfs_discard_schedule_work &lt;-btrfs_discard_workfn
+  kworker/u64:10-1437018 [010]  34878.275039: btrfs_discard_workfn &lt;-process_one_work
+  kworker/u64:10-1437018 [010]  34878.275049: btrfs_discard_extent &lt;-do_trimming
+  kworker/u64:10-1437018 [010]  34878.275050: btrfs_map_discard &lt;-btrfs_discard_extent
+  kworker/u64:10-1437018 [010]  34878.275055: btrfs_issue_discard &lt;-btrfs_discard_extent
+   kworker/11:1H-320     [011]  34878.275095: nvme_queue_rq &lt;-blk_mq_dispatch_rq_list
+   kworker/11:1H-320     [011]  34878.275096: nvme_setup_cmd &lt;-nvme_queue_rq
+   kworker/11:1H-320     [011]  34878.275097: nvme_setup_discard &lt;-nvme_setup_cmd
+   kworker/11:1H-320     [011]  34878.275098: nvme_prep_rq.part.0 &lt;-nvme_queue_rq
+          &lt;idle&gt;-0       [011]  34878.275183: nvme_irq &lt;-__handle_irq_event_percpu
+          &lt;idle&gt;-0       [011]  34878.275184: nvme_pci_complete_batch &lt;-nvme_irq
+          &lt;idle&gt;-0       [011]  34878.275185: nvme_unmap_data &lt;-nvme_pci_complete_batch
+          &lt;idle&gt;-0       [011]  34878.275187: nvme_complete_batch_req &lt;-nvme_pci_complete_batch
+
+  kworker/u64:10-1437018 [011]  34878.275204: btrfs_discard_update_discardable &lt;-__btrfs_add_free_space
+  kworker/u64:10-1437018 [011]  34878.275204: __btrfs_discard_schedule_work &lt;-btrfs_discard_workfn
+  kworker/u64:10-1437018 [000]  34878.379054: btrfs_discard_workfn &lt;-process_one_work
+  kworker/u64:10-1437018 [000]  34878.379067: btrfs_discard_extent &lt;-do_trimming
+  kworker/u64:10-1437018 [000]  34878.379068: btrfs_map_discard &lt;-btrfs_discard_extent
+  kworker/u64:10-1437018 [000]  34878.379073: btrfs_issue_discard &lt;-btrfs_discard_extent
+    kworker/1:1H-193     [001]  34878.379215: nvme_queue_rq &lt;-blk_mq_dispatch_rq_list
+    kworker/1:1H-193     [001]  34878.379216: nvme_setup_cmd &lt;-nvme_queue_rq
+    kworker/1:1H-193     [001]  34878.379216: nvme_setup_discard &lt;-nvme_setup_cmd
+    kworker/1:1H-193     [001]  34878.379218: nvme_prep_rq.part.0 &lt;-nvme_queue_rq
+          &lt;idle&gt;-0       [002]  34878.379313: nvme_irq &lt;-__handle_irq_event_percpu
+          &lt;idle&gt;-0       [002]  34878.379314: nvme_pci_complete_batch &lt;-nvme_irq
+          &lt;idle&gt;-0       [002]  34878.379315: nvme_unmap_data &lt;-nvme_pci_complete_batch
+          &lt;idle&gt;-0       [002]  34878.379318: nvme_complete_batch_req &lt;-nvme_pci_complete_batch</code></pre>
+<p>It looks like <code>btrfs</code> keeps seeing free space being returned back to the
+system which triggers extent discard worker thread.</p>
+<p>Ideally I would expect <code>free</code> / <code>discard</code> / <code>free</code> loop to cease at some
+point. But it never does.</p>
+<p>Let’s try to find where does <code>__btrfs_add_free_space</code> come from:</p>
+<pre><code>$ sudo perf ftrace -a -T '__btrfs_add_free_space' | cat
+
+   kworker/u64:1-2379115 [001]  35176.238428: __btrfs_add_free_space &lt;-do_trimming
+   kworker/u64:1-2379115 [001]  35176.341720: __btrfs_add_free_space &lt;-do_trimming
+   kworker/u64:1-2379115 [001]  35176.446448: __btrfs_add_free_space &lt;-do_trimming
+   kworker/u64:1-2379115 [001]  35176.550321: __btrfs_add_free_space &lt;-do_trimming
+   kworker/u64:1-2379115 [001]  35176.653996: __btrfs_add_free_space &lt;-do_trimming
+   kworker/u64:1-2379115 [001]  35176.758335: __btrfs_add_free_space &lt;-do_trimming</code></pre>
+<p>If I read it correctly it’s initiated by
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/free-space-cache.c?h=v6.2#n3630">do_trimming()</a>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> do_trimming<span class="op">(</span><span class="kw">struct</span> btrfs_block_group <span class="op">*</span>block_group<span class="op">,</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>		       u64 <span class="op">*</span>total_trimmed<span class="op">,</span> u64 start<span class="op">,</span> u64 bytes<span class="op">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>		       u64 reserved_start<span class="op">,</span> u64 reserved_bytes<span class="op">,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>		       <span class="kw">enum</span> btrfs_trim_state reserved_trim_state<span class="op">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>		       <span class="kw">struct</span> btrfs_trim_range <span class="op">*</span>trim_entry<span class="op">)</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> btrfs_space_info <span class="op">*</span>space_info <span class="op">=</span> block_group<span class="op">-&gt;</span>space_info<span class="op">;</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> btrfs_fs_info <span class="op">*</span>fs_info <span class="op">=</span> block_group<span class="op">-&gt;</span>fs_info<span class="op">;</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> btrfs_free_space_ctl <span class="op">*</span>ctl <span class="op">=</span> block_group<span class="op">-&gt;</span>free_space_ctl<span class="op">;</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>	<span class="dt">int</span> ret<span class="op">;</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>	<span class="dt">int</span> update <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>	<span class="dt">const</span> u64 end <span class="op">=</span> start <span class="op">+</span> bytes<span class="op">;</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>	<span class="dt">const</span> u64 reserved_end <span class="op">=</span> reserved_start <span class="op">+</span> reserved_bytes<span class="op">;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>	<span class="kw">enum</span> btrfs_trim_state trim_state <span class="op">=</span> BTRFS_TRIM_STATE_UNTRIMMED<span class="op">;</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>	u64 trimmed <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>	spin_lock<span class="op">(&amp;</span>space_info<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>	spin_lock<span class="op">(&amp;</span>block_group<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>block_group<span class="op">-&gt;</span>ro<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>		block_group<span class="op">-&gt;</span>reserved <span class="op">+=</span> reserved_bytes<span class="op">;</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>		space_info<span class="op">-&gt;</span>bytes_reserved <span class="op">+=</span> reserved_bytes<span class="op">;</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>		update <span class="op">=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>	spin_unlock<span class="op">(&amp;</span>block_group<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>	spin_unlock<span class="op">(&amp;</span>space_info<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>	ret <span class="op">=</span> btrfs_discard_extent<span class="op">(</span>fs_info<span class="op">,</span> start<span class="op">,</span> bytes<span class="op">,</span> <span class="op">&amp;</span>trimmed<span class="op">);</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>ret<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>		<span class="op">*</span>total_trimmed <span class="op">+=</span> trimmed<span class="op">;</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>		trim_state <span class="op">=</span> BTRFS_TRIM_STATE_TRIMMED<span class="op">;</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>	mutex_lock<span class="op">(&amp;</span>ctl<span class="op">-&gt;</span>cache_writeout_mutex<span class="op">);</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>reserved_start <span class="op">&lt;</span> start<span class="op">)</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>		__btrfs_add_free_space<span class="op">(</span>block_group<span class="op">,</span> reserved_start<span class="op">,</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>				       start <span class="op">-</span> reserved_start<span class="op">,</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>				       reserved_trim_state<span class="op">);</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>start <span class="op">+</span> bytes <span class="op">&lt;</span> reserved_start <span class="op">+</span> reserved_bytes<span class="op">)</span></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>		__btrfs_add_free_space<span class="op">(</span>block_group<span class="op">,</span> end<span class="op">,</span> reserved_end <span class="op">-</span> end<span class="op">,</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>				       reserved_trim_state<span class="op">);</span></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>	__btrfs_add_free_space<span class="op">(</span>block_group<span class="op">,</span> start<span class="op">,</span> bytes<span class="op">,</span> trim_state<span class="op">);</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>	list_del<span class="op">(&amp;</span>trim_entry<span class="op">-&gt;</span>list<span class="op">);</span></span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a>	mutex_unlock<span class="op">(&amp;</span>ctl<span class="op">-&gt;</span>cache_writeout_mutex<span class="op">);</span></span>
+<span id="cb8-44"><a href="#cb8-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-45"><a href="#cb8-45" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>update<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb8-46"><a href="#cb8-46" aria-hidden="true" tabindex="-1"></a>		spin_lock<span class="op">(&amp;</span>space_info<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-47"><a href="#cb8-47" aria-hidden="true" tabindex="-1"></a>		spin_lock<span class="op">(&amp;</span>block_group<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-48"><a href="#cb8-48" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>block_group<span class="op">-&gt;</span>ro<span class="op">)</span></span>
+<span id="cb8-49"><a href="#cb8-49" aria-hidden="true" tabindex="-1"></a>			space_info<span class="op">-&gt;</span>bytes_readonly <span class="op">+=</span> reserved_bytes<span class="op">;</span></span>
+<span id="cb8-50"><a href="#cb8-50" aria-hidden="true" tabindex="-1"></a>		block_group<span class="op">-&gt;</span>reserved <span class="op">-=</span> reserved_bytes<span class="op">;</span></span>
+<span id="cb8-51"><a href="#cb8-51" aria-hidden="true" tabindex="-1"></a>		space_info<span class="op">-&gt;</span>bytes_reserved <span class="op">-=</span> reserved_bytes<span class="op">;</span></span>
+<span id="cb8-52"><a href="#cb8-52" aria-hidden="true" tabindex="-1"></a>		spin_unlock<span class="op">(&amp;</span>block_group<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-53"><a href="#cb8-53" aria-hidden="true" tabindex="-1"></a>		spin_unlock<span class="op">(&amp;</span>space_info<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb8-54"><a href="#cb8-54" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb8-55"><a href="#cb8-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-56"><a href="#cb8-56" aria-hidden="true" tabindex="-1"></a>	<span class="cf">return</span> ret<span class="op">;</span></span>
+<span id="cb8-57"><a href="#cb8-57" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>It’s a long function, but not too complicated:</p>
+<ul>
+<li>block groups are ~256MB chunk of bytes on disk that contains various
+items</li>
+<li>there are 3 types of block groups: <code>DATA</code> (user’s bytes), <code>MEATADATA</code>
+(file system metadata) and <code>SYSTEM</code> (tiny amount of metadata that
+spans multiple devices).</li>
+<li><code>btrfs</code> tracks two ranges per block group: used range and reserved
+range.</li>
+<li><code>btrfs</code> uses
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/extent-tree.c?h=v6.2#n1319">btrfs_discard_extent()</a>
+to mark extent as freed.</li>
+<li><code>btrfs</code> uses
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/free-space-cache.c?h=v6.2#n2609">__btrfs_add_free_space()</a> to cache free space
+info on disk.</li>
+</ul>
+<p>Let’s repeat the exercise of chasing what initiates the trim to see if
+this thing some sort of internal cycle:</p>
+<pre><code>$ sudo perf ftrace -a -T 'do_trimming' | head -n 10 | tail -n 1
+   kworker/u64:7-2381087 [009]  36596.861571: do_trimming &lt;-trim_no_bitmap
+
+$ sudo perf ftrace -a -T 'trim_no_bitmap' | head -n 10 | tail -n 1
+   kworker/u64:6-2379320 [015]  36627.125062: trim_no_bitmap &lt;-btrfs_trim_block_group_extents
+
+   kworker/u64:2-2379316 [010]  36650.500676: btrfs_trim_block_group_extents &lt;-btrfs_discard_workfn
+   worker/u64:2-2379316 [005]  36676.812243: btrfs_discard_workfn &lt;-process_one_work
+   worker/6:1-2382788 [006]  36709.360688: process_one_work &lt;-worker_thread</code></pre>
+<p>We hit a dead end: <code>worker_thread()</code> pulls in work items from somewhere
+and processes them. Let’s find what queues those up!</p>
+<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n446">btrfs_discard_workfn()</a>
+definition is also not too complicated:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * Discard work queue callback</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co"> *</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co"> * @work: work</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="co"> *</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co"> * Find the next block_group to start discarding and then discard a single</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="co"> * region.  It does this in a two-pass fashion: first extents and second</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="co"> * bitmaps.  Completely discarded block groups are sent to the unused_bgs path.</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> btrfs_discard_workfn<span class="op">(</span><span class="kw">struct</span> work_struct <span class="op">*</span>work<span class="op">)</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> btrfs_discard_ctl <span class="op">*</span>discard_ctl<span class="op">;</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> btrfs_block_group <span class="op">*</span>block_group<span class="op">;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>	<span class="kw">enum</span> btrfs_discard_state discard_state<span class="op">;</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>	<span class="dt">int</span> discard_index <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>	u64 trimmed <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>	u64 minlen <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>	u64 now <span class="op">=</span> ktime_get_ns<span class="op">();</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>	discard_ctl <span class="op">=</span> container_of<span class="op">(</span>work<span class="op">,</span> <span class="kw">struct</span> btrfs_discard_ctl<span class="op">,</span> work<span class="op">.</span>work<span class="op">);</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>	block_group <span class="op">=</span> peek_discard_list<span class="op">(</span>discard_ctl<span class="op">,</span> <span class="op">&amp;</span>discard_state<span class="op">,</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>					<span class="op">&amp;</span>discard_index<span class="op">,</span> now<span class="op">);</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>block_group <span class="op">||</span> <span class="op">!</span>btrfs_run_discard_work<span class="op">(</span>discard_ctl<span class="op">))</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>now <span class="op">&lt;</span> block_group<span class="op">-&gt;</span>discard_eligible_time<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>		btrfs_discard_schedule_work<span class="op">(</span>discard_ctl<span class="op">,</span> false<span class="op">);</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>	<span class="co">/* Perform discarding */</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>	minlen <span class="op">=</span> discard_minlen<span class="op">[</span>discard_index<span class="op">];</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>discard_state <span class="op">==</span> BTRFS_DISCARD_BITMAPS<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>		u64 maxlen <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>		<span class="co">/*</span></span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a><span class="co">		 * Use the previous levels minimum discard length as the max</span></span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a><span class="co">		 * length filter.  In the case something is added to make a</span></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a><span class="co">		 * region go beyond the max filter, the entire bitmap is set</span></span>
+<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a><span class="co">		 * back to BTRFS_TRIM_STATE_UNTRIMMED.</span></span>
+<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a><span class="co">		 */</span></span>
+<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>discard_index <span class="op">!=</span> BTRFS_DISCARD_INDEX_UNUSED<span class="op">)</span></span>
+<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a>			maxlen <span class="op">=</span> discard_minlen<span class="op">[</span>discard_index <span class="op">-</span> <span class="dv">1</span><span class="op">];</span></span>
+<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a>		btrfs_trim_block_group_bitmaps<span class="op">(</span>block_group<span class="op">,</span> <span class="op">&amp;</span>trimmed<span class="op">,</span></span>
+<span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a>				       block_group<span class="op">-&gt;</span>discard_cursor<span class="op">,</span></span>
+<span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a>				       btrfs_block_group_end<span class="op">(</span>block_group<span class="op">),</span></span>
+<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>				       minlen<span class="op">,</span> maxlen<span class="op">,</span> true<span class="op">);</span></span>
+<span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a>		discard_ctl<span class="op">-&gt;</span>discard_bitmap_bytes <span class="op">+=</span> trimmed<span class="op">;</span></span>
+<span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a>		btrfs_trim_block_group_extents<span class="op">(</span>block_group<span class="op">,</span> <span class="op">&amp;</span>trimmed<span class="op">,</span></span>
+<span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a>				       block_group<span class="op">-&gt;</span>discard_cursor<span class="op">,</span></span>
+<span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>				       btrfs_block_group_end<span class="op">(</span>block_group<span class="op">),</span></span>
+<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a>				       minlen<span class="op">,</span> true<span class="op">);</span></span>
+<span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a>		discard_ctl<span class="op">-&gt;</span>discard_extent_bytes <span class="op">+=</span> trimmed<span class="op">;</span></span>
+<span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-59"><a href="#cb10-59" aria-hidden="true" tabindex="-1"></a>	<span class="co">/* Determine next steps for a block_group */</span></span>
+<span id="cb10-60"><a href="#cb10-60" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>block_group<span class="op">-&gt;</span>discard_cursor <span class="op">&gt;=</span> btrfs_block_group_end<span class="op">(</span>block_group<span class="op">))</span> <span class="op">{</span></span>
+<span id="cb10-61"><a href="#cb10-61" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>discard_state <span class="op">==</span> BTRFS_DISCARD_BITMAPS<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb10-62"><a href="#cb10-62" aria-hidden="true" tabindex="-1"></a>			btrfs_finish_discard_pass<span class="op">(</span>discard_ctl<span class="op">,</span> block_group<span class="op">);</span></span>
+<span id="cb10-63"><a href="#cb10-63" aria-hidden="true" tabindex="-1"></a>		<span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb10-64"><a href="#cb10-64" aria-hidden="true" tabindex="-1"></a>			block_group<span class="op">-&gt;</span>discard_cursor <span class="op">=</span> block_group<span class="op">-&gt;</span>start<span class="op">;</span></span>
+<span id="cb10-65"><a href="#cb10-65" aria-hidden="true" tabindex="-1"></a>			spin_lock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb10-66"><a href="#cb10-66" aria-hidden="true" tabindex="-1"></a>			<span class="cf">if</span> <span class="op">(</span>block_group<span class="op">-&gt;</span>discard_state <span class="op">!=</span></span>
+<span id="cb10-67"><a href="#cb10-67" aria-hidden="true" tabindex="-1"></a>			    BTRFS_DISCARD_RESET_CURSOR<span class="op">)</span></span>
+<span id="cb10-68"><a href="#cb10-68" aria-hidden="true" tabindex="-1"></a>				block_group<span class="op">-&gt;</span>discard_state <span class="op">=</span></span>
+<span id="cb10-69"><a href="#cb10-69" aria-hidden="true" tabindex="-1"></a>							BTRFS_DISCARD_BITMAPS<span class="op">;</span></span>
+<span id="cb10-70"><a href="#cb10-70" aria-hidden="true" tabindex="-1"></a>			spin_unlock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb10-71"><a href="#cb10-71" aria-hidden="true" tabindex="-1"></a>		<span class="op">}</span></span>
+<span id="cb10-72"><a href="#cb10-72" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb10-73"><a href="#cb10-73" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-74"><a href="#cb10-74" aria-hidden="true" tabindex="-1"></a>	now <span class="op">=</span> ktime_get_ns<span class="op">();</span></span>
+<span id="cb10-75"><a href="#cb10-75" aria-hidden="true" tabindex="-1"></a>	spin_lock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb10-76"><a href="#cb10-76" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>prev_discard <span class="op">=</span> trimmed<span class="op">;</span></span>
+<span id="cb10-77"><a href="#cb10-77" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>prev_discard_time <span class="op">=</span> now<span class="op">;</span></span>
+<span id="cb10-78"><a href="#cb10-78" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>block_group <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb10-79"><a href="#cb10-79" aria-hidden="true" tabindex="-1"></a>	__btrfs_discard_schedule_work<span class="op">(</span>discard_ctl<span class="op">,</span> now<span class="op">,</span> false<span class="op">);</span></span>
+<span id="cb10-80"><a href="#cb10-80" aria-hidden="true" tabindex="-1"></a>	spin_unlock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb10-81"><a href="#cb10-81" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here worker thread expects items of <code>struct btrfs_discard_ctl</code> type to
+process. Scrolling the file around
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n324">btrfs_discard_queue_work()</a>
+seems to be most plausible candidate we are looking for:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> __btrfs_discard_schedule_work<span class="op">(</span><span class="kw">struct</span> btrfs_discard_ctl <span class="op">*</span>discard_ctl<span class="op">,</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>					  u64 now<span class="op">,</span> <span class="dt">bool</span> override<span class="op">)</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> btrfs_block_group <span class="op">*</span>block_group<span class="op">;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>btrfs_run_discard_work<span class="op">(</span>discard_ctl<span class="op">))</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>override <span class="op">&amp;&amp;</span> delayed_work_pending<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>work<span class="op">))</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>	block_group <span class="op">=</span> find_next_block_group<span class="op">(</span>discard_ctl<span class="op">,</span> now<span class="op">);</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>block_group<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>		u64 delay <span class="op">=</span> discard_ctl<span class="op">-&gt;</span>delay_ms <span class="op">*</span> NSEC_PER_MSEC<span class="op">;</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>		u32 kbps_limit <span class="op">=</span> READ_ONCE<span class="op">(</span>discard_ctl<span class="op">-&gt;</span>kbps_limit<span class="op">);</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>		<span class="co">/*</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a><span class="co">		 * A single delayed workqueue item is responsible for</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a><span class="co">		 * discarding, so we can manage the bytes rate limit by keeping</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="co">		 * track of the previous discard.</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a><span class="co">		 */</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>kbps_limit <span class="op">&amp;&amp;</span> discard_ctl<span class="op">-&gt;</span>prev_discard<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>			u64 bps_limit <span class="op">=</span> <span class="op">((</span>u64<span class="op">)</span>kbps_limit<span class="op">)</span> <span class="op">*</span> SZ_1K<span class="op">;</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>			u64 bps_delay <span class="op">=</span> div64_u64<span class="op">(</span>discard_ctl<span class="op">-&gt;</span>prev_discard <span class="op">*</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>						  NSEC_PER_SEC<span class="op">,</span> bps_limit<span class="op">);</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>			delay <span class="op">=</span> max<span class="op">(</span>delay<span class="op">,</span> bps_delay<span class="op">);</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>		<span class="op">}</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>		<span class="co">/*</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a><span class="co">		 * This timeout is to hopefully prevent immediate discarding</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a><span class="co">		 * in a recently allocated block group.</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a><span class="co">		 */</span></span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>now <span class="op">&lt;</span> block_group<span class="op">-&gt;</span>discard_eligible_time<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>			u64 bg_timeout <span class="op">=</span> block_group<span class="op">-&gt;</span>discard_eligible_time <span class="op">-</span> now<span class="op">;</span></span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>			delay <span class="op">=</span> max<span class="op">(</span>delay<span class="op">,</span> bg_timeout<span class="op">);</span></span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>		<span class="op">}</span></span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>override <span class="op">&amp;&amp;</span> discard_ctl<span class="op">-&gt;</span>prev_discard<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>			u64 elapsed <span class="op">=</span> now <span class="op">-</span> discard_ctl<span class="op">-&gt;</span>prev_discard_time<span class="op">;</span></span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a>			<span class="cf">if</span> <span class="op">(</span>delay <span class="op">&gt;</span> elapsed<span class="op">)</span></span>
+<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a>				delay <span class="op">-=</span> elapsed<span class="op">;</span></span>
+<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>			<span class="cf">else</span></span>
+<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>				delay <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a>		<span class="op">}</span></span>
+<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>		mod_delayed_work<span class="op">(</span>discard_ctl<span class="op">-&gt;</span>discard_workers<span class="op">,</span></span>
+<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>				 <span class="op">&amp;</span>discard_ctl<span class="op">-&gt;</span>work<span class="op">,</span> nsecs_to_jiffies<span class="op">(</span>delay<span class="op">));</span></span>
+<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Note that this handler does not execute the discard requests as soon as
+possible! It has has at least one rate limiter based on
+<code>discard_ctl-&gt;kbps_limit</code>.</p>
+<p>And there are even more rate limiters defined by
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n545">btrfs_discard_calc_delay()</a></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> btrfs_discard_calc_delay<span class="op">(</span><span class="kw">struct</span> btrfs_discard_ctl <span class="op">*</span>discard_ctl<span class="op">)</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>	s32 discardable_extents<span class="op">;</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>	s64 discardable_bytes<span class="op">;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>	u32 iops_limit<span class="op">;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>	<span class="dt">unsigned</span> <span class="dt">long</span> delay<span class="op">;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>	discardable_extents <span class="op">=</span> atomic_read<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>discardable_extents<span class="op">);</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>discardable_extents<span class="op">)</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>	spin_lock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>	<span class="co">/*</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a><span class="co">	 * The following is to fix a potential -1 discrepancy that we're not</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a><span class="co">	 * sure how to reproduce. But given that this is the only place that</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a><span class="co">	 * utilizes these numbers and this is only called by from</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a><span class="co">	 * btrfs_finish_extent_commit() which is synchronized, we can correct</span></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a><span class="co">	 * here.</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a><span class="co">	 */</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>discardable_extents <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>		atomic_add<span class="op">(-</span>discardable_extents<span class="op">,</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>			   <span class="op">&amp;</span>discard_ctl<span class="op">-&gt;</span>discardable_extents<span class="op">);</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>	discardable_bytes <span class="op">=</span> atomic64_read<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>discardable_bytes<span class="op">);</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>discardable_bytes <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a>		atomic64_add<span class="op">(-</span>discardable_bytes<span class="op">,</span></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>			     <span class="op">&amp;</span>discard_ctl<span class="op">-&gt;</span>discardable_bytes<span class="op">);</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-30"><a href="#cb12-30" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>discardable_extents <span class="op">&lt;=</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-31"><a href="#cb12-31" aria-hidden="true" tabindex="-1"></a>		spin_unlock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb12-32"><a href="#cb12-32" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
+<span id="cb12-33"><a href="#cb12-33" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
+<span id="cb12-34"><a href="#cb12-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-35"><a href="#cb12-35" aria-hidden="true" tabindex="-1"></a>	iops_limit <span class="op">=</span> READ_ONCE<span class="op">(</span>discard_ctl<span class="op">-&gt;</span>iops_limit<span class="op">);</span></span>
+<span id="cb12-36"><a href="#cb12-36" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>iops_limit<span class="op">)</span></span>
+<span id="cb12-37"><a href="#cb12-37" aria-hidden="true" tabindex="-1"></a>		delay <span class="op">=</span> MSEC_PER_SEC <span class="op">/</span> iops_limit<span class="op">;</span></span>
+<span id="cb12-38"><a href="#cb12-38" aria-hidden="true" tabindex="-1"></a>	<span class="cf">else</span></span>
+<span id="cb12-39"><a href="#cb12-39" aria-hidden="true" tabindex="-1"></a>		delay <span class="op">=</span> BTRFS_DISCARD_TARGET_MSEC <span class="op">/</span> discardable_extents<span class="op">;</span></span>
+<span id="cb12-40"><a href="#cb12-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-41"><a href="#cb12-41" aria-hidden="true" tabindex="-1"></a>	delay <span class="op">=</span> clamp<span class="op">(</span>delay<span class="op">,</span> BTRFS_DISCARD_MIN_DELAY_MSEC<span class="op">,</span></span>
+<span id="cb12-42"><a href="#cb12-42" aria-hidden="true" tabindex="-1"></a>		      BTRFS_DISCARD_MAX_DELAY_MSEC<span class="op">);</span></span>
+<span id="cb12-43"><a href="#cb12-43" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>delay_ms <span class="op">=</span> delay<span class="op">;</span></span>
+<span id="cb12-44"><a href="#cb12-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-45"><a href="#cb12-45" aria-hidden="true" tabindex="-1"></a>	spin_unlock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
+<span id="cb12-46"><a href="#cb12-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Thus here are rate limits we see:</p>
+<ul>
+<li><code>discard_ctl-&gt;kbps_limit</code>: discard bytes/sec rate limit</li>
+<li><code>discard_ctl-&gt;iops_limit</code>: discard requests/sec rate limit</li>
+<li><code>BTRFS_DISCARD_MIN_DELAY_MSEC=1ms</code> to <code>BTRFS_DISCARD_MAX_DELAY_MSEC=1s</code>:
+allowed delay range between discards</li>
+</ul>
+<p>Some of these we can inspect and change at runtime:</p>
+<pre><code>$ cd /sys/fs/btrfs/&lt;UUID&gt;/discard
+$ for f in *; do echo -ne &quot;$f:\t&quot;; cat $f; done
+
+discard_bitmap_bytes:   98213888
+discard_bytes_saved:    27716325376
+discard_extent_bytes:   38577287168
+discardable_bytes:      19484499968
+discardable_extents:    228442
+iops_limit:     10
+kbps_limit:     0
+max_discard_size:       67108864</code></pre>
+<p>I’m not sure I believe <code>discardable_bytes=19484499968</code> value. This is
+supposed to be a discard backlog queued but I’m skeptical. It never goes
+down to zero. Looks more like broken accounting. What is worse this
+(invalid) value is being used to calculate latency of a next request.</p>
+<h2 id="discard-requests-timing-patterns">Discard requests timing patterns</h2>
+<p>So, it looks like 10 discards/sec are expected default on <code>linux-6.2</code>.
+Let’s find the source of those discards. Looking at
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c">discard.c</a>
+these functions looked plausible:</p>
+<pre><code>$ sudo perf ftrace -a -T 'btrfs_discard_workfn' -T 'btrfs_issue_discard' -T 'btrfs_discard_queue_work'
+btrfs-transacti-407     [011]  42800.424027: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
+btrfs-transacti-407     [011]  42800.424070: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
+...
+btrfs-transacti-407     [011]  42800.425053: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
+btrfs-transacti-407     [011]  42800.425055: btrfs_discard_queue_work &lt;-__btrfs_add_free_space</code></pre>
+<p>I saw 193 entries of <code>btrfs_discard_queue_work</code> above. It took 1ms to
+enqueue all of the work into the work queue. Very quick and not too
+large. Right after it we see actual discards being sent to the device:</p>
+<pre><code>kworker/u64:1-2379115 [000]  42800.487010: btrfs_discard_workfn &lt;-process_one_work
+kworker/u64:1-2379115 [000]  42800.487028: btrfs_issue_discard &lt;-btrfs_discard_extent
+kworker/u64:1-2379115 [005]  42800.594010: btrfs_discard_workfn &lt;-process_one_work
+kworker/u64:1-2379115 [005]  42800.594031: btrfs_issue_discard &lt;-btrfs_discard_extent
+...
+kworker/u64:15-2396822 [007]  42830.441487: btrfs_discard_workfn &lt;-process_one_work
+kworker/u64:15-2396822 [007]  42830.441502: btrfs_issue_discard &lt;-btrfs_discard_extent
+kworker/u64:15-2396822 [000]  42830.546497: btrfs_discard_workfn &lt;-process_one_work
+kworker/u64:15-2396822 [000]  42830.546524: btrfs_issue_discard &lt;-btrfs_discard_extent</code></pre>
+<p>286 pairs of <code>btrfs_discard_workfn</code> / <code>btrfs_issue_discard</code>.
+Each pair takes 100ms to process, which seems to match <code>iops_limit=10</code>.</p>
+<p>And 30s is also a <code>btrfs</code> commit interval where the next batch of
+discard work gets landed:</p>
+<pre><code>btrfs-transacti-407     [002]  42830.634216: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
+btrfs-transacti-407     [002]  42830.634228: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
+...</code></pre>
+<p>That means I can get about 300 discards per second max. Also, given that
+discards were being sent over full span of 30s I think that work queue
+was not exhausted and there still was backlog in the queue.</p>
+<p>I think <code>discardable_bytes</code> / <code>discardable_extents</code> is the backlog
+metric, but I’m not sure as it never gets down to zero.</p>
+<h2 id="another-workaround">Another workaround</h2>
+<p>Now it’s clear we can manipulate the pace by changing the delay between
+discards. To speed up the discard pace we can drop IO limit with:</p>
+<pre><code># echo 10000 &gt; /sys/fs/btrfs/&lt;UUID&gt;/discard/iops_limit</code></pre>
+<p>That allows getting rid of discard backlog. But I don’t know if it’s a
+reasonable fix or it’s better to keep discards be delayed for a while.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>btrfs</code> uses <code>discard</code> to mark extents as free for an underlying device.</p>
+<p><code>linux-6.2</code> enabled automatic async discard for <code>btrfs</code> on appropriate
+SSD devices. This manifests as a constant device activity if you have
+any reasonable amount of IO on your device (even trivial super block
+commits are enough).</p>
+<p>Default async discard rate limits <code>linux</code> has today are:</p>
+<ul>
+<li><code>discard_ctl-&gt;kbps_limit = 0</code>: discard bytes/sec rate limit</li>
+<li><code>discard_ctl-&gt;iops_limit = 10</code>: discard requests/sec rate limit</li>
+<li><code>BTRFS_DISCARD_MIN_DELAY_MSEC = 1ms</code> to <code>BTRFS_DISCARD_MAX_DELAY_MSEC = 1s</code>:
+allowed delay range between discards</li>
+</ul>
+<p>Some of the defaults can be changed at runtime. Just <code>echo</code> a new value
+to <code>/sys/fs/btrfs/&lt;UUID&gt;/discard/iops_limit</code> or <code>kbps_limit</code>.</p>
+<p>Some of the counter metrics in <code>/sys/fs/btrfs/&lt;UUID&gt;/discard/*</code> look
+inaccurate.</p>
+<p><code>perf ftrace</code> (and <code>perf trace</code>!) are nice tools to quickly peek at what
+the kernel is doing right now.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on March  4, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
