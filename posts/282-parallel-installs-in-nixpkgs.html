@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: parallel installs in nixpkgs</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>parallel installs in nixpkgs</h1>
+
+            <h2 id="tldr">Tl;DR</h2>
+<p>As of a few minutes ago <code>nixpkgs</code> does parallel installs for <code>Makefile</code>
+based build systems using <code>make install -j$(nproc)</code>. As long as the
+packages have <code>enableParallelBuilding = true;</code>.</p>
+<p>Sequential packages are unchanged and still do sequential installs.</p>
+<p>You can revert to previous behaviour for your packages by using
+<code>enableParallelInstalling = false;</code> if needed. But better try to fix the
+issues upstream.</p>
+<h2 id="more-words">More words</h2>
+<p><code>Makefile</code>s are <a href="../posts/230-when-make-j-nproc-fails.html">hard</a>. I tried
+enabling parallel builds by default in <code>nixpkgs</code> and
+<a href="https://github.com/NixOS/nixpkgs/issues/142338">failed</a>.
+The primary rejection reason was the worry that too many packages will
+break and <code>nixpkgs</code> will degrade too much. I agree those problems are
+not trivial to diagnose, debug and fix. We need a better way of weeding
+out the issues.</p>
+<p>But I did not completely give up. I still want my “parallel-by-default”
+dream to come true. I added a new <a href="../posts/238-new-make-shuffle-mode.html">make --shuffle</a>
+to <code>GNU make</code> to ease reporting and validation of parallel build fixes.</p>
+<p>And I’m still occasionally sending fixes for parallel build issues
+upstream. I noticed others also do it time to time. That’s so nice to
+see!</p>
+<p>A few weeks ago my main desktop <a href="../posts/280-cooling-failure.html">broke</a>
+and I had to spend some time on my older machine that is not that fast
+to compile packages. There I noticed long install phase of <code>openssl</code>
+package in <code>nixpkgs</code>.</p>
+<p>Quick quiz: how log do you think <code>make install</code> takes for <code>openssl</code> on
+modern hardware? 1 second? 10 seconds? 1 minute? 10 minutes? 1 hour?</p>
+<p>Got you your estimate?</p>
+<pre><code># We can grep most recent hydra build log:
+$ nix log $(nix-build -A openssl) | fgrep 'Phase completed in'
+
+buildPhase completed in 5 minutes 0 seconds
+installPhase completed in 2 minutes 9 seconds
+fixupPhase completed in 41 seconds</code></pre>
+<p>2 minutes! This time is comparable to the whole build phase that takes
+5 minutes. Is it a lot? It really depends on what <code>installPhase</code> is
+expected to do.</p>
+<p>Some packages just copy one or two files into <code>$DESDIR</code>, some packages
+run registration tools of sorts. It depends.</p>
+<p><code>openssl</code>’s install phase builds and compresses a few hundreds of manual
+pages. The tasks are expressed as <code>Makefile</code> targets and are perfect for
+parallelism.</p>
+<p>One could argue that these heavyweight actions belong to the build (and
+not install) phase. But sometimes things are not as straightforward.</p>
+<p>Apparently one of frequent examples of non-trivial install actions is
+<code>libtool</code>. There binary relinking happens on installation when shared
+libraries get copied (relinked!) to their final directory and binaries
+are updated (also relinked!) to contain the <code>RUNPATH</code> to point to new
+library location.</p>
+<p>You might think that relinking phase should not take that much. But
+sometimes packages consist of tens if not hundreds of libraries and
+binaries. Let’s pick <code>solanum</code> <code>IRC</code> server as an example:</p>
+<pre><code>$ nix log $(nix-build -A solanum) | fgrep 'Phase completed in'
+configurePhase completed in 39 seconds
+buildPhase completed in 1 minutes 11 seconds
+installPhase completed in 1 minutes 1 seconds</code></pre>
+<p>It takes almost as much time to install (and relink) the binaries as it
+takes to build the package.</p>
+<p>The fun thing is that both <code>openssl</code> and <code>solanum</code> use parallel builds
+(<code>make -j$(pnroc)</code>) but use sequential installs! (<code>make install</code>).</p>
+<p>I was very surprised to see missing parallelism in install phase. It
+looked so simple to fix! If the package is already built in parallel in
+<code>nixpkgs</code> then the chances are high that parallel installs would work
+as well.</p>
+<p>To validate the theory I passed <code>make install -j$(nproc)</code> to <code>openssl</code>
+and found that the whole <code>configure / make / make install</code> process
+shrunk from <code>1m54s</code> down to <code>59s</code>. It’s 2x speedup right there. Note
+that <code>installPhase</code> has to have even more dramatic difference as
+unchanged) build time is included into both times.</p>
+<p>I quickly hacked up the <a href="https://github.com/NixOS/nixpkgs/pull/217568">PR</a>
+to enable parallelism and proposed it for review.</p>
+<p>Surprisingly (or not so surprisingly) not everyone was happy to see the
+change. The concerns were: possible install breakages, possible
+corruption on install, possibly added non-determinism, possible masking
+of install-time issues by speeding install phase up.</p>
+<p>To quantify the breakage concern NixOS Infra team set a one-off
+<a href="https://hydra.nixos.org/jobset/nixpkgs/pr-217568-stdenv-parallel-install">pr-217568-stdenv-parallel-install</a>
+hydra jobset for this change before it gets merged to any of the main
+branches.</p>
+<p>It <a href="https://github.com/NixOS/nixpkgs/pull/217568/commits">uncovered</a> 12
+new build failures:</p>
+<ul>
+<li><code>net-snmp</code></li>
+<li><code>xfsprogs</code></li>
+<li><code>sssd</code></li>
+<li><code>subversion</code></li>
+<li><code>ocaml</code></li>
+<li><code>eresi</code></li>
+<li><code>s9fes</code></li>
+<li><code>vpnc</code></li>
+<li><code>asymptote</code></li>
+<li><code>gretl</code></li>
+<li><code>qsynth</code></li>
+<li><code>solanum</code></li>
+</ul>
+<p>The failures are obviously parallel install failures as they failed in
+<code>installPhase</code> with very obscure complains about missing files.</p>
+<p>As an example <code>solanum</code> install failure is being investigated in
+<a href="https://github.com/solanum-ircd/solanum/issues/405">Issue #405</a> upstream.
+It’s an interesting case of <code>libtool</code>-based build system with a bunch
+of recursive makefiles.</p>
+<p>There are a few triggers there: source file deletion during install and
+something related to unusual dependencies during install.</p>
+<p>Source file deletion causes rebuild and relinking of the project during
+install (ugh!).</p>
+<p>Otherwise it was a very small fallout which I plugged by sprinkling
+<code>enableParallelInstalling = false</code>. We might need a few more of those
+workarounds as parallelism bugs sometimes take a while to surface.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>If you suspect that package fails parallel installs in <code>nixpkgs</code> try to
+add a <code>enableParallelInstalling = false;</code> as a workaround.</p>
+<p><code>nixpkgs</code> made one step closer to build most packages with full
+available parallelism. Packages like <code>openssl</code> already build faster in
+<code>staging</code> branch of <code>nixpkgs</code>.</p>
+<p>It did not take much code to enable parallel installs only for packages
+that already enable parallel builds.</p>
+<p>While it was a very conservative change it still broke 12 more packages.
+12 is 2 orders of magnitude lower than typical amount of breakage
+present in <code>master</code> (3000 to 4000 broken packages). Even if I missed a
+few more cases it should be just a few cases and not thousands of new
+failures.</p>
+<p>If you are an upstream package owner then give parallel install a go
+and try to address the install failures that arise. Here are a few hints
+that might help:</p>
+<ul>
+<li>use <code>--shuffle</code> option for <code>GNU make 4.4</code> or later to reorder
+prerequisite execution.</li>
+<li>along with high parallelism also try to use low parallelism level,
+like <code>-j2</code>. That gives more chance to execute only subset of
+prerequisites.</li>
+<li>make sure your <code>/usr/lib</code> (or other system default pah) does not
+contain the libraries you are testing for relinking parallelism.
+Otherwise you would not be able to reproduce the failure as relinking
+will accidentally happen against the system library.</li>
+</ul>
+<p>It took <code>hydra</code> only 2 weeks of lowest priority to build all ~60000
+<code>linux</code> packages <code>nixpkgs</code> has.</p>
+<p>I have a few more thoughts on how to incrementally improve quality of
+parallel builds in <code>nixpkgs</code> like enabling <code>--shuffle</code> by default.
+Let’s save that for another time.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on March 15, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>

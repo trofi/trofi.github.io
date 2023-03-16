@@ -7,8 +7,164 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sat, 04 Mar 2023 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Wed, 15 Mar 2023 00:00:00 UT</lastBuildDate>
         <item>
+    <title>parallel installs in nixpkgs</title>
+    <link>http://trofi.github.io/posts/282-parallel-installs-in-nixpkgs.html</link>
+    <description><![CDATA[<h2 id="tldr">Tl;DR</h2>
+<p>As of a few minutes ago <code>nixpkgs</code> does parallel installs for <code>Makefile</code>
+based build systems using <code>make install -j$(nproc)</code>. As long as the
+packages have <code>enableParallelBuilding = true;</code>.</p>
+<p>Sequential packages are unchanged and still do sequential installs.</p>
+<p>You can revert to previous behaviour for your packages by using
+<code>enableParallelInstalling = false;</code> if needed. But better try to fix the
+issues upstream.</p>
+<h2 id="more-words">More words</h2>
+<p><code>Makefile</code>s are <a href="http://trofi.github.io/posts/230-when-make-j-nproc-fails.html">hard</a>. I tried
+enabling parallel builds by default in <code>nixpkgs</code> and
+<a href="https://github.com/NixOS/nixpkgs/issues/142338">failed</a>.
+The primary rejection reason was the worry that too many packages will
+break and <code>nixpkgs</code> will degrade too much. I agree those problems are
+not trivial to diagnose, debug and fix. We need a better way of weeding
+out the issues.</p>
+<p>But I did not completely give up. I still want my “parallel-by-default”
+dream to come true. I added a new <a href="http://trofi.github.io/posts/238-new-make-shuffle-mode.html">make --shuffle</a>
+to <code>GNU make</code> to ease reporting and validation of parallel build fixes.</p>
+<p>And I’m still occasionally sending fixes for parallel build issues
+upstream. I noticed others also do it time to time. That’s so nice to
+see!</p>
+<p>A few weeks ago my main desktop <a href="http://trofi.github.io/posts/280-cooling-failure.html">broke</a>
+and I had to spend some time on my older machine that is not that fast
+to compile packages. There I noticed long install phase of <code>openssl</code>
+package in <code>nixpkgs</code>.</p>
+<p>Quick quiz: how log do you think <code>make install</code> takes for <code>openssl</code> on
+modern hardware? 1 second? 10 seconds? 1 minute? 10 minutes? 1 hour?</p>
+<p>Got you your estimate?</p>
+<pre><code># We can grep most recent hydra build log:
+$ nix log $(nix-build -A openssl) | fgrep 'Phase completed in'
+
+buildPhase completed in 5 minutes 0 seconds
+installPhase completed in 2 minutes 9 seconds
+fixupPhase completed in 41 seconds</code></pre>
+<p>2 minutes! This time is comparable to the whole build phase that takes
+5 minutes. Is it a lot? It really depends on what <code>installPhase</code> is
+expected to do.</p>
+<p>Some packages just copy one or two files into <code>$DESDIR</code>, some packages
+run registration tools of sorts. It depends.</p>
+<p><code>openssl</code>’s install phase builds and compresses a few hundreds of manual
+pages. The tasks are expressed as <code>Makefile</code> targets and are perfect for
+parallelism.</p>
+<p>One could argue that these heavyweight actions belong to the build (and
+not install) phase. But sometimes things are not as straightforward.</p>
+<p>Apparently one of frequent examples of non-trivial install actions is
+<code>libtool</code>. There binary relinking happens on installation when shared
+libraries get copied (relinked!) to their final directory and binaries
+are updated (also relinked!) to contain the <code>RUNPATH</code> to point to new
+library location.</p>
+<p>You might think that relinking phase should not take that much. But
+sometimes packages consist of tens if not hundreds of libraries and
+binaries. Let’s pick <code>solanum</code> <code>IRC</code> server as an example:</p>
+<pre><code>$ nix log $(nix-build -A solanum) | fgrep 'Phase completed in'
+configurePhase completed in 39 seconds
+buildPhase completed in 1 minutes 11 seconds
+installPhase completed in 1 minutes 1 seconds</code></pre>
+<p>It takes almost as much time to install (and relink) the binaries as it
+takes to build the package.</p>
+<p>The fun thing is that both <code>openssl</code> and <code>solanum</code> use parallel builds
+(<code>make -j$(pnroc)</code>) but use sequential installs! (<code>make install</code>).</p>
+<p>I was very surprised to see missing parallelism in install phase. It
+looked so simple to fix! If the package is already built in parallel in
+<code>nixpkgs</code> then the chances are high that parallel installs would work
+as well.</p>
+<p>To validate the theory I passed <code>make install -j$(nproc)</code> to <code>openssl</code>
+and found that the whole <code>configure / make / make install</code> process
+shrunk from <code>1m54s</code> down to <code>59s</code>. It’s 2x speedup right there. Note
+that <code>installPhase</code> has to have even more dramatic difference as
+unchanged) build time is included into both times.</p>
+<p>I quickly hacked up the <a href="https://github.com/NixOS/nixpkgs/pull/217568">PR</a>
+to enable parallelism and proposed it for review.</p>
+<p>Surprisingly (or not so surprisingly) not everyone was happy to see the
+change. The concerns were: possible install breakages, possible
+corruption on install, possibly added non-determinism, possible masking
+of install-time issues by speeding install phase up.</p>
+<p>To quantify the breakage concern NixOS Infra team set a one-off
+<a href="https://hydra.nixos.org/jobset/nixpkgs/pr-217568-stdenv-parallel-install">pr-217568-stdenv-parallel-install</a>
+hydra jobset for this change before it gets merged to any of the main
+branches.</p>
+<p>It <a href="https://github.com/NixOS/nixpkgs/pull/217568/commits">uncovered</a> 12
+new build failures:</p>
+<ul>
+<li><code>net-snmp</code></li>
+<li><code>xfsprogs</code></li>
+<li><code>sssd</code></li>
+<li><code>subversion</code></li>
+<li><code>ocaml</code></li>
+<li><code>eresi</code></li>
+<li><code>s9fes</code></li>
+<li><code>vpnc</code></li>
+<li><code>asymptote</code></li>
+<li><code>gretl</code></li>
+<li><code>qsynth</code></li>
+<li><code>solanum</code></li>
+</ul>
+<p>The failures are obviously parallel install failures as they failed in
+<code>installPhase</code> with very obscure complains about missing files.</p>
+<p>As an example <code>solanum</code> install failure is being investigated in
+<a href="https://github.com/solanum-ircd/solanum/issues/405">Issue #405</a> upstream.
+It’s an interesting case of <code>libtool</code>-based build system with a bunch
+of recursive makefiles.</p>
+<p>There are a few triggers there: source file deletion during install and
+something related to unusual dependencies during install.</p>
+<p>Source file deletion causes rebuild and relinking of the project during
+install (ugh!).</p>
+<p>Otherwise it was a very small fallout which I plugged by sprinkling
+<code>enableParallelInstalling = false</code>. We might need a few more of those
+workarounds as parallelism bugs sometimes take a while to surface.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>If you suspect that package fails parallel installs in <code>nixpkgs</code> try to
+add a <code>enableParallelInstalling = false;</code> as a workaround.</p>
+<p><code>nixpkgs</code> made one step closer to build most packages with full
+available parallelism. Packages like <code>openssl</code> already build faster in
+<code>staging</code> branch of <code>nixpkgs</code>.</p>
+<p>It did not take much code to enable parallel installs only for packages
+that already enable parallel builds.</p>
+<p>While it was a very conservative change it still broke 12 more packages.
+12 is 2 orders of magnitude lower than typical amount of breakage
+present in <code>master</code> (3000 to 4000 broken packages). Even if I missed a
+few more cases it should be just a few cases and not thousands of new
+failures.</p>
+<p>If you are an upstream package owner then give parallel install a go
+and try to address the install failures that arise. Here are a few hints
+that might help:</p>
+<ul>
+<li>use <code>--shuffle</code> option for <code>GNU make 4.4</code> or later to reorder
+prerequisite execution.</li>
+<li>along with high parallelism also try to use low parallelism level,
+like <code>-j2</code>. That gives more chance to execute only subset of
+prerequisites.</li>
+<li>make sure your <code>/usr/lib</code> (or other system default pah) does not
+contain the libraries you are testing for relinking parallelism.
+Otherwise you would not be able to reproduce the failure as relinking
+will accidentally happen against the system library.</li>
+</ul>
+<p>It took <code>hydra</code> only 2 weeks of lowest priority to build all ~60000
+<code>linux</code> packages <code>nixpkgs</code> has.</p>
+<p>I have a few more thoughts on how to incrementally improve quality of
+parallel builds in <code>nixpkgs</code> like enabling <code>--shuffle</code> by default.
+Let’s save that for another time.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on March 15, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Wed, 15 Mar 2023 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/282-parallel-installs-in-nixpkgs.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>a signal from the stars</title>
     <link>http://trofi.github.io/posts/281-a-signal-from-the-stars.html</link>
     <description><![CDATA[<h2 id="the-distress-beacon">The distress beacon</h2>
@@ -8503,163 +8659,6 @@ The set of techniquest are called <code>HTML Responsive Web Design</code>.</p>
 ]]></description>
     <pubDate>Thu, 04 Aug 2022 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/253-one-liner-to-fix-css-on-phones.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>nixpkgs overlay nano howto</title>
-    <link>http://trofi.github.io/posts/252-nixpkgs-overlay-nano-howto.html</link>
-    <description><![CDATA[<p><code>nixpkgs</code> is a huge repository of various packages. But what if you want
-to package a tiny package and don’t plan to share it with anyone. Is it
-hard? How would you go about it?</p>
-<p>There are many ways to do it: maintain a <code>nixpkgs</code> fork, use
-<code>packageOverrides</code>, <code>overlays</code>, <code>flakes</code> and many others methods.</p>
-<p>I’ll focus here only on <code>overlays</code> method as it feels to me like the
-simplest way to write packages readily copyable to (or from) <code>nixpkgs</code>.</p>
-<h2 id="nixpkgs-stucture">nixpkgs stucture</h2>
-<p>before we start with an example let’s have a look at <code>nixpkgs</code>
-“schema”. <code>nixpkgs</code> provides a <code>pkgs</code> map (“attribute set”) from package
-name to package definition (it’s nested in a few places):</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>pkgs = <span class="op">{</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">callPackage</span> <span class="op">=</span> <span class="va">pkgPath</span><span class="op">:</span> ...somehow<span class="op">-</span>load<span class="op">-</span>the<span class="op">-</span>package<span class="op">;</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="co"># unnested examples:</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">glibc</span> <span class="op">=</span> callPackage <span class="ss">../development/libraries/glibc</span> <span class="op">{</span> <span class="op">...</span> <span class="op">};</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">re2c</span> <span class="op">=</span> callPackage <span class="ss">../development/tools/parsing/re2c</span> <span class="op">{</span> <span class="op">};</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># ...</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="co"># nested examples:</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="va">python39Packages</span> <span class="op">=</span> <span class="op">{</span></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>      <span class="co"># the name is slightly changed for clarity</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>      <span class="va">callPythonPackage</span> <span class="op">=</span> <span class="va">pkgPath</span><span class="op">:</span> ...somehow<span class="op">-</span>load<span class="op">-</span>python<span class="op">-</span>package<span class="op">;</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>      <span class="va">black</span> <span class="op">=</span> callPackage <span class="ss">../development/python-modules/black</span> <span class="op">{</span> <span class="op">};</span></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>      <span class="va">blessed</span> <span class="op">=</span> callPackage <span class="ss">../development/python-modules/blessed</span> <span class="op">{</span> <span class="op">};</span></span>
-<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>      <span class="co"># ...</span></span>
-<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
-<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>;</span></code></pre></div>
-<p>Our goal here is to inject something very simple into top-level
-<code>pkgs = { ... };</code> sturcture. We’ll ignore nested attributes.</p>
-<p><code>overlays</code> allow us to override existing attributes in <code>pkgs</code> or
-introduce the existing ones. Until you get familiar with the way
-attributes interact with one another I suggest adding only new
-attributes.</p>
-<h2 id="an-example">an example</h2>
-<p>Our running example will be <a href="https://github.com/trofi/ski">ski</a> package.
-It’s an <code>autotools</code>-based package with very conventional dependencies.
-Let’s package it!</p>
-<p>I’ll do 3 things below:</p>
-<ol type="1">
-<li>create <code>/tmp/overlay/ski/default.nix</code> expression ready to be included
-into <code>nixpkgs</code> repository</li>
-<li>create <code>/tmp/overlay/local-packages.nix</code> expression ready to be used
-in <code>/etc/nixos/configuration.nix</code> and/or in <code>~/.config/nixpkgs/overlays/</code>.</li>
-<li>add our overlay to <code>/etc/nixos/configuration.nix</code>.</li>
-</ol>
-<p>Here is a simple <code>/tmp/overlay/ski/default.nix</code> expression enough to
-build it:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /tmp/overlay/ski/default.nix</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">lib</span> <span class="op">,</span> <span class="va">stdenv</span> <span class="op">,</span> <span class="va">fetchFromGitHub</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">autoconf</span><span class="op">,</span> <span class="va">automake</span><span class="op">,</span> <span class="va">bison</span><span class="op">,</span> <span class="va">flex</span><span class="op">,</span> <span class="va">gperf</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">libtool</span><span class="op">,</span> <span class="va">pkg-config</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">elfutils</span><span class="op">,</span> <span class="va">libbfd</span><span class="op">,</span> <span class="va">libiberty</span> <span class="op">,</span> <span class="va">ncurses</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>:</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>stdenv.mkDerivation <span class="kw">rec</span> <span class="op">{</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>  <span class="va">pname</span> <span class="op">=</span> <span class="st">&quot;ski&quot;</span><span class="op">;</span></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>  <span class="va">version</span> <span class="op">=</span> <span class="st">&quot;unstable-2022-07-07&quot;</span><span class="op">;</span></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>  <span class="va">src</span> <span class="op">=</span> fetchFromGitHub <span class="op">{</span></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="va">owner</span> <span class="op">=</span> <span class="st">&quot;trofi&quot;</span><span class="op">;</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    <span class="va">repo</span> <span class="op">=</span> <span class="st">&quot;ski&quot;</span><span class="op">;</span></span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    <span class="va">rev</span> <span class="op">=</span> <span class="st">&quot;568efd789fab1f932aa926b1db86dcb75e9c115c&quot;</span><span class="op">;</span></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="va">sha256</span> <span class="op">=</span> <span class="st">&quot;sha256-dwHccL89bXzsjDr8O1DmVHlBQQ6aHgNLEaHJCJqHG9w=&quot;</span><span class="op">;</span></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">postPatch</span> <span class="op">=</span> <span class="st">''</span></span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="st">    ./autogen.sh</span></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="st">  ''</span><span class="op">;</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>  <span class="va">nativeBuildInputs</span> <span class="op">=</span> <span class="op">[</span> autoconf automake</span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    bison flex gperf libtool pkg-config <span class="op">];</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>  <span class="va">buildInputs</span> <span class="op">=</span> <span class="op">[</span> elfutils libbfd libiberty ncurses <span class="op">];</span></span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>  <span class="va">meta</span> <span class="op">=</span> <span class="kw">with</span> lib<span class="op">;</span> <span class="op">{</span></span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>    <span class="va">description</span> <span class="op">=</span> <span class="st">&quot;ia64 (Itanium) instruction set simulator.&quot;</span><span class="op">;</span></span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>    <span class="va">homepage</span> <span class="op">=</span> <span class="st">&quot;https://github.com/trofi/ski&quot;</span><span class="op">;</span></span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a>    <span class="va">license</span> <span class="op">=</span> licenses.gpl2Only<span class="op">;</span></span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    <span class="va">platforms</span> <span class="op">=</span> platforms.linux<span class="op">;</span></span>
-<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Now we need to create an actual overlay expression. I’ll put it in a
-separate <code>/tmp/overlay/local-packages.nix</code> file as well:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $ cat /tmp/overlay/local-packages.nix</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="va">final</span><span class="op">:</span> <span class="va">prev</span><span class="op">:</span> <span class="op">{</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="co"># we create new 'ski' attribute here!</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">ski</span> <span class="op">=</span> final.callPackage <span class="ss">./ski</span> <span class="op">{};</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="co"># add more packages below:</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Now we are ready to use the overlay in our
-<code>/etc/nixos/configuration.nix</code>:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">config</span><span class="op">,</span> <span class="va">pkgs</span><span class="op">,</span> <span class="op">...</span> <span class="op">}</span>:</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="co"># Add an overlay to augment existing 'pkgs' map.</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">nixpkgs</span>.<span class="va">overlays</span> <span class="op">=</span> <span class="op">[</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span><span class="bu">import</span> <span class="ss">/tmp/overlay/local-packages.nix</span><span class="op">)</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">];</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  <span class="co"># use augmented 'pkgs':</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  <span class="va">environment</span>.<span class="va">systemPackages</span> <span class="op">=</span> <span class="kw">with</span> pkgs<span class="op">;</span> <span class="op">[</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    ski</span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>  <span class="op">];</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Now we can get <code>ski</code> installed into our system:</p>
-<pre><code>$ sudo nixos-rebuild switch
-$ ski -help
-Options:
-    -help        Display command-line options
-    -i &lt;file&gt;    Process initialization file at startup
-    -rest &lt;file&gt; Restore simulation state from &lt;file&gt;
-    -nonet       Disable networking feature
-    -srcroot     Source Root Directory
-    -forceuser   Force user-level simulation
-    -forcesystem Force system-level simulation
-    -strace      Trace system call execution
-    -simroot     Simulated root directory
-    -conslog &lt;file&gt; Log the console output to the specified file
-    -palen &lt;n&gt;      Implemented physical address bits.  Default: 63
-    -valen &lt;n&gt;      Implemented virtual address bits.  Default: 61
-    -ridlen &lt;n&gt;     Implemented RR.rid bits.  Default: 24
-    -keylen &lt;n&gt;     Implemented PKR.key bits.  Default: 24
-    -grfile &lt;n&gt;     GR file size.  Default: 128</code></pre>
-<p>Seems to work!</p>
-<p>We can also get the packages pulled into user’s <code>&lt;nixpkgs&gt;</code> expression:</p>
-<pre><code>$ mkdir -p ~/.config/nixpkgs/overlays/
-$ ln -s /tmp/overlay/local-packages.nix ~/.config/nixpkgs/overlays/</code></pre>
-<p>Now we can use it as a <code>nixpkgs</code> attribute:</p>
-<pre><code>$ nix-build '&lt;nixpkgs&gt;' -A ski
-/nix/store/rpb5iikr6p0x49zkpw5cjwp9lg8lnl7d-ski-unstable-2022-07-07</code></pre>
-<p>A few relevant links:</p>
-<ul>
-<li><a href="https://nixos.org/manual/nixpkgs/stable/#sec-overlays-install">overlays in nixpkgs manual</a></li>
-<li><a href="https://nixos.wiki/wiki/Overlays">overlays in nixos.wiki</a></li>
-</ul>
-<p>Done!</p>
-
-<div class="info">
-    Posted on July 31, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Sun, 31 Jul 2022 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/252-nixpkgs-overlay-nano-howto.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
