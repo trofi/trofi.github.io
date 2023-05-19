@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: nix and guix for Gentoo in 2023</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>nix and guix for Gentoo in 2023</h1>
+
+            <p>Another year has passed since I shared anything related to
+<a href="https://github.com/trofi/nix-guix-gentoo/">::nix-guix</a> Gentoo overlay.</p>
+<p>As usual the overlay still ships latest <code>nix-2.15.0</code> and <code>guix-1.4.0</code>
+packages.</p>
+<h2 id="overlay-location-changes">Overlay location changes</h2>
+<p>The overlay installation procedure
+<a href="https://github.com/trofi/nix-guix-gentoo/#enabling-the-overlay">changed slightly</a>
+and does not rely on <code>layman</code> or <code>eselect repository</code> anymore.</p>
+<p>If you are an existing user of <code>layman</code> setup then please consider
+removing and re-syncing already created overlay. It should be a matter
+of running something like:</p>
+<pre><code># edit /etc/portage/repos.conf/nix-guix.conf
+# rm -rfv /var/db/repos/nix-guix
+# emerge --sync</code></pre>
+<p>Otherwise you are risking using stale overlay mirrored by Gentoo
+infrastructure at <a href="https://github.com/gentoo-mirror/nix-guix" class="uri">https://github.com/gentoo-mirror/nix-guix</a>. It has
+a few build problems like missing <code>gcc-13</code> fixes. They typical symptom
+of using stale overlay is <code>rapidcheck</code>
+<a href="https://github.com/trofi/nix-guix-gentoo/issues/35">build failure</a>:</p>
+<pre><code>/var/tmp/portage/dev-cpp/rapidcheck-0_pre20230113/work/rapidcheck-0_pre20230113/include/rapidcheck/detail/Utility.h:87:8: error: 'uint64_t' does not name a type
+   87 | inline uint64_t avalanche(uint64_t x) {
+      |        ^~~~~~~~
+/var/tmp/portage/dev-cpp/rapidcheck-0_pre20230113/work/rapidcheck-0_pre20230113/include/rapidcheck/detail/Utility.h:6:1: note: 'uint64_t' is defined in header '&lt;cstdint&gt;'; did you forget to '#include &lt;cstdint&gt;'?
+    5 | #include &lt;limits&gt;
+  +++ |+#include &lt;cstdint&gt;
+    6 |</code></pre>
+<p>It was <a href="https://github.com/trofi/nix-guix-gentoo/commit/64edf8fe00c3fb3bcfc53aeb9287a4d3fb7cc882">fixed a while ago</a>
+in the overlay. Make sure you have the correct sync URL that points:
+<a href="https://github.com/trofi/nix-guix-gentoo/" class="uri">https://github.com/trofi/nix-guix-gentoo/</a>.</p>
+<p>I hope that the fact of use of stale URL by <code>emerge --sync</code> will be
+fixed in <a href="https://bugs.gentoo.org/905869" class="uri">https://bugs.gentoo.org/905869</a>. Or at least sync errors will
+be exposed to users in a more intuitive form. Removing stale broken
+mirrors would be another option.</p>
+<h2 id="other-changes">Other changes</h2>
+<p>We had 5 overlay contributors over the past year:</p>
+<pre><code>Artemis Everfree
+Huang Rui
+Maciej Barć
+ns
+Sergei Trofimovich</code></pre>
+<p>People delivered various fixes and improvements:</p>
+<ul>
+<li>add basic support for <code>clang</code>-based system profiles</li>
+<li>improve compatibility with systems where <code>/bin/sh</code> is <code>dash</code></li>
+<li><code>README.md</code> installation improvements</li>
+<li>dependency improvements on non-<code>amd64</code> systems</li>
+<li>CI workflows to catch simple syntax errors in ebuilds</li>
+<li>numerous <code>nix</code> version updates to trail latest upstream releases</li>
+<li>switch from <code>user.eclass</code> to <code>acct-user.eclass</code> to allow users to
+tweak default groups for builders.</li>
+<li>drop <code>USE=s3</code> support on <code>nix</code> to sidestep problems dealing with stale
+<code>aws-sdk-cpp</code> package</li>
+<li>restore lost by accident user’s <code>CXXFLAGS=</code> support for <code>nix</code></li>
+<li>document <code>ENV_UNSET</code> workaround for cases when global variables
+introduce build impurity</li>
+</ul>
+<p>One of the items above had unusually large source of bugs.</p>
+<h2 id="clang-profiles-related-bugs">clang profiles related bugs</h2>
+<p>Gentoo recently added <code>clang</code>-based set of experimental profiles:</p>
+<pre><code>$ eselect profile list | grep clang
+  [26]  default/linux/amd64/17.1/clang (exp)
+  [27]  default/linux/amd64/17.1/systemd/clang (exp)
+  [28]  default/linux/amd64/17.1/systemd/clang/merged-usr (exp) *
+  [33]  default/linux/amd64/17.0/musl/clang (exp)</code></pre>
+<p>Of course being experimental does not stop users from trying to use the
+profiles for all sorts of use cases. I found out about the profiles from
+a bug report where <code>nix</code>
+<a href="https://github.com/trofi/nix-guix-gentoo/issues/28">failed to build</a>
+on one of them.</p>
+<h3 id="missing-long-double-helpers-in-runtime-libraries">missing ‘long double’ helpers in runtime libraries</h3>
+<p>The symptom was a link failure around obscure functions like
+<code>__unordtf2</code>:</p>
+<pre><code>ld.lld: error: undefined symbol: __unordtf2
+&gt;&gt;&gt; referenced by printf_fphex.o:(__printf_fphex) in archive /usr/lib/gcc/x86_64-pc-linux-gnu/12/../../../../lib64/libc.a
+&gt;&gt;&gt; referenced by printf_fphex.o:(__printf_fphex) in archive /usr/lib/gcc/x86_64-pc-linux-gnu/12/../../../../lib64/libc.a
+&gt;&gt;&gt; referenced by printf_fp.o:(__printf_fp_l) in archive /usr/lib/gcc/x86_64-pc-linux-gnu/12/../../../../lib64/libc.a</code></pre>
+<p>This kind of errors only ever happens when you mix the code compiled with
+<code>gcc</code> and <code>clang</code>. <code>gcc</code> sometimes emits helper functions that it
+expects to satisfy with <code>libgcc.a</code>. Those symbols are usually related to
+handling of non-standard types like <code>long double</code>. But otherwise could
+be anything that is worth sharing by the code generator.</p>
+<p>It would not normally be a problem. But <code>glibc</code> provides <code>printf()</code>
+function that supports any type that compiler tries to throw at
+it. And even that is not a problem: as long as building and linking is
+done by the same toolchain (like for <code>libc.so.6</code>) then compiler driver
+provides all the needed libraries.</p>
+<p>The problem happens when compiler and linker are different
+implementations. One of such cases is static linking: currently <code>glibc</code>
+is built with <code>gcc</code> even on <code>clang</code> profiles in Gentoo. But the vast
+majority of <code>::gentoo</code> is built with <code>clang</code> including static <code>busybox</code>.</p>
+<p>As a result static linking is effectively broken on <code>clang</code> profiles
+today.</p>
+<p>One of the fixes would be to switch <code>glibc</code> to be built with <code>clang</code>
+just like the rest of packages (I believe <code>glibc</code> upstream does support
+<code>clang</code> nowadays). Another workaround would be to disable support of
+those non-standard types at least in static <code>glibc</code>. Yet another one
+would be to implement <code>gcc</code>-specific library calls in <code>clang</code> runtime so
+both could be interchangeable. That would be the best fix if <code>clang</code>
+strives to generate output binary-compatible with <code>gcc</code> output.</p>
+<p>So far none of the above is implemented in Gentoo.
+<a href="https://bugs.gentoo.org/899582" class="uri">https://bugs.gentoo.org/899582</a> tracks the problem.</p>
+<p>Thus to make <code>nix</code> work I had to work around in statically built
+<code>busybox</code> instance used by <code>nix-daemon</code> for initial build environments.</p>
+<p>I took the path of supplying (unusable) stubs for missing symbols as:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdlib.h&gt;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co">/* Not a real implementation.</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="co"> * Just a few stubs for llvm-libunwind to be complete enough for</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="co"> * busybox to be able to link against libc.a's printf().</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noreturn<span class="op">))</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> die<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> func<span class="op">)</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;</span><span class="sc">%s</span><span class="st"> not implemented.&quot;</span><span class="op">,</span> func<span class="op">);</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;Please report at https://github.com/trofi/nix-guix-gentoo/issues</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>    exit<span class="op">(</span><span class="dv">1</span><span class="op">);</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> __unordtf2 <span class="op">(</span><span class="dt">long</span> <span class="dt">double</span> a<span class="op">,</span> <span class="dt">long</span> <span class="dt">double</span> b<span class="op">)</span> <span class="op">{</span> die<span class="op">(</span>__func__<span class="op">);</span> <span class="op">}</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> __letf2 <span class="op">(</span><span class="dt">long</span> <span class="dt">double</span> a<span class="op">,</span> <span class="dt">long</span> <span class="dt">double</span> b<span class="op">)</span> <span class="op">{</span> die<span class="op">(</span>__func__<span class="op">);</span> <span class="op">}</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> <span class="dt">double</span> __multf3 <span class="op">(</span><span class="dt">long</span> <span class="dt">double</span> a<span class="op">,</span> <span class="dt">long</span> <span class="dt">double</span> b<span class="op">)</span> <span class="op">{</span> die<span class="op">(</span>__func__<span class="op">);</span> <span class="op">}</span></span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> <span class="dt">double</span> __addtf3 <span class="op">(</span><span class="dt">long</span> <span class="dt">double</span> a<span class="op">,</span> <span class="dt">long</span> <span class="dt">double</span> b<span class="op">)</span> <span class="op">{</span> die<span class="op">(</span>__func__<span class="op">);</span> <span class="op">}</span></span></code></pre></div>
+<p>Using this file as part of linkage process converts missing symbols from
+link-time to run-time failures. <code>busybox</code> does not really use these
+symbols thus it should be a safe hack.</p>
+<p>That fixed <code>nix</code> build on <code>clang</code>-based profiles.</p>
+<h3 id="guix-and-llvm-strip">guix and llvm-strip</h3>
+<p>Having set up <code>clang</code>-based Gentoo chroot to explore the problem above
+I ran the test for all the <code>::nix-guix</code> packages. And sure enough <code>guix</code>
+failed to build as well. Except that this time the failure was a lot
+more obscure:</p>
+<pre><code># emerge -1 guix
+...
+bytevector-u8-ref: Argument 2 out of range: 185581</code></pre>
+<p>Something very low-level broke in <code>guile</code> or it’s libraries.</p>
+<p>I ignored the failure for a few months until I looked up if others
+encountered the same error. And indeed someone did! They solved it by
+disabling stripping of <code>guile</code>. It was a great hint: rebuilding all of
+<code>dev-scheme/*</code> with <code>FEATURES="-splitdebug nostrip"</code> repaired <code>guix</code> for
+me as well.</p>
+<p><code>guile</code> uses <code>ELF</code> format to store it’s compiled bytecode in
+<code>/usr/lib/guile/</code>:</p>
+<pre><code>$ file /usr/lib64/guile/3.0/ccache/rnrs.go
+/usr/lib64/guile/3.0/ccache/rnrs.go:
+  ELF 64-bit LSB shared object,
+  no machine,
+  version 1 (embedded),
+  dynamically linked,
+  with debug_info,
+  not stripped</code></pre>
+<p>The caveat is that it’s a “no machine” ELF file as it has no native
+code. As a result an attempt to strip these files can break their
+internal structure if not done right. <code>binutils-strip</code> does not break
+the files (probably by luck?). <code>llvm-strip</code> is not as lucky.</p>
+<p>The workaround was to sprinkle around the change below all over the
+<code>dev-scheme*/*</code> and <code>guix</code>:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># add to dev-scheme/guile-zlib</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">src_install()</span> <span class="kw">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>       <span class="ex">default</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>       <span class="co"># Workaround llvm-strip problem of mangling guile ELF debug</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>       <span class="co"># sections: https://bugs.gentoo.org/905898</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>       <span class="ex">dostrip</span> <span class="at">-x</span> <span class="st">&quot;/usr/</span><span class="va">$(</span><span class="ex">get_libdir</span><span class="va">)</span><span class="st">/guile&quot;</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></code></pre></div>
+<p>It inhibits stripping of <code>*.go</code> files. Ideally one should not run
+<code>strip</code> on object files not compatible to the default <code>strip</code> target.</p>
+<p>Or <code>guile</code> could have encoded enough information for <code>llvm-strip</code> to
+keep files working. Something to explore in future.</p>
+<p>Disabling <code>*.go</code> stripping was enough to get <code>guix</code> running on
+<code>clang</code>-based profiles.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nix</code> and <code>guix</code> can still be used in Gentoo to play with these fancy
+package managers. With static linkage and stripping workarounds those
+can be used in more environments now.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on May 19, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
