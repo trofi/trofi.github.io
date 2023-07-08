@@ -8,8 +8,196 @@
         <name>Sergei Trofimovich</name>
         <email>slyich@gmail.com</email>
     </author>
-    <updated>2023-06-18T00:00:00Z</updated>
+    <updated>2023-07-08T00:00:00Z</updated>
     <entry>
+    <title>Building vanilla gcc on NixOS</title>
+    <link href="http://trofi.github.io/posts/289-building-vanilla-gcc-on-nixos.html" />
+    <id>http://trofi.github.io/posts/289-building-vanilla-gcc-on-nixos.html</id>
+    <published>2023-07-08T00:00:00Z</published>
+    <updated>2023-07-08T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>This post’s main goal is to build unpatched vanilla <code>gcc</code> itself (and to
+run it’s test suite). The focus is <code>gcc</code> development and not <code>gcc</code> usage
+in <code>NixOS</code>.</p>
+<h2 id="why-vanilla">Why vanilla?</h2>
+<p>You might have already noticed that <code>nixpkgs</code> patches <code>gcc</code> build quite
+heavily:
+<a href="https://github.com/NixOS/nixpkgs/tree/master/pkgs/development/compilers/gcc" class="uri">https://github.com/NixOS/nixpkgs/tree/master/pkgs/development/compilers/gcc</a></p>
+<p>For example as of today <a href="https://github.com/NixOS/nixpkgs/blob/84822c43fcf6787f3680868d6f63e80b69244fbe/pkgs/development/compilers/gcc/builder.sh">builder.sh</a>
+takes 11KB on disk. It might not be a lot, but some changes there are
+very invasive. Like interpreter injection:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>    <span class="co"># ...</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>        <span class="bu">declare</span> <span class="at">-a</span> <span class="va">extraLDFlags</span><span class="op">=</span><span class="va">()</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">[[</span> <span class="ot">-e</span> <span class="st">&quot;</span><span class="va">${</span><span class="op">!</span><span class="va">curBintools}</span><span class="st">/nix-support/orig-libc&quot;</span> <span class="kw">]];</span> <span class="cf">then</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>            <span class="co"># Figure out what extra flags when linking to pass to the gcc</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>            <span class="co"># compilers being generated to make sure that they use our libc.</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>            <span class="va">extraLDFlags</span><span class="op">=</span><span class="va">($(</span><span class="op">&lt;</span> <span class="st">&quot;</span><span class="va">${</span><span class="op">!</span><span class="va">curBintools}</span><span class="st">/nix-support/libc-ldflags&quot;</span><span class="va">)</span> <span class="va">$(</span><span class="op">&lt;</span> <span class="st">&quot;</span><span class="va">${</span><span class="op">!</span><span class="va">curBintools}</span><span class="st">/nix-support/libc-ldflags-before&quot;</span> <span class="kw">||</span> <span class="fu">true</span><span class="va">))</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="bu">[</span> <span class="ot">-e</span> <span class="va">${</span><span class="op">!</span><span class="va">curBintools}</span>/nix-support/ld-set-dynamic-linker <span class="bu">]</span><span class="kw">;</span> <span class="cf">then</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>                <span class="va">extraLDFlags</span><span class="op">=</span>-dynamic-linker=<span class="va">$(</span><span class="op">&lt;</span> <span class="va">${</span><span class="op">!</span><span class="va">curBintools}</span>/nix-support/dynamic-linker<span class="va">)</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>            <span class="cf">fi</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="co"># ...</span></span></code></pre></div>
+<p>On top of that <code>nixpkgs</code> packages rely on <a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/build-support/cc-wrapper/default.nix">cc-wrapper</a>
+features added on top. <code>cc-wrapper</code> implements features like option
+passing via <code>NIX_CFLAGS_COMPILE</code>, automatic injection of non-default
+paths to <code>glibc</code> headers and libraries, hardening features defaults,
+slight binary renames, options mangling and many other small things.</p>
+<p>Fun fact: <code>cc-wrapper</code> is 25K of extra shell code.</p>
+<p>All the above makes <code>gcc</code> test suite incompatible with <code>nixpkgs</code>
+patches.</p>
+<p>It’s not always easy to tell if the bug is introduced by an upstream
+logic or by <code>nixpkgs</code> changes.</p>
+<p>It’s hard to upstream found <code>gcc</code> bugs or to work on <code>gcc</code> fixes
+without the fear of being affected by downstream changes.</p>
+<p>And once you have prepared an upstreamable <code>gcc</code> patch it would be nice
+to run <code>gcc</code> test suite to see if the local change introduced any
+regressions.</p>
+<p>Wouldn’t it be nice to just build vanilla <code>gcc</code> every now and then to
+see how unmodified <code>gcc</code> behaves?</p>
+<h2 id="th-perfect-build">Th perfect build</h2>
+<p>In an ideal world a program should be compilable by running
+<code>./configure &amp;&amp; make &amp;&amp; make install</code> (or an equivalent for other build
+systems).</p>
+<p>In practice software frequently makes assumptions about default paths
+that don’t match file system layout imposed by <code>nix</code>. For example <code>gcc</code>
+assumes that system headers should be present in <code>/usr/include</code> and
+<code>ELF</code> interpreter on <code>x86_64</code> should be at <code>/lib64/ld-linux-x86-64.so.2</code>.</p>
+<p>“Naturally” <code>NixOS</code> provides none of these paths and stores everything
+under <code>/nix/store/&lt;hash&gt;-&lt;package&gt;-&lt;version&gt;</code> to allow multiple versions
+of any package to co-exist without conflicts (be it a compiler, kernel,
+libc, <code>bash</code> or <code>firefox</code>).</p>
+<p>Specifically there is no default <code>/usr/include</code> on <code>NixOS</code>:</p>
+<pre><code>$ ls /usr/include
+ls: cannot access '/usr/include': No such file or directory</code></pre>
+<h2 id="fhs-wrapper">FHS wrapper</h2>
+<p>Normally the <code>nixpkgs</code> packaging solution is to explicitly pass
+non-default include (and library, <code>PATH</code> paths) to the <code>./configure</code>.
+Or implicitly via <code>NIX_CFLAGS_COMPILE</code>.</p>
+<p>But sometimes it does not work as smoothly. <code>gcc</code> is a perfect example
+of a special package here. Another example is an already built package
+(say, a game).</p>
+<p>To reconcile that mismatch <code>nixpkgs</code> provides a few helpers to build
+<code>FHS</code> “chroot” out of <code>/nix/store/...</code> paths. Helper mounts <code>/nix/store</code>
+paths into locations expected by FHS.</p>
+<p>One of such helpers is <a href="https://nixos.org/manual/nixpkgs/stable/#sec-fhs-environments">buildFHSEnv</a>.
+I’ll use it as an example.</p>
+<p>To get started let’s create <code>shell.nix</code> file in the current directory
+and run <code>nix-shell</code> there:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">pkgs</span> <span class="op">?</span> <span class="bu">import</span> &lt;nixpkgs&gt; <span class="op">{}</span> <span class="op">}</span>:</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="va">e</span> <span class="op">=</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  pkgs.buildFHSEnv <span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;gcc-git-build-env&quot;</span><span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">targetPkgs</span> <span class="op">=</span> <span class="va">ps</span><span class="op">:</span> <span class="kw">with</span> ps<span class="op">;</span> <span class="op">[</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>      <span class="co"># library depends</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>      gmp gmp.dev</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      isl</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>      libffi libffi.dev</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>      libmpc</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>      libxcrypt</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>      mpfr mpfr.dev</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>      xz xz.dev</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>      zlib zlib.dev</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>      <span class="co"># git checkout need flex as they are not complete release tarballs</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>      m4</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>      bison</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>      flex</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>      texinfo</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>      <span class="co"># test harness</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>      dejagnu</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      autogen</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      <span class="co"># valgrind annotations</span></span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>      valgrind valgrind.dev</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>      <span class="co"># toolchain itself</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>      gcc</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>      stdenv.cc</span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>      stdenv.cc.libc stdenv.cc.libc_dev</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>    <span class="op">];</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span> e.env</span></code></pre></div>
+<p>Running:</p>
+<pre><code>$ nix-shell
+$$ ls /usr/include/
+aio.h        endian.h           glob.h          memory.h    nss.h           signal.h       uchar.h
+aliases.h    envz.h             gmp.h           misc        obstack.h       sound          ucontext.h
+...</code></pre>
+<p>Ready! Now in that shell (and only that shell) we have <code>/usr/include</code>
+(and other standard paths) populated. The implementation uses unshared
+linux mount user namespaces with a few bind mounts.</p>
+<p>Let’s do a full <code>gcc</code> build in that environment using naive
+<code>./configure</code> flags:</p>
+<pre><code>$$ git clone --depth 1 https://gcc.gnu.org/git/gcc.git
+$$ mkdir gcc-build
+$$ cd gcc-build
+$$ ../gcc/configure --disable-multilib --prefix=$PWD/../gcc-installed
+$$ make -j $(nproc)
+$$ make install</code></pre>
+<p>Build and install are done!</p>
+<p>I had to use <code>--disable-multilib</code> as not all 32-bit libraries are
+present by default. Getting multilib to work is an exercise for the
+reader :)</p>
+<p>Now let’s use our installed compiler as is:</p>
+<pre><code>$$ printf '#include &lt;iostream&gt;\nint main() { std::cout &lt;&lt; &quot;Hello!&quot; &lt;&lt; std::endl ; }' &gt; a.cc
+$$ ../gcc-installed/bin/g++ a.cc -o a
+$$ ./a
+./a: /usr/lib/libstdc++.so.6: version `GLIBCXX_3.4.32' not found (required by ./a)</code></pre>
+<p>Almost worked. <code>gcc</code> itself did start, but produced binaries did not
+embed default <code>RPATH</code> to <code>gcc</code>’s own <code>libstdc++</code> and use the (outdated)
+system <code>libstdc++</code>. There are a few ways to work it around. The simplest
+one is to use <code>static-libstdc++</code>:</p>
+<pre><code>$$ ../gcc-installed/bin/g++ a.cc -o a -static-libstdc++
+$$ ./a
+Hello!</code></pre>
+<p>As a bonus we can also run unmodified <code>gcc</code> test suite works as well:</p>
+<pre><code>$$ make check
+make[1]: Entering directory '/tmp/gcc/gcc-build'
+make[2]: Entering directory '/tmp/gcc/gcc-build/fixincludes'
+autogen -T ../../gcc/fixincludes/check.tpl ../../gcc/fixincludes/inclhack.def
+...
+Using /tmp/gcc/gcc/gcc/testsuite/lib/gcc.exp as tool init file.
+Test run by slyfox on Fri Jul  7 08:34:18 2023
+Native configuration is x86_64-pc-linux-gnu
+
+                === gcc tests ===
+
+Schedule of variations:
+    unix
+
+Running target unix
+Using /usr/share/dejagnu/baseboards/unix.exp as board description file for target.
+Using /usr/share/dejagnu/config/unix.exp as generic interface file for target.
+Using /tmp/gcc/gcc/gcc/testsuite/config/default.exp as tool-and-target-specific interface file.
+Running /tmp/gcc/gcc/gcc/testsuite/gcc.c-torture/compile/compile.exp ...
+...
+                === gcc Summary ===
+
+# of expected passes            191743
+# of unexpected failures        107
+# of unexpected successes       19
+# of expected failures          1502
+# of unsupported tests          2593
+...</code></pre>
+<p><code>107</code> unexpected failures of <code>191743</code> performed. Not too bad!</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>buildFHSEnv</code> is a great workaround when one is in need of an <code>FHS</code>
+layout. It helps picky packages including <code>gcc</code> itself.</p>
+<p>While <code>NixOS</code> has an unusual directory structure it is flexible enough to
+be able to simulate traditional layouts like FHS with a small
+<code>buildFHSEnv</code> “chroot” builder. It’s useful for both development
+environments and for running external binaries built against FHS linux
+systems.</p>
+<p>Happy hacking and have fun!</p>
+
+<div class="info">
+    Posted on July  8, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>DNS over TLS</title>
     <link href="http://trofi.github.io/posts/288-DNS-over-TLS.html" />
     <id>http://trofi.github.io/posts/288-DNS-over-TLS.html</id>
@@ -8224,84 +8412,6 @@ newer one should be a reasonable workaround as well.</p>
 
 <div class="info">
     Posted on September 25, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>Shrinking closure example</title>
-    <link href="http://trofi.github.io/posts/259-shrinking-closure-example.html" />
-    <id>http://trofi.github.io/posts/259-shrinking-closure-example.html</id>
-    <published>2022-09-24T00:00:00Z</published>
-    <updated>2022-09-24T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>Sometimes I check <code>nixpkgs</code> packages I use for unexpected
-development-only runtime dependencies. I do it mostly to shrink download
-sizes for things I update frequently.</p>
-<p>I developed a few hacks to find things quickly. The primary hack is to
-grep dependency graph of an executable-only package (say, a game) for
-<code>-dev</code> packages in it’s runtime closure. Here is an example for <code>fheroes2</code>
-package:</p>
-<pre><code>$ nix-store -q --graph $(nix-build -A fheroes2) | grep -P -- '-dev.*-&gt;' | grep -vP -- '-&gt;.*-dev'
-&quot;4bdanp07rax5mazgjzgdwx61sf6p01qc-SDL2-2.0.22-dev&quot; -&gt; &quot;nj09vl0pzc41sn4wh7q2vlppmkv3dhiy-SDL2_mixer-2.0.4&quot; [color = &quot;burlywood&quot;];
-...</code></pre>
-<p>Here we see that <code>SDL2.dev</code> package is pulled into <code>SDL2_mixer.out</code>
-runtime closure. It’s a bug.</p>
-<p>More interesting hack is to grep full runtime closure for files that
-are cleary development-only: <code>C</code> ehader files, <code>pkg-config</code> files and so
-on. Here is a <code>grep</code> example again for <code>fheroes2</code>:</p>
-<pre><code>$ find $(nix path-info -r $(nix-build -A fheroes2)) | grep -P [.]h$ | shuf | unnix | nl | tail -n 2
-  1301  /&lt;&lt;NIX&gt;&gt;/libnfnetlink-1.0.2/include/libnfnetlink/libnfnetlink.h
-  1302  /&lt;&lt;NIX&gt;&gt;/xorgproto-2021.5/include/X11/extensions/dpmsproto.h</code></pre>
-<p>Here we see that <code>xorgproto</code> (header-only package) and <code>libnfnetlink</code>
-(package without a separate <code>.dev</code> output) pull in development headers
-into our previous game. Both are probably unintended and worth a fix.</p>
-<p>To get rid of the dependencies I usually add <code>dev</code> outputs to libraries
-without <code>dev</code> output like a recent
-<a href="https://github.com/NixOS/nixpkgs/pull/191775/commits/d04acb8a96c2ae37dd4ff58db65dedfab8d3d79f">libfido2 example</a>:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/libraries/libfido2/default.nix</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/libraries/libfido2/default.nix</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -29,6 +29,8 @@ stdenv.mkDerivation rec {</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>   propagatedBuildInputs = [ openssl ];</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  outputs = [ &quot;out&quot; &quot;dev&quot; &quot;man&quot; ];</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>   cmakeFlags = [</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>     &quot;-DUDEV_RULES_DIR=${placeholder &quot;out&quot;}/etc/udev/rules.d&quot;</span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>     &quot;-DCMAKE_INSTALL_LIBDIR=lib&quot;</span></code></pre></div>
-<p>Sometime I have to explicitly change the package to not retain
-build-only dependencies. Here is a recent
-<a href="https://github.com/NixOS/nixpkgs/pull/191810/commits/02ba9a3d60c6c45e1df45714a2a3db714eed9c18">freedroidrpg example</a>:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>Do not embed paths to build-only depends (-I...SDL2-dev and friends)</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>into savefile lua comments.</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/savestruct_internal.c</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/savestruct_internal.c</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -486,8 +486,8 @@ void save_game_data(struct auto_string *strout)</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        autostr_append(strout,</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>                &quot;SAVEGAME: %s %s %s;sizeof(tux_t)=%d;sizeof(enemy)=%d;sizeof(bullet)=%d;MAXBULLETS=%d\n&quot;,</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>                SAVEGAME_VERSION, SAVEGAME_REVISION, VERSION, (int)sizeof(tux_t), (int)sizeof(enemy), (int)sizeof(bullet), (int)MAXBULLETS);</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="st">-       autostr_append(strout, &quot;BUILD_CFLAGS: %s\n&quot;, BUILD_CFLAGS);</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="st">-       autostr_append(strout, &quot;BUILD_LDFLAGS: %s\n&quot;, BUILD_LDFLAGS);</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="va">+       autostr_append(strout, &quot;BUILD_CFLAGS: %s\n&quot;, &quot;&lt;hidden&gt;&quot;);</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="va">+       autostr_append(strout, &quot;BUILD_LDFLAGS: %s\n&quot;, &quot;&lt;hidden&gt;&quot;);</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        autostr_append(strout, &quot;VERSION: %s\n&quot;, freedroid_version);</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>        autostr_append(strout, &quot;--]]\n&quot;);</span></code></pre></div>
-<p>Sometimes you might also need to add <code>propagatedBuildInputs = ...</code> to make
-headers-only <code>dev</code> output self-contained.</p>
-<p>Is it worth the hassle? If feels like development headers don’t take
-that much space anyway. It’s true that some packages have tiny overhead.
-But things add up quickly. For example
-<a href="https://github.com/NixOS/nixpkgs/pull/191810">freedroidrpg PR</a> shrinks
-runtime closure from <code>808MB</code> down to <code>450MB</code> (44% reduction). While
-<a href="https://github.com/NixOS/nixpkgs/issues/191770#issuecomment-1250247308">fheroes2 RPs</a>
-shrunk runtime closure from <code>622MB</code> down to <code>557MB</code> (11% reduction).</p>
-<p>These are just two examples I found in 5 minutes. There are many more
-packages you can fix in <code>nixpkgs</code>! Give it a try!</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on September 24, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
