@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: gcc-14 bugs, pile 1</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc-14 bugs, pile 1</h1>
+
+            <p>Around beginning og the May <code>gcc-14</code> development got opened for major
+changes to be merged into <code>master</code> branch. 2 months have passed since
+and I collected a “round” number of bugs: 16. Today is also a day when I
+managed to build my whole system by <code>gcc-master</code> without encountering
+any obvious bugs.</p>
+<h2 id="summary">Summary</h2>
+<p>Here is the full list of bugs I encountered in chronological order
+:</p>
+<ul>
+<li><a href="https://gcc.gnu.org/PR109643">ipa/109643</a>: <code>ICE</code> on <code>pkg-config</code></li>
+<li><a href="https://gcc.gnu.org/PR109652">ipa/109652</a>: <code>ICE</code> on <code>valgrind</code></li>
+<li><a href="https://gcc.gnu.org/PR109732">tree-optimization/109732</a>: wrong code
+on <code>json</code> testsuite.</li>
+<li><a href="https://gcc.gnu.org/PR109755">c++/109755</a>: imprecise warning location.</li>
+<li><a href="https://gcc.gnu.org/PR110067">tree-optimization/110067</a>: wrong code
+on <code>pixman</code> test suite.</li>
+<li><a href="https://gcc.gnu.org/PR110228">middle-end/110228</a>: wrong code on
+<code>llvm</code> JIT test suite.</li>
+<li><a href="https://gcc.gnu.org/PR110271">tree-optimization/110271</a>: <code>ICE</code> on
+<code>pycryptodome</code></li>
+<li><a href="https://gcc.gnu.org/PR110274">target/110274</a>: wrong code on <code>highway</code>
+test suite.</li>
+<li><a href="https://gcc.gnu.org/PR110308">debug/110308</a>: <code>ICE</code> on <code>audiofile</code>.</li>
+<li><a href="https://gcc.gnu.org/PR110332">tree-optimization/110332</a>: <code>ICE</code> on
+<code>llvm</code>.</li>
+<li><a href="https://gcc.gnu.org/PR110443">middle-end/110443</a>: <code>ICE</code> on <code>a52dec</code>.</li>
+<li><a href="https://gcc.gnu.org/PR110515">middle-end/110515</a>: wrong code on
+<code>llvm</code> <code>DWARF</code> test suite.</li>
+<li><a href="https://gcc.gnu.org/PR110523">c++/110523</a>: <code>ICE</code> on <code>json</code>.</li>
+<li><a href="https://gcc.gnu.org/PR110580">c++/110580</a>: rejects valid on <code>nix</code>
+code.</li>
+<li><a href="https://gcc.gnu.org/PR110598">c++/110598</a>: wrong code for <code>llvm</code>
+<code>AMDGCN</code> test suite.</li>
+<li><a href="https://gcc.gnu.org/PR110601">tree-optimization/110601</a>: <code>ICE</code> on
+<code>systemd</code>.</li>
+</ul>
+<p>Let’s look at a few histograms.</p>
+<p>Looking at the manifestation of the bug:</p>
+<ul>
+<li><code>ICE</code>s: 8</li>
+<li><code>wrong-code</code>: 6</li>
+<li><code>other</code>: 2</li>
+</ul>
+<p>Wrong code is almost as much as compiler crashes. Some of wrong codes
+took me a while to extract from the real project. Once again robust test
+suites make it so much easier to extract an example for upstream
+reporting.</p>
+<p>Looking at the subsystems:</p>
+<ul>
+<li><code>tree-optimization</code>: 5</li>
+<li><code>c++</code>: 4</li>
+<li><code>middle-end</code>: 3</li>
+<li><code>ipa</code>: 2</li>
+<li><code>debug</code>: 1</li>
+<li><code>target</code>: 1</li>
+</ul>
+<p>Half the bugs happened in generic optimization phase (<code>tree-optimization</code>
+and <code>middle-end</code>). A few bugs in <code>c++</code> frontend (mainly in tempalte
+instantiation code). And only one failure was target-specific. It should
+be obvious by now that I did no test <code>gcc</code> on anything besides <code>x86_64</code>
+:).</p>
+<h2 id="tip-of-the-day">Tip of the day</h2>
+<p>When chasing wrong code generation down to a particular source file I
+found the <code>#pragma GCC optimize(1)</code> injection hack to be useful:</p>
+<pre><code># flip first halg to -O1
+$ git grep -LF 'pragma GCC optimize' -- '**.cpp' | head -n $NUMBER |
+    xargs sed '1i #pragma GCC optimize(1)' -i
+
+# flip second half to -O1
+$ git grep -LF 'pragma GCC optimize' -- '**.cpp' | tail -n +$(($NUMBER+1)) |
+    xargs sed '1i #pragma GCC optimize(1)' -i</code></pre>
+<p>That way I flip <code>$NUMBER</code> files down to <code>-O1</code> optimization level
+(assuming it is enough to inhibit the bug from happening) and bisect it
+down to a single file without <code>-O1</code> injected.</p>
+<p><code>ccache</code> makes pragma addition and removal very cheap. You effectively
+need to compile project only twice: with default options and with <code>-O1</code>
+pragma override. The rest is a bit of linking.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Running <code>gcc-master</code> is still a lot of fun. I keep finding ~2 new bugs
+per week on a regular basis. I did not get to fix any of them: in almost
+all cases maintainers figured out the fix way before I got closer to the
+culprit code in <code>gcc</code>. Maybe one day I’ll get there first :)</p>
+<p><code>llvm</code> and <code>json</code> remain to be the hardest stress tests for <code>gcc</code>.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on July 12, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
