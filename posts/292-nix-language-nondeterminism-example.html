@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>trofi's blog: Nix Expression Language non-determinism example</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">/</a>
+            <a href="../archive.html">/archive</a>
+            <a href="../feed/atom.xml">/atom</a>
+            <a href="../feed/rss.xml">/rss</a>
+        </div>
+
+        <div id="content">
+            <h1>Nix Expression Language non-determinism example</h1>
+
+            <p>Today Vladimir Kryachko found a very
+<a href="https://github.com/NixOS/nixpkgs/issues/244045">curious nixpkgs bug</a>!</p>
+<p>Here it’s simplified version:</p>
+<p>Good:</p>
+<pre><code>$ nix-instantiate -E 'let n = import &lt;nixpkgs&gt; {}; in n.pkgs.nix'
+/nix/store/6gzxax0rl0k1n3hg0s22jnj6c1c0aj3b-nix-2.15.1.drv</code></pre>
+<p>Bad:</p>
+<pre><code>$ nix-instantiate -E 'let n = import &lt;nixpkgs&gt; {}; extensions = []; in n.pkgs.nix'
+error:
+       … while calling the 'derivationStrict' builtin
+
+         at /builtin/derivation.nix:9:12: (source not available)
+
+       … while evaluating derivation 'nix-2.15.1'
+         whose name attribute is located at /nix/store/21nmswlqvkpbv9ykprrf7x6hvzi5djhf-source/pkgs/stdenv/generic/make-derivation.nix:300:7
+
+       … while evaluating attribute 'configureFlags' of derivation 'nix-2.15.1'
+
+         at /nix/store/21nmswlqvkpbv9ykprrf7x6hvzi5djhf-source/pkgs/stdenv/generic/make-derivation.nix:358:7:
+
+          357|       # This parameter is sometimes a string, sometimes null, and sometimes a list, yuck
+          358|       configureFlags = let inherit (lib) optional elem; in
+             |       ^
+          359|         configureFlags
+
+       error: assertion '(final).hasSharedLibraries' failed</code></pre>
+<p>How can <code>extensions = []</code> affect anything? It should not!</p>
+<p>Quick quiz: Why does crash happen? Is it a <code>nix</code> bug, <code>nixpkgs</code> bug or
+neither?</p>
+<h2 id="nix-expression-language">Nix Expression Language</h2>
+<p><a href="https://nixos.org/manual/nix/stable/">nix package manager</a> uses
+<a href="https://nixos.wiki/wiki/Overview_of_the_Nix_Language">nix expression language</a>.</p>
+<p>It’s a pure (immutable values) lazy (call-by-need) dynamically typed
+language. It has simple and short on builtin primitives. The simpler
+expressions are usually easy to read and reason about.</p>
+<p><code>nix repl</code> provides great interactive environment to poke at things:</p>
+<pre><code>$ nix repl
+nix-repl&gt; let a = 1; b = 2; in a + b
+3
+
+nix-repl&gt; (a: b: a + b) 1 2
+3
+
+nix-repl&gt; 1 == 2
+false</code></pre>
+<p>The larger expressions require some experience and care to figure out.
+It has first class anonymous functions (lambdas) and attribute sets
+(tables). Attribute sets are key-value pairs one can access via <code>.</code> dot
+operator. Attribute sets also provide merge and other operations:</p>
+<pre><code>nix-repl&gt; { a = 1; b = 2; } // { b = 4; c = 5; }
+{ a = 1; b = 4; c = 5; }
+
+nix-repl&gt; { a = 1; b = 2;}.b
+2
+
+nix-repl&gt; { a = 1; b = 2; } == { b = 2; a = 1; }
+true
+
+nix-repl&gt; { b = 2; a = 1; }
+{ a = 1; b = 2; }</code></pre>
+<p>They are called sets because attribute name order is not supposed to
+matter.</p>
+<h2 id="nix-expression-language-exceptions">Nix Expression Language Exceptions</h2>
+<p>It’s so simple! What could possibly go wrong?</p>
+<p>Lazy languages frequently have a special property: among other things
+it’s hard to reason about code’s performance! As performance depends not
+just on the code that constructs the value, but also on the code that
+inspects the value.</p>
+<p>It might sound like a minor optimization problem. But in practice it
+allows (and even encourages) to employ lazy evaluation as a flow control
+mechanism: infinite lists, partially initialized data structures and
+similar techniques are ubiquitous idioms.</p>
+<p>Laziness can be observed in the following example:</p>
+<pre><code>nix-repl&gt; let f = x: f x; in f 1
+error: stack overflow (possible infinite recursion)
+
+nix-repl&gt; { unused = let f = x: f x; in f 1; used = 1;}.used
+1
+
+nix-repl&gt; { unused = let f = x: f x; in f 1; used = 1;}.unused
+error: stack overflow (possible infinite recursion)</code></pre>
+<p>Here we defined function <code>f</code> which calls itself indefinitely:
+<code>f (f (f (... f (1) ) ) ... )</code> as long as we don’t try to print or access that <code>unused</code>
+field with infinite recursion things work just fine.</p>
+<p><code>nix expression language</code> also allows you to generate exceptions out of
+pure code by constructing special values via <code>throw</code> or <code>assert</code>
+keywords:</p>
+<pre><code>nix-repl&gt; throw &quot;gah&quot;
+error:
+       … while calling the 'throw' builtin
+       error: gah
+
+nix-repl&gt; assert true; 42
+42
+
+nix-repl&gt; assert false; 42
+error: assertion 'false' failed</code></pre>
+<h2 id="the-actual-problem">The actual problem</h2>
+<p>Apparently the above is enough to get non-deterministic evaluation!</p>
+<p>The example would be a comparison of two sets with unevaluated
+exceptions:</p>
+<pre><code>nix-repl&gt; { a = 1; b = throw &quot;meh&quot;; } == { a = 2; b = 1; }
+false
+
+nix-repl&gt; { a = 1; b = throw &quot;meh&quot;; } == { a = 1; b = 1; }
+error:
+       error: meh</code></pre>
+<p>Note how <code>b</code> is not causing any troubles in the first case but fails in
+the second case.</p>
+<p>And more: if we just rename <code>a</code> and <code>b</code> in the first case the
+behaviour will change (needs an interpreter restart):</p>
+<pre><code>nix-repl&gt; { b = 1; a = throw &quot;meh&quot;; } == { b = 2; a = 1; }
+error:
+       error: meh</code></pre>
+<p>It means that comparison operator somehow orders sets internally. If
+they were ordered by an attribute name it would not be too bad (the
+failure would be deterministic) but still annoying: alpha
+conversion (renames) causing evaluation difference in pure lazy
+languages is an unexpected property.</p>
+<p>Let’s drop into a one-liner evaluator. How about this one:</p>
+<pre><code>$ nix-instantiate --eval -E '{ a = 1; b = throw &quot;meh&quot;; } == { a = 2; b = 1; }'
+false
+$ nix-instantiate --eval -E 'let b = 1; in { a = 1; b = throw &quot;meh&quot;; } == { a = 2; b = 1; }'
+error:
+       error: meh</code></pre>
+<p>Aren’t these supposed to be literally the same thing?</p>
+<p>Apparently <code>nix</code> evaluator “interns” all new symbols (immutable strings,
+de-duplication mechanism) in the order it encounters them. If <code>b</code>
+happens to be the first it will affect all the attribute set traversals
+after it!</p>
+<h2 id="the-workarounds-time">The workarounds time!</h2>
+<p>So how would you work the thing around in <code>nixpkgs</code> if you already
+happen to define <code>extensions</code> string early? Simple! Define also
+<code>isStatic</code> symbol somewhere as well:</p>
+<p>Good:</p>
+<pre><code>$ nix-instantiate -E 'let n = import &lt;nixpkgs&gt; {}; in n.pkgs.nix'
+/nix/store/6gzxax0rl0k1n3hg0s22jnj6c1c0aj3b-nix-2.15.1.drv</code></pre>
+<p>Bad:</p>
+<pre><code>nix-instantiate -E 'let n = import &lt;nixpkgs&gt; {}; extensions = []; in n.pkgs.nix'
+error:
+       error: assertion '(final).hasSharedLibraries' failed</code></pre>
+<p>And good again:</p>
+<pre><code>$ nix-instantiate -E 'let n = import &lt;nixpkgs&gt; {}; isStatic = true; extensions = []; in n.pkgs.nix'
+/nix/store/6gzxax0rl0k1n3hg0s22jnj6c1c0aj3b-nix-2.15.1.drv</code></pre>
+<p>It’s not a very practical workaround. But I find it funny.</p>
+<p>To see why it works one needs to know where the <code>extensions</code> attribute
+name comes from.</p>
+<p>It comes from the following <code>nixpkgs</code> code in the guts
+of <code>pkgsStatic.*</code> package definitions:</p>
+<pre><code>nix-instantiate --eval -E 'let n = import &lt;nixpkgs&gt; {}; in n.pkgs.stdenv.hostPlatform == n.pkgsStatic.stdenv.hostPlatform'
+false</code></pre>
+<p><code>hostPlatform</code> is a big attribute set with the main difference in
+<code>isStatic</code> field:</p>
+<pre><code>nix-repl&gt; pkgs.stdenv.hostPlatform.isStatic
+false
+
+nix-repl&gt; pkgsStatic.stdenv.hostPlatform.isStatic
+true</code></pre>
+<p>Usually that is the cutoff when we compare two attrsets. But if we add
+an <code>extensions</code> into the picture:</p>
+<pre><code>nix-repl&gt; pkgs.stdenv.hostPlatform.extensions
+{ executable = &quot;&quot;; library = &quot;.so&quot;; sharedLibrary = &quot;.so&quot;; staticLibrary = &quot;.a&quot;; }
+
+nix-repl&gt; pkgsStatic.stdenv.hostPlatform.extensions
+{ executable = &quot;&quot;; library = &quot;.a&quot;; sharedLibrary = «error: error: assertion '(final).hasSharedLibraries' failed</code></pre>
+<p>Note how <code>sharedLibrary</code> always fails to evaluate.</p>
+<h2 id="how-could-we-fix-and-prevent-it">How could we fix and prevent it?</h2>
+<p>I think it would be reasonable to have at least the optional mode in
+<code>nix</code> evaluator to perform attrset comparisons eagerly to uncover
+potential evaluation instability like that.</p>
+<p>I proposed one in <a href="https://github.com/NixOS/nix/pull/8711">PR nix/8711</a>.
+It manages to catch this infelicity as is:</p>
+<pre><code>$ NIX_VALIDATE_EVAL_NONDETERMINISM=1 nix-instantiate --eval -E 'let n = import &lt;nixpkgs&gt; {}; in n.pkgs.stdenv.hostPlatform == n.pkgsStatic.stdenv.hostPlatform'
+error:
+...
+       error: assertion '(final).hasSharedLibraries' failed</code></pre>
+<p>On the <code>nixpkgs</code> side no comparable attrsets should contain any
+exception values. It’s better not to include the attribute at all than
+have it throw like that.</p>
+<p>It would be a good idea to cut down amount of abstraction layers in
+<code>lib/systems/default.nix</code> so errors would be not as cryptic for
+newcomers.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Pure lazy evaluation has it’s own caveats and causes non-deterministic
+evaluation. With luck some form of
+<a href="https://github.com/NixOS/nix/pull/8711">PR nix/8711</a> will enter <code>nix</code>
+and one would be able to add CI checks against such problems.</p>
+<p>Otherwise local patches would have to do.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on July 17, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+
+        </div>
+        <div id="footer">
+            powered by <a href="http://jaspervdj.be/hakyll">hakyll</a>
+        </div>
+    </body>
+</html>
