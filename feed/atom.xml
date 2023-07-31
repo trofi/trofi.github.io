@@ -41,12 +41,12 @@ ld: patchelf.o:...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:71:
 collect2: error: ld returned 1 exit status</code></pre>
 <p>It is the <code>build.log</code> in almost all of it’s entirety. I had a small
 change in <code>staging-next</code> branch which should absolutely not cause that
-failure. But I was not sure (one can never be sure when it come to the
+failure. But I was not sure (one can never be sure when it comes to the
 toolchain bugs).</p>
 <p><strong>Quick quiz</strong>: why does it happen? A <code>gcc</code> bug? A <code>binutils</code> bug? Wrong
 library lookup paths in <code>cc-wrapper</code> or <code>ld-wrapper</code>? Or a heisenbug?</p>
-<h2 id="first-hyporthesis">First hyporthesis</h2>
-<p>I had some past experience with error like that in recent the past
+<h2 id="first-hypothesis">First hypothesis</h2>
+<p>I had some past experience with errors like that in recent the past
 <a href="https://github.com/NixOS/nixpkgs/pull/158047">here</a> and
 <a href="https://github.com/NixOS/nixpkgs/issues/201254">here</a>.</p>
 <p>In both cases it was a <code>nixpkgs</code>-specific problem of mixing multiple
@@ -59,9 +59,9 @@ debug yet another one of those.</p>
 as the culprit.</p>
 <p>My own commit! Uh-on. One of the problems is that it’s a merge commit of
 the change, not the change itself. Why did bisect skip the change
-itself? Why the change caused this change at all? It did not make sense.
+itself? Why did the PR cause this failure at all? It did not make sense.
 Reverting the commit on top of <code>staging-next</code> did fix the <code>patchelf</code>
-linkage. Should be the culprit then? I was about to submit the revert
+linkage. Should it be the culprit then? I was about to submit the revert
 and move on to less cryptic things.</p>
 <p>But for some reason just before giving up I tried to run <code>--rebuild</code> on
 a random “good” commit and got the <code>patchelf</code> linkage failure! That
@@ -70,16 +70,16 @@ meant the error was non-deterministic. It did not make sense.</p>
 <code>gcc</code> bootstraps. On the other hand it is not supposed to lead to
 non-deterministic failures.</p>
 <p>I had to start from the first principles to see where and how linkage
-process breasks.</p>
+process breaks.</p>
 <h2 id="what-is-this-error-about">What is this error about?</h2>
 <p>Let’s look at the specifics of code using atomics in <code>gcc</code>.</p>
 <p><code>libstdc++</code> (<code>gcc</code>s <code>c++</code> template library) uses atomic operations in
 various containers. For example <code>&lt;string&gt;</code> uses atomics to implement
 copy-on-write semantics. Naturally <code>patchelf</code> uses a bit of
-<code>std::String</code> as well. Thus it’s expected to use a bit of atomics like
+<code>std::string</code> as well. Thus it’s expected to use a bit of atomics like
 <code>__atomic_fetch_add()</code> builtin.</p>
-<p>Each architecture implements atomics in slightly different ways: some
-an get away with a single instruction. Some require quite a bit fo code.
+<p>Each architecture implements atomics in a slightly different way: some
+get away with a single instruction, some require quite a bit of code.
 Let’s have a look at <code>x86_64</code> and <code>aarch64</code> to see how close they are.</p>
 <p>I’ll use the very <code>/nix/store/c7qmp1dgqf3hh4fjw74y2k662nmaslcy-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66</code>
 source code bit from the error we saw above.</p>
@@ -92,8 +92,8 @@ returns some result.</p>
 <p><code>x86_64</code> generates the following code:</p>
 <pre><code>$ gcc -O2 -S a.c -o -
     f:
-        movl    %esi, %eax
-        lock xaddl      %eax, (%rdi)
+        movl         %esi, %eax
+        lock xaddl   %eax, (%rdi)
         ret</code></pre>
 <p>It’s literally one <code>lock xaddl</code> instruction. How about <code>aarch64</code>? Is it
 as simple?</p>
@@ -127,19 +127,18 @@ as simple?</p>
   2c:           ret</code></pre>
 <p>Quite a bit of code here as well: if CPU supports <code>ldaddal</code> then
 <code>libgcc.a</code> uses that. Otherwise it falls back to
-<code>ldaxr / add / stlxr / cbnz</code>.</p>
+<code>ldaxr; add; stlxr; cbnz</code>.</p>
 <p>This amount of code is probably the reason why the code is not inlined
 by <code>gcc</code>. For comparison <code>clang</code> does something a bit different:</p>
 <pre><code>$ clang -O2 -S a.c -o - -target aarch64-unknown-linux
     f:
-.LBB0_1:
         ldaxr   w8, [x0]
         add     w9, w8, w1
         stlxr   w10, w9, [x0]
-        cbnz    w10, .LBB0_1
+        cbnz    w10, f
         mov     w0, w8
         ret</code></pre>
-<p>Here <code>clang</code> inlined <code>ldaxr / add / stlxr / cbnz</code> and did not consider
+<p>Here <code>clang</code> inlined <code>ldaxr; add; stlxr; cbnz</code> and did not consider
 <code>ldaddal</code> at all. If we nudge <code>gcc</code> a bit we can force it to inline
 <code>ldaddal</code> with <code>-march=</code> flag:</p>
 <pre><code>$ aarch64-unknown-linux-gnu-gcc -O2 -S a.c -o - -Wall -march=armv8.1-a
@@ -246,14 +245,14 @@ lrwxrwxrwx 1419 root root 3 Jan  1  1970 ...-xgcc-12.3.0/lib64 -&gt; lib</code><
 case for a while. But a few weeks ago the <code>strip</code> hook was made parallel
 in <a href="https://github.com/NixOS/nixpkgs/pull/207101">PR #207101</a>!</p>
 <p>As a result two <code>strip</code> commands had a chance to open <code>libgcc.a</code>, strip
-it and wripte the result back. Sometimes you are lucky and you get
+it and write the result back. Sometimes you are lucky and you get
 something that works. But sometimes you are not so lucky and one of the
 <code>stip</code> commands reads incompletely written <code>libgcc.a</code> by the previous
 <code>strip</code>.</p>
 <h2 id="the-fix">The fix</h2>
 <p>The fix (or the workaround) is not to attemt to process the same file
 twice. <a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a>
-implements naive for of the symlink resolution via <code>realpath</code> and
+implements naive form of the symlink resolution via <code>realpath</code> and
 double-strip avoidance via <code>sort -u</code>:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/build-support/setup-hooks/strip.sh</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/build-support/setup-hooks/strip.sh</span></span>
@@ -277,8 +276,7 @@ was another case of non-deterministic build causing major toolchain
 breakage. I’m glad it was discovered so quickly after introduction.
 <a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a> should fix it
 for good.</p>
-<p>Turns out <code>clang</code> and <code>gcc</code> generate a bit different code by default
-around atomics.</p>
+<p>Turns out <code>clang</code> and <code>gcc</code> generate a bit different code around atomics.</p>
 <p>Have fun!</p>
 
 <div class="info">
