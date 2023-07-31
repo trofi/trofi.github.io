@@ -7,8 +7,287 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="http://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Mon, 17 Jul 2023 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Mon, 31 Jul 2023 00:00:00 UT</lastBuildDate>
         <item>
+    <title>Mysterious patchelf linkage bug</title>
+    <link>http://trofi.github.io/posts/293-mysterious-patchelf-linkage-bug.html</link>
+    <description><![CDATA[<p>Today’s mystery started from <a href="https://hydra.nixos.org/build/229663092">this build failure</a>
+noticed by Vladimir on <code>staging-next</code> branch of <code>nixpkgs</code>.</p>
+<p>There <code>aarch64-linux</code> build
+<a href="https://hydra.nixos.org/log/k9mdaj5a9rbpkc8x9hj9mw3papraamcn-patchelf-0.15.0.drv">failed</a>
+to compile <code>patchelf</code> as part of <code>stdenv</code> with this mysterious error:</p>
+<pre><code>Making all in src
+make[1]: Entering directory '/build/patchelf-0.15.0/src'
+g++ -DPACKAGE_NAME=\&quot;patchelf\&quot; -DPACKAGE_TARNAME=\&quot;patchelf\&quot; -DPACKAGE_VERSION=\&quot;0.15.0\&quot; -DPACKAGE_STRING=\&quot;patchelf\ 0.15.0\&quot; -DPACKAGE_BUGREPORT=\&quot;\&quot; -DPACKAGE_URL=\&quot;\&quot; -DPACKAGE=\&quot;patchelf\&quot; -DVERSION=\&quot;0.15.0\&quot; -I.    -Wall -std=c++17 -D_FILE_OFFSET_BITS=64     -g -O2 -c -o patchelf.o patchelf.cc
+g++ -Wall -std=c++17 -D_FILE_OFFSET_BITS=64     -g -O2   -o patchelf patchelf.o  
+ld: patchelf.o: in function `__gnu_cxx::__exchange_and_add(int volatile*, int)':
+...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
+  undefined reference to `__aarch64_ldadd4_acq_rel'
+ld: ...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
+  undefined reference to `__aarch64_ldadd4_acq_rel'
+ld: ...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
+  undefined reference to `__aarch64_ldadd4_acq_rel'
+ld: ...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
+  undefined reference to `__aarch64_ldadd4_acq_rel'
+ld: patchelf.o: in function `__gnu_cxx::__atomic_add(int volatile*, int)':
+...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:71:
+  undefined reference to `__aarch64_ldadd4_acq_rel'
+ld: patchelf.o:...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:71:
+  more undefined references to `__aarch64_ldadd4_acq_rel' follow
+collect2: error: ld returned 1 exit status</code></pre>
+<p>It is the <code>build.log</code> in almost all of it’s entirety. I had a small
+change in <code>staging-next</code> branch which should absolutely not cause that
+failure. But I was not sure (one can never be sure when it come to the
+toolchain bugs).</p>
+<p><strong>Quick quiz</strong>: why does it happen? A <code>gcc</code> bug? A <code>binutils</code> bug? Wrong
+library lookup paths in <code>cc-wrapper</code> or <code>ld-wrapper</code>? Or a heisenbug?</p>
+<h2 id="first-hyporthesis">First hyporthesis</h2>
+<p>I had some past experience with error like that in recent the past
+<a href="https://github.com/NixOS/nixpkgs/pull/158047">here</a> and
+<a href="https://github.com/NixOS/nixpkgs/issues/201254">here</a>.</p>
+<p>In both cases it was a <code>nixpkgs</code>-specific problem of mixing multiple
+toolchain versions in a single <code>stdenv</code>. I expect this kind of problem
+to come back from time to time until bootstrap process is changed to
+avoid any mixing of toolchain versions. Thus I was looking forward to
+debug yet another one of those.</p>
+<p>I ran the bisect and got the
+<a href="https://github.com/NixOS/nixpkgs/commit/8470989a96eb1c0e0c12c30c1b7bd7174ed9349b">Merge pull request #245550 from trofi/gcc-restore-sys-include</a>.
+as the culprit.</p>
+<p>My own commit! Uh-on. One of the problems is that it’s a merge commit of
+the change, not the change itself. Why did bisect skip the change
+itself? Why the change caused this change at all? It did not make sense.
+Reverting the commit on top of <code>staging-next</code> did fix the <code>patchelf</code>
+linkage. Should be the culprit then? I was about to submit the revert
+and move on to less cryptic things.</p>
+<p>But for some reason just before giving up I tried to run <code>--rebuild</code> on
+a random “good” commit and got the <code>patchelf</code> linkage failure! That
+meant the error was non-deterministic. It did not make sense.</p>
+<p>On one hand <code>sys-include</code> commit above is quite relevant to the way
+<code>gcc</code> bootstraps. On the other hand it is not supposed to lead to
+non-deterministic failures.</p>
+<p>I had to start from the first principles to see where and how linkage
+process breasks.</p>
+<h2 id="what-is-this-error-about">What is this error about?</h2>
+<p>Let’s look at the specifics of code using atomics in <code>gcc</code>.</p>
+<p><code>libstdc++</code> (<code>gcc</code>s <code>c++</code> template library) uses atomic operations in
+various containers. For example <code>&lt;string&gt;</code> uses atomics to implement
+copy-on-write semantics. Naturally <code>patchelf</code> uses a bit of
+<code>std::String</code> as well. Thus it’s expected to use a bit of atomics like
+<code>__atomic_fetch_add()</code> builtin.</p>
+<p>Each architecture implements atomics in slightly different ways: some
+an get away with a single instruction. Some require quite a bit fo code.
+Let’s have a look at <code>x86_64</code> and <code>aarch64</code> to see how close they are.</p>
+<p>I’ll use the very <code>/nix/store/c7qmp1dgqf3hh4fjw74y2k662nmaslcy-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66</code>
+source code bit from the error we saw above.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// atomic.c</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f<span class="op">(</span><span class="dt">int</span> <span class="op">*</span> p<span class="op">,</span> <span class="dt">int</span> v<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> __atomic_fetch_add<span class="op">(</span>p<span class="op">,</span> v<span class="op">,</span> __ATOMIC_ACQ_REL<span class="op">);</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The function <code>f()</code> here atomically adds a <code>v</code> value stored at <code>p</code> and
+returns some result.</p>
+<p><code>x86_64</code> generates the following code:</p>
+<pre><code>$ gcc -O2 -S a.c -o -
+    f:
+        movl    %esi, %eax
+        lock xaddl      %eax, (%rdi)
+        ret</code></pre>
+<p>It’s literally one <code>lock xaddl</code> instruction. How about <code>aarch64</code>? Is it
+as simple?</p>
+<pre><code>$ aarch64-unknown-linux-gnu-gcc -O2 -S a.c -o -
+        .arch armv8-a
+    f:
+        mov     x2, x0
+        stp     x29, x30, [sp, -16]!
+        mov     w0, w1
+        mov     x29, sp
+        mov     x1, x2
+        bl      __aarch64_ldadd4_acq_rel
+        ldp     x29, x30, [sp], 16
+        ret</code></pre>
+<p>We see a big difference here: <code>gcc</code> emits call into outside
+<code>__aarch64_ldadd4_acq_rel</code> function. It’s code hides in <code>libgcc.a</code>:</p>
+<pre><code>__aarch64_ldadd4_acq_rel:
+   0:           bti     c
+   4:           adrp    x16, 0 &lt;__aarch64_have_lse_atomics&gt;
+                4: R_AARCH64_ADR_PREL_PG_HI21   __aarch64_have_lse_atomics
+   8:           ldrb    w16, [x16]
+                8: R_AARCH64_LDST8_ABS_LO12_NC  __aarch64_have_lse_atomics
+   c:           cbz     w16, 18 &lt;__aarch64_ldadd4_acq_rel+0x18&gt;
+  10:           ldaddal w0, w0, [x1]
+  14:           ret
+  18:           mov     w16, w0
+  1c:           ldaxr   w0, [x1]
+  20:           add     w17, w0, w16
+  24:           stlxr   w15, w17, [x1]
+  28:           cbnz    w15, 1c &lt;__aarch64_ldadd4_acq_rel+0x1c&gt;
+  2c:           ret</code></pre>
+<p>Quite a bit of code here as well: if CPU supports <code>ldaddal</code> then
+<code>libgcc.a</code> uses that. Otherwise it falls back to
+<code>ldaxr / add / stlxr / cbnz</code>.</p>
+<p>This amount of code is probably the reason why the code is not inlined
+by <code>gcc</code>. For comparison <code>clang</code> does something a bit different:</p>
+<pre><code>$ clang -O2 -S a.c -o - -target aarch64-unknown-linux
+    f:
+.LBB0_1:
+        ldaxr   w8, [x0]
+        add     w9, w8, w1
+        stlxr   w10, w9, [x0]
+        cbnz    w10, .LBB0_1
+        mov     w0, w8
+        ret</code></pre>
+<p>Here <code>clang</code> inlined <code>ldaxr / add / stlxr / cbnz</code> and did not consider
+<code>ldaddal</code> at all. If we nudge <code>gcc</code> a bit we can force it to inline
+<code>ldaddal</code> with <code>-march=</code> flag:</p>
+<pre><code>$ aarch64-unknown-linux-gnu-gcc -O2 -S a.c -o - -Wall -march=armv8.1-a
+    f:
+        ldaddal w1, w0, [x0]
+        ret</code></pre>
+<p>And the same for <code>clang</code>:</p>
+<pre><code>$ clang -O2 -S a.c -o - -target aarch64-unknown-linux -march=armv8.1-a
+    f:
+        ldaddal w1, w0, [x0]
+        ret</code></pre>
+<p>All of the above tells us that sometimes <code>gcc</code> generates calls into
+“external” libraries like <code>libgcc.a</code> (or <code>libgcc_s.so</code>) to implement
+larger primitives. And this decision might depend on the backend
+architecture and compiler flags.</p>
+<h2 id="looking-at-the-linkage-command">Looking at the linkage command</h2>
+<p>I filed <a href="https://github.com/NixOS/nixpkgs/issues/246147">the bug</a> to
+start capturing important details of the bug to see how far into it I
+can get.</p>
+<p>First I needed to extract exact attribute failing to build on <code>aarch64</code>.</p>
+<p>I added <code>boot.binfmt.emulatedSystems = [ "aarch64-linux" ];</code> to
+<code>/etc/nixos/configuration.nix</code> to get <code>binfmt-misc</code> wrapper and ran a
+few build commands like:</p>
+<pre><code>$ nix build --no-link -f. --argstr system aarch64-linux patchelf -L</code></pre>
+<p>to point at the exact failing attribute. It ended up being
+<code>stdenv.__bootPackages.stdenv.__bootPackages.stdenv.__bootPackages.patchelf</code>.
+The attribute points right in the middle of <code>stdenv</code> bootstrap.</p>
+<p>I dropped into interactive shell to poke at the exact details of build
+failure against <code>good</code> and <code>bad</code> states with <code>nix develop</code>:</p>
+<pre><code>$ nix develop -f. --argstr system aarch64-linux patchelf
+error (ignored): error: '--arg' and '--argstr' are incompatible with flakes
+$$ genericBuild
+...
+$$ cd src
+$$ g++ -Wall -std=c++17 -D_FILE_OFFSET_BITS=64     -g -O2   -o patchelf patchelf.o
+ld: patchelf.o: in function `__gnu_cxx::__exchange_and_add(int volatile*, int)':
+...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
+  undefined reference to `__aarch64_ldadd4_acq_rel'
+...</code></pre>
+<p>Now we can check where exactly linker looks the libraries up by adding
+<code>-Wl,--verbose</code>:</p>
+<pre><code>$$ g++ -Wall -std=c++17 -D_FILE_OFFSET_BITS=64 -g -O2 -o patchelf patchelf.o -Wl,--verbose
+...
+==================================================
+ld: mode aarch64linux
+attempt to open ...-glibc-2.37-8/lib/crt1.o succeeded
+...-glibc-2.37-8/lib/crt1.o
+attempt to open ...-glibc-2.37-8/lib/crti.o succeeded
+...</code></pre>
+<p>Here is the diff against <code>bad</code> and <code>good</code> environments:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>$ diff -u &lt;(cat /tmp/bad | unnix) &lt;(cat /tmp/good | unnix)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">--- /dev/fd/63  2023-07-30 08:26:51.561118824 +0100</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ /dev/fd/62  2023-07-30 08:26:51.561118824 +0100</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -273,6 +273,8 @@</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a> attempt to open /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.so failed</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a> attempt to open /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a succeeded</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a> /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="va">+(/&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a)ldadd_4_4.o</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="va">+(/&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a)lse-init.o</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a> /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a> attempt to open /&lt;&lt;NIX&gt;&gt;/bootstrap-stage0-glibc-bootstrapFiles/lib/libgcc.so failed</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a> attempt to open /&lt;&lt;NIX&gt;&gt;/bootstrap-stage0-glibc-bootstrapFiles/lib/libgcc.a failed</span></code></pre></div>
+<p>I expected some difference in library version outputs, some order
+difference in path lookups. But we see nothing like that here. The only
+change is the difference in access to individual object files in
+<code>libgcc.a</code>: <code>ldadd_4_4.o</code> and <code>lse-init.o</code> which we expect in both cases.</p>
+<p>And on inspection of <code>libgcc.a</code> I noticed that in <code>bad</code> case it was
+corrupted:</p>
+<pre><code>$ nm ...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
+nm: ...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a:
+  malformed archive</code></pre>
+<p>How did we manage to corrupt <code>libgcc.a</code>? A bit of strip log spills the
+clue:</p>
+<pre><code>stripping (with command strip and flags -S -p) in
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
+...-xgcc-12.3.0/
+lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc_eh.a
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcov.a
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbegin.o
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginS.o
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginT.o
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtend.o
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtendS.o
+...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtfastmath.o
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc_eh.a
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcov.a
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbegin.o
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginS.o
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginT.o
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtend.o
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtendS.o
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtfastmath.o</code></pre>
+<p>It’s somewhat hard to read but we have <code>libgcc.a</code> twice in the list:</p>
+<pre><code>...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
+...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a</code></pre>
+<p>Both are the same file as <code>lib64</code> is a symlink to <code>lib</code>:</p>
+<pre><code>$ ls -ld ...-xgcc-12.3.0/lib64
+lrwxrwxrwx 1419 root root 3 Jan  1  1970 ...-xgcc-12.3.0/lib64 -&gt; lib</code></pre>
+<h2 id="race-condition">Race condition</h2>
+<p>So even if the file was stripped twice, why would it be a problem? Isn’t
+<code>strip</code> idempotent in this regard?</p>
+<p>It would as long as <code>strip</code> is ran sequentially. And it used to be the
+case for a while. But a few weeks ago the <code>strip</code> hook was made parallel
+in <a href="https://github.com/NixOS/nixpkgs/pull/207101">PR #207101</a>!</p>
+<p>As a result two <code>strip</code> commands had a chance to open <code>libgcc.a</code>, strip
+it and wripte the result back. Sometimes you are lucky and you get
+something that works. But sometimes you are not so lucky and one of the
+<code>stip</code> commands reads incompletely written <code>libgcc.a</code> by the previous
+<code>strip</code>.</p>
+<h2 id="the-fix">The fix</h2>
+<p>The fix (or the workaround) is not to attemt to process the same file
+twice. <a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a>
+implements naive for of the symlink resolution via <code>realpath</code> and
+double-strip avoidance via <code>sort -u</code>:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/build-support/setup-hooks/strip.sh</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/build-support/setup-hooks/strip.sh</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -68,6 +68,11 @@ stripDirs() {</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>         striperr=&quot;$(mktemp 'striperr.XXXXXX')&quot;</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>         # Do not strip lib/debug. This is a directory used by setup-hooks/separate-debug-info.sh.</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>         find $paths -type f -a '!' -path &quot;$prefix/lib/debug/*&quot; -print0 |</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="va">+            # Make sure we process files under symlinks only once. Otherwise</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a><span class="va">+            # 'strip` can corrupt files when writes to them in parallel:</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a><span class="va">+            #   https://github.com/NixOS/nixpkgs/issues/246147#issuecomment-1657072039</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a><span class="va">+            xargs -r -0 -n1 -- realpath -z | sort -u -z |</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>             xargs -r -0 -n1 -P &quot;$NIX_BUILD_CORES&quot; -- $cmd $stripFlags 2&gt;&quot;$striperr&quot; || exit_code=$?</span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>         # xargs exits with status code 123 if some but not all of the</span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>         # processes fail. We don't care if some of the files couldn't</span></code></pre></div>
+<p>Now we should generally try to strip slightly less from now on by
+skipping identical files.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>My initial guess of wrong library lookup paths was completely off. It
+was another case of non-deterministic build causing major toolchain
+breakage. I’m glad it was discovered so quickly after introduction.
+<a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a> should fix it
+for good.</p>
+<p>Turns out <code>clang</code> and <code>gcc</code> generate a bit different code by default
+around atomics.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on July 31, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></description>
+    <pubDate>Mon, 31 Jul 2023 00:00:00 UT</pubDate>
+    <guid>http://trofi.github.io/posts/293-mysterious-patchelf-linkage-bug.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>Nix Expression Language non-determinism example</title>
     <link>http://trofi.github.io/posts/292-nix-language-nondeterminism-example.html</link>
     <description><![CDATA[<p>Today Vladimir Kryachko found a very
@@ -8282,46 +8561,6 @@ compiler :).</p>
 ]]></description>
     <pubDate>Sat, 05 Nov 2022 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/264-gcc-s-new-Wdangling-reference-warning.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>GNU make 4.4 is out!</title>
-    <link>http://trofi.github.io/posts/263-gnu-make-4.4-is-out.html</link>
-    <description><![CDATA[<p>Yesterday <code>GNU make</code> project
-<a href="https://lists.gnu.org/archive/html/bug-make/2022-10/msg00247.html">announced 4.4 release</a>!</p>
-<p>The release contains extensive list of new additions and backward
-incompatible changes in various corner cases.</p>
-<p>Multi-target rule change <a href="http://trofi.github.io/posts/260-make-multiple-targets.html">mentioned before</a>
-will not break bulds in <code>make-4.4</code>. Breaking change was postponed for
-<code>make-4.5</code> release. <code>make-4.4</code> will print diagnostic warning for simple
-cases, Worth watching for the warnings. So far I see similar warnings in
-the following packages:</p>
-<pre><code>dtc-1.6.1.drv:Makefile:387: warning: pattern recipe did not update peer target 'dtc-parser.output'.
-ghc-9.0.2.drv:libraries/base/ghc.mk:4: warning: pattern recipe did not update peer target 'libraries/base/dist-install/build/GHC/Clock_hsc.c'.
-git-2.38.1.drv:Makefile:354: warning: pattern recipe did not update peer target 'git.5'.
-kmod-30.drv:Makefile:615: warning: pattern recipe did not update peer target 'depmod.5'.
-libbonobo-2.32.1.drv:Makefile:802: warning: pattern recipe did not update peer target 'Bonobo_ActivationContext-imodule.c'.
-ORBit2-2.14.19.drv:Makefile:1097: warning: pattern recipe did not update peer target 'test1-imodule.c'.
-pciutils-3.8.0.drv:Makefile:114: warning: pattern recipe did not update peer target 'lspci.5'.
-perf-linux-6.0.2.drv:Makefile:262: warning: pattern recipe did not update peer target 'perf.5'.
-rethinkdb-2.4.1.drv:mk/support/build.mk:174: warning: pattern recipe did not update peer target 'install-include-gtest_1.7.0'.
-sane-backends-1.0.32.drv:Makefile:957: warning: pattern recipe did not update peer target 'gamma4scanimage.5'.
-shadow-4.11.1.drv:Makefile:1062: warning: pattern recipe did not update peer target 'man1/chgpasswd.8'.</code></pre>
-<p>Worth fixing those upstream before next <code>make-4.5</code> release.</p>
-<p>On another topic <code>make --shuffle</code>
-<a href="http://trofi.github.io/posts/249-an-update-on-make-shuffle.html">mentioned before</a> is now
-available in official release. This should lower the barrier for users
-to try it out once <code>make-4.4</code> triclkles into downstream distributions.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on November  1, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></description>
-    <pubDate>Tue, 01 Nov 2022 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/263-gnu-make-4.4-is-out.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
