@@ -29,7 +29,7 @@ shared an unusual
 <a href="https://bugs.gentoo.org/672040">kernel crash report</a> seen by Dmitry V. Levin.</p>
 <p>Dmitry noticed that one of <strong>AlphaServer ES40</strong> machines does
 not handle <strong>strace</strong> test suite and generates kernel oopses:</p>
-<pre class><code>Unable to handle kernel paging request at virtual address ffffffffffff9468
+<pre><code>Unable to handle kernel paging request at virtual address ffffffffffff9468
 CPU 3 
 aio(26027): Oops 0
 pc = [&lt;fffffc00004eddf8&gt;]  ra = [&lt;fffffc00004edd5c&gt;]  ps = 0000    Not tainted
@@ -89,7 +89,7 @@ minimal linux kernel with only initramfs support without
 filesystem or block device support.</p>
 <p>Then I put statically linked reproducer and busybox into
 initramfs:</p>
-<pre class><code>$ LANG=C tree root/
+<pre><code>$ LANG=C tree root/
 root/
 |-- aio (statically linked aio.c)
 |-- aio.c (source above)
@@ -131,7 +131,7 @@ straightforward:</p>
 <span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>                            <span class="dt">\</span></span>
 <span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
 <p>I built kernel and started a VM as:</p>
-<pre class><code># build kernel
+<pre><code># build kernel
 $ ./mk.sh -j$(nproc)
 
 # run kernel
@@ -141,7 +141,7 @@ $ ./run-qemu.sh -curses
 / #</code></pre>
 <p>That was simple. I got the prompt! Then I ran statically
 linked <strong>/aio</strong> reproducer as:</p>
-<pre class><code>/ # /aio
+<pre><code>/ # /aio
 Unable to handle kernel paging request at virtual address 0000000000000000
 aio(26027): Oops -1
 ...</code></pre>
@@ -164,7 +164,7 @@ have not completely broken setup.</p>
 <p>I got first suspect: kernel regression.</p>
 <p>Reproducer was very stable. Kernel bisection got me
 to <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95af8496ac48263badf5b8dde5e06ef35aaace2b">first regressed commit</a>:</p>
-<pre class><code>commit 95af8496ac48263badf5b8dde5e06ef35aaace2b
+<pre><code>commit 95af8496ac48263badf5b8dde5e06ef35aaace2b
 Author: Al Viro &lt;viro@zeniv.linux.org.uk&gt;
 Date:   Sat May 26 19:43:16 2018 -0400
 
@@ -207,7 +207,7 @@ place of page fault by single-stepping through kerenel using <strong>gdb</strong
 <li>start gdb client on host side with <strong>target remote localhost:1234</strong></li>
 </ul>
 <p>The same procedure in exact commands (I’m hooking into <strong>sys_io_submit()</strong>):</p>
-<pre class><code>&lt;at tty1&gt;
+<pre><code>&lt;at tty1&gt;
 $ ./run-qemu.sh -s
 
 &lt;at tty2&gt;
@@ -245,7 +245,7 @@ form and gdb disassembly might use another. For example
 is a register to pass first integer argument to function.</p>
 <p>After many backs and forths I found the suspicious behaviour
 when handling single instruction:</p>
-<pre class><code>(gdb) disassemble
+<pre><code>(gdb) disassemble
   =&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
      0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
 (gdb) p $gp
@@ -280,7 +280,7 @@ effects are the result of page fault handling.</p>
 <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199">entMM page fault handling entry</a>.</p>
 <p>It claims to handle page faults and keeps <strong>gp</strong> value on stack.
 Let’s trace the fate of that on-stack value as page fault happens:</p>
-<pre class><code>(gdb) disassemble
+<pre><code>(gdb) disassemble
   =&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
      0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
 (gdb) p $gp
@@ -355,7 +355,7 @@ on <strong>alpha</strong>?</li>
 <span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>unlikely<span class="op">(</span>get_user<span class="op">(</span>user_iocb<span class="op">,</span> iocbpp <span class="op">+</span> i<span class="op">)))</span> <span class="op">{</span></span>
 <span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span></code></pre></div>
 <p>which is translated to already familiar pair of instructions:</p>
-<pre class><code>=&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
+<pre><code>=&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
    0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;</code></pre>
 <p>Fun fact: <strong>get_user()</strong> has two return values: normal function
 return value (stored into <strong>t0</strong> register) and <strong>user_iocb</strong>
@@ -425,7 +425,7 @@ able to reach that data to use it later in mysterious
 <p>In case of <strong>alpha</strong> (and many other targets) <strong>__ex_table</strong>
 collection is defined by <strong>arch/alpha/kernel/vmlinux.lds.S</strong>
 linker script using <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h#n562">EXCEPTION_TABLE() macro</a>:</p>
-<pre class><code>#define EXCEPTION_TABLE(align)                         \
+<pre><code>#define EXCEPTION_TABLE(align)                         \
     . = ALIGN(align);                                  \
     __ex_table : AT(ADDR(__ex_table) - LOAD_OFFSET) {  \
         __start___ex_table = .;                        \
@@ -472,7 +472,7 @@ Those are handled by generic <a href="https://git.kernel.org/pub/scm/linux/kerne
 <p>Note how <strong>lda</strong> in-memory instruction format is used to encode
 all details needed by <strong>fixup_exception()</strong>! In case of our
 <strong>sys_io_submit()</strong> case it would be <strong>lda a1, 4(t0)</strong> (<strong>lda r17, 4(r1)</strong>):</p>
-<pre class><code>(gdb) bt
+<pre><code>(gdb) bt
   #0  0xfffffc00010319d0 in do_page_fault (address=2199023271936, mmcsr=&lt;optimized out&gt;, cause=0, 
       regs=0xfffffc003f51bdc0) at ../linux-2.6/arch/alpha/mm/fault.c:199
   #1  0xfffffc0001010eac in entMM () at ../linux-2.6/arch/alpha/kernel/entry.S:222

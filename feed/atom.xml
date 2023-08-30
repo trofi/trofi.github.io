@@ -6,10 +6,160 @@
     <id>http://trofi.github.io/feed/atom.xml</id>
     <author>
         <name>Sergei Trofimovich</name>
+        
         <email>slyich@gmail.com</email>
+        
     </author>
-    <updated>2023-08-11T00:00:00Z</updated>
+    <updated>2023-08-30T00:00:00Z</updated>
     <entry>
+    <title>SSH over HTTPS</title>
+    <link href="http://trofi.github.io/posts/295-ssh-over-https.html" />
+    <id>http://trofi.github.io/posts/295-ssh-over-https.html</id>
+    <published>2023-08-30T00:00:00Z</published>
+    <updated>2023-08-30T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>Tl;DR: to pass <code>SSH</code> through <code>HTTPS</code> you need to tweak client and server
+sides as the following:</p>
+<p>Example client entry in <code>~/.ssh/config</code>:</p>
+<pre><code>$ cat .ssh/config
+Host ssh-via-https
+        ProxyCommand ~/.ssh/https-tunnel.bash
+        # some firewalls aggressively close idle TCP connections
+        ServerAliveInterval 30
+
+$ cat ~/.ssh/https-tunnel.bash
+#!/usr/bin/env bash
+{ printf &quot;CONNECT ssh-server:22 HTTP/1.0\r\n\r\n&quot;; cat; } | socat - SSL:https-server:443</code></pre>
+<p>Example server entry for <code>apache2</code> <code>HTTPS</code>:</p>
+<pre><code>$ cat /etc/httpd/httpd.conf
+LoadModule proxy_connect_module .../modules/mod_proxy_connect.so
+# ...
+AllowCONNECT 22
+&lt;Proxy *&gt;
+    Order deny,allow
+    Deny from all
+&lt;/Proxy&gt;
+&lt;Proxy ssh-server&gt;
+    Order deny,allow
+    Allow from all
+&lt;/Proxy&gt;</code></pre>
+<p>Here we allow everyone to use <code>CONNECT</code> <code>HTTP</code> method on the server side
+hosted at <code>https-server</code> just for a single target: the <code>ssh-server</code> host.</p>
+<p>And on the client side we use <code>socat</code> to create <code>TLS</code> connection with a
+single <code>CONNECT</code> method.</p>
+<p>Now you can use <code>$ ssh ssh-via-https</code> to reach <code>ssh-server</code>.</p>
+<p>More words below:</p>
+<h2 id="background">Background</h2>
+<p>Why would I need it?</p>
+<p>I planned to spend 1-2 days in the hospital. But now I am stuck here for
+the past two weeks and would like to tinker on small stuff remotely. The
+hospital has free Wi-fi.</p>
+<p>The caveat is that hospital blocks most connection types. It allows you
+only to do <code>HTTP</code> (<code>TCP</code> port <code>80</code>) and <code>HTTPS</code> (<code>TCP</code> port <code>443</code>)
+connections for most hosts. <code>DNS</code> (<code>UDP</code> port <code>53</code>) and <code>DoT</code> (<code>TCP</code>
+port <code>853</code>) seem to work as well at least for well-known <code>DNS</code>
+providers.</p>
+<p>But <code>SSH</code> (<code>TCP</code> port <code>22</code> or most other custom ports) are blocked
+completely.</p>
+<p>I wondered how hard would it be to pass <code>SSH</code> through <code>HTTP</code> or <code>HTTPS</code>.
+I had a <code>GSM</code> fallback so I could reconfigure remote server and try
+various solutions.</p>
+<h2 id="the-options">The options</h2>
+<p>Apparently there are various avenues to explore here:</p>
+<ol type="1">
+<li><p>Co-host <code>SSH</code> and <code>HTTPS</code> protocols on a single port and dispatch
+them transparently. <a href="https://github.com/yrutschle/sslh">sslh project</a>
+does just that.</p>
+<p>One of it’s features (or limitations) is that it does not encapsulate
+one protocol in another: it guesses the protocol using various
+heuristics and redirects it to the actual backend: <code>SSH</code> server,
+<code>HTTPS</code> or any other supported protocol from
+<a href="https://github.com/yrutschle/sslh/blob/master/probe.c#L50">the list</a>.</p>
+<p>Clear pro here is:</p>
+<ul>
+<li>no special <code>ssh</code> client configuration is required: you just specify
+non-default port.</li>
+</ul></li>
+<li><p>Encapsulate one protocol completely into another.</p></li>
+</ol>
+<p><code>openssh</code> supports <code>ProxyCommand</code> directive effectively allowing user to
+supply any transport that <code>ssh</code> protocol uses:</p>
+<pre><code>Specifies the command to use to connect to the server. The command string extends to the end of the line, and is executed using the user's shell ‘exec’ directive to avoid a lingering shell process.
+Arguments to ProxyCommand accept the tokens described in the TOKENS section. The command can be basically anything, and should read from its standard input and write to its standard output. It should eventually connect an sshd(8) server running on some machine, or execute sshd -i somewhere. Host key management will be done using the Hostname of the host being connected (defaulting to the name typed by the user). Setting the command to none disables this option entirely. Note that CheckHostIP is not available for connects with a proxy command.
+
+This directive is useful in conjunction with nc(1) and its proxy support. For example, the following directive would connect via an HTTP proxy at 192.0.2.0:
+
+ProxyCommand /usr/bin/nc -X connect -x 192.0.2.0:8080 %h %p</code></pre>
+<p>Clear pros here:
+- full encapsulation of one protocol in another: no heuristics needed,
+harder to block by a Deep Packet Inspection software.</p>
+<p>The cons might be also substantial:
+- possible performance decrease due to double-encryption</p>
+<h2 id="ssh-over-http">SSH over HTTP</h2>
+<p>I went with the option <code>[2.]</code>: filly encapsulate <code>SSH</code> protocol into
+<code>TLS</code>.</p>
+<p>Before doing that I tried a simpler <code>SSH</code> over <code>HTTP</code>.</p>
+<p>I configured <code>apache2</code> to allow <code>CONNECT</code> method for a single target
+<code>ssh-server:22</code> as:</p>
+<pre><code>$ cat /etc/httpd/httpd.conf
+LoadModule proxy_connect_module .../modules/mod_proxy_connect.so
+# ...
+AllowCONNECT 22
+&lt;Proxy *&gt;
+    Order deny,allow
+    Deny from all
+&lt;/Proxy&gt;
+&lt;Proxy ssh-server&gt;
+    Order deny,allow
+    Allow from all
+&lt;/Proxy&gt;</code></pre>
+<p>The client side was trivial using <code>socat</code>:</p>
+<pre><code>$ cat .ssh/config
+Host ssh-via-http
+        Hostname ssh-server
+        Port 22
+        ProxyCommand socat - PROXY:http-server:%h:%p,proxyport=80
+        ServerAliveInterval 30</code></pre>
+<p>Using the above <code>$ ssh ssh-via-http</code> command is enough to use port <code>80</code>
+to connect to <code>SSH</code>.</p>
+<p>I use <code>ServerAliveInterval</code> to workaround some kind of silent idle
+<code>HTTP</code> connection closure somewhere in transit by telling <code>openssh</code>
+client to send periodic proves to server to make <code>HTTP</code> connection look
+alive. That way an idle session can stay alive for long periods of time.</p>
+<h2 id="ssh-over-https">SSH over HTTPS</h2>
+<p>For some reason <code>socal</code> does not support <code>HTTPS</code> proxy via <code>CONNECT</code>
+method and only supports <code>HTTP</code>.</p>
+<p>Luckily <code>socat</code> does support <code>TLS</code> encapsulation and <code>CONNECT</code>-based
+method is easy to implement manually. I did it via one-line script:</p>
+<pre><code>$ cat ~/.ssh/https-tunnel.bash
+#!/usr/bin/env bash
+{ printf &quot;CONNECT ssh-server:22 HTTP/1.0\r\n\r\n&quot;; cat; } | socat - SSL:https-server:443</code></pre>
+<p>Now we can use this script as is for tunneling:</p>
+<pre><code>$ cat .ssh/config
+Host ssh-via-https
+        ProxyCommand ~/.ssh/https-tunnel.bash
+        # some firewalls aggressively close idle TCP connections
+        ServerAliveInterval 30</code></pre>
+<p>And <code>$ ssh ssh-via-https</code> does the expected thing.</p>
+<p>The result allowed me to get to my home machine and write this blog post.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Ubiquitous presence of <code>HTTPS</code> allows you to pass through your data
+through very restrictive middle boxes.</p>
+<p>The <code>CONNECT</code> method while seemingly being a remnant of the far past is
+a useful hack to wrap any TCP payload stream into TLS host stream.</p>
+<p>The <code>ServerAliveInterval</code> <code>openssh</code> knob allows you to keep the
+connection alive if underlying transport is not friendly to idle
+connections.</p>
+<p>Have fun!
+:q</p>
+
+<div class="info">
+    Posted on August 30, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>An obscure make --shuffle bug</title>
     <link href="http://trofi.github.io/posts/294-an-obscure-make-shuffle-bug.html" />
     <id>http://trofi.github.io/posts/294-an-obscure-make-shuffle-bug.html</id>
@@ -42,15 +192,15 @@ variable assignments <code>A := B</code> are one of them.</p>
 immediate and deferred assignments:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> a b</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">V </span><span class="ch">:=</span><span class="st"> 1</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="dt">AI </span><span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dt">AD </span><span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">V</span> <span class="ch">:=</span><span class="st"> 1</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="dt">AI</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dt">AD</span> <span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dv">a:</span></span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo a: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> AI=</span><span class="ch">$(</span><span class="dt">AI</span><span class="ch">)</span><span class="fu"> AD=</span><span class="ch">$(</span><span class="dt">AD</span><span class="ch">)</span></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">V </span><span class="ch">:=</span><span class="st"> 2</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="dt">BI </span><span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="dt">BD </span><span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">V</span> <span class="ch">:=</span><span class="st"> 2</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="dt">BI</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="dt">BD</span> <span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="dv">b:</span></span>
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo b: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> BI=</span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span><span class="fu"> BD=</span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span></span></code></pre></div>
 <p>Take some time time and try to predict the output here.</p>
@@ -1970,9 +2120,9 @@ miscompiled <code>apache-arrow-cpp</code>.</p>
 <span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
 <span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* need to alogn inputs to make sure vectized part</span></span>
 <span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="co">     of the loop gets executed. */</span></span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  alignas<span class="op">(</span><span class="dv">16</span><span class="op">)</span> i16 a<span class="op">[</span><span class="dv">4</span><span class="op">]</span> <span class="op">=</span> <span class="op">{</span><span class="bn">0xff</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">};</span></span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  alignas<span class="op">(</span><span class="dv">16</span><span class="op">)</span> i16 b<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>  alignas<span class="op">(</span><span class="dv">16</span><span class="op">)</span> i16 c<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">alignas</span><span class="op">(</span><span class="dv">16</span><span class="op">)</span> i16 a<span class="op">[</span><span class="dv">4</span><span class="op">]</span> <span class="op">=</span> <span class="op">{</span><span class="bn">0xff</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">};</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">alignas</span><span class="op">(</span><span class="dv">16</span><span class="op">)</span> i16 b<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>  <span class="kw">alignas</span><span class="op">(</span><span class="dv">16</span><span class="op">)</span> i16 c<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
 <span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>  swab16<span class="op">(</span>b<span class="op">,</span> a<span class="op">);</span></span>
 <span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>  swab16<span class="op">(</span>c<span class="op">,</span> b<span class="op">);</span></span>
@@ -3103,7 +3253,7 @@ definition is also not too complicated:</p>
 <span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>block_group <span class="op">||</span> <span class="op">!</span>btrfs_run_discard_work<span class="op">(</span>discard_ctl<span class="op">))</span></span>
 <span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
 <span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>now <span class="op">&lt;</span> block_group<span class="op">-&gt;</span>discard_eligible_time<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>		btrfs_discard_schedule_work<span class="op">(</span>discard_ctl<span class="op">,</span> false<span class="op">);</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>		btrfs_discard_schedule_work<span class="op">(</span>discard_ctl<span class="op">,</span> <span class="kw">false</span><span class="op">);</span></span>
 <span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span><span class="op">;</span></span>
 <span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
 <span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a></span>
@@ -3125,13 +3275,13 @@ definition is also not too complicated:</p>
 <span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a>		btrfs_trim_block_group_bitmaps<span class="op">(</span>block_group<span class="op">,</span> <span class="op">&amp;</span>trimmed<span class="op">,</span></span>
 <span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a>				       block_group<span class="op">-&gt;</span>discard_cursor<span class="op">,</span></span>
 <span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a>				       btrfs_block_group_end<span class="op">(</span>block_group<span class="op">),</span></span>
-<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>				       minlen<span class="op">,</span> maxlen<span class="op">,</span> true<span class="op">);</span></span>
+<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>				       minlen<span class="op">,</span> maxlen<span class="op">,</span> <span class="kw">true</span><span class="op">);</span></span>
 <span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a>		discard_ctl<span class="op">-&gt;</span>discard_bitmap_bytes <span class="op">+=</span> trimmed<span class="op">;</span></span>
 <span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
 <span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a>		btrfs_trim_block_group_extents<span class="op">(</span>block_group<span class="op">,</span> <span class="op">&amp;</span>trimmed<span class="op">,</span></span>
 <span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a>				       block_group<span class="op">-&gt;</span>discard_cursor<span class="op">,</span></span>
 <span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>				       btrfs_block_group_end<span class="op">(</span>block_group<span class="op">),</span></span>
-<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a>				       minlen<span class="op">,</span> true<span class="op">);</span></span>
+<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a>				       minlen<span class="op">,</span> <span class="kw">true</span><span class="op">);</span></span>
 <span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a>		discard_ctl<span class="op">-&gt;</span>discard_extent_bytes <span class="op">+=</span> trimmed<span class="op">;</span></span>
 <span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
 <span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a></span>
@@ -3155,7 +3305,7 @@ definition is also not too complicated:</p>
 <span id="cb10-76"><a href="#cb10-76" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>prev_discard <span class="op">=</span> trimmed<span class="op">;</span></span>
 <span id="cb10-77"><a href="#cb10-77" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>prev_discard_time <span class="op">=</span> now<span class="op">;</span></span>
 <span id="cb10-78"><a href="#cb10-78" aria-hidden="true" tabindex="-1"></a>	discard_ctl<span class="op">-&gt;</span>block_group <span class="op">=</span> NULL<span class="op">;</span></span>
-<span id="cb10-79"><a href="#cb10-79" aria-hidden="true" tabindex="-1"></a>	__btrfs_discard_schedule_work<span class="op">(</span>discard_ctl<span class="op">,</span> now<span class="op">,</span> false<span class="op">);</span></span>
+<span id="cb10-79"><a href="#cb10-79" aria-hidden="true" tabindex="-1"></a>	__btrfs_discard_schedule_work<span class="op">(</span>discard_ctl<span class="op">,</span> now<span class="op">,</span> <span class="kw">false</span><span class="op">);</span></span>
 <span id="cb10-80"><a href="#cb10-80" aria-hidden="true" tabindex="-1"></a>	spin_unlock<span class="op">(&amp;</span>discard_ctl<span class="op">-&gt;</span>lock<span class="op">);</span></span>
 <span id="cb10-81"><a href="#cb10-81" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Here worker thread expects items of <code>struct btrfs_discard_ctl</code> type to
@@ -8298,7 +8448,7 @@ will see the conditon on which <code>gcc</code> decided it’s OK
 <span id="cb21-47"><a href="#cb21-47" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb21-48"><a href="#cb21-48" aria-hidden="true" tabindex="-1"></a>  ipcp_transformation <span class="op">*</span>ts <span class="op">=</span> ipcp_get_transformation_summary <span class="op">(</span>node<span class="op">);</span></span>
 <span id="cb21-49"><a href="#cb21-49" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(!</span>ts <span class="op">||</span> vec_safe_is_empty <span class="op">(</span>ts<span class="op">-&gt;</span>m_agg_values<span class="op">))</span></span>
-<span id="cb21-50"><a href="#cb21-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> true<span class="op">;</span></span>
+<span id="cb21-50"><a href="#cb21-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
 <span id="cb21-51"><a href="#cb21-51" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb21-52"><a href="#cb21-52" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> ipa_argagg_value_list existing <span class="op">(</span>ts<span class="op">-&gt;</span>m_agg_values<span class="op">);</span></span>
 <span id="cb21-53"><a href="#cb21-53" aria-hidden="true" tabindex="-1"></a>  auto_vec<span class="op">&lt;</span>ipa_argagg_value<span class="op">,</span> <span class="dv">32</span><span class="op">&gt;</span> edge_values<span class="op">;</span></span>
@@ -8607,145 +8757,6 @@ depends) instead of moving it to <code>nativeBuildInputs</code> (<code>BUILD</co
 
 <div class="info">
     Posted on November  8, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>Waypipe fixes</title>
-    <link href="http://trofi.github.io/posts/265-waypipe-fixes.html" />
-    <id>http://trofi.github.io/posts/265-waypipe-fixes.html</id>
-    <published>2022-11-07T00:00:00Z</published>
-    <updated>2022-11-07T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p><code>waypipe</code> is a great hack! It allows you to run <code>wayland</code> applications
-on a remote host and show the picture on local machine (somewhat similar
-to <code>X11</code> network protocol).</p>
-<p>Architecture diagram is both
-<a href="https://mstoeckl.com/notes/gsoc/blog.html">simple and fascinating</a>.</p>
-<p><code>waypipe</code> allows for quite a bit of flexibility in remote rendering
-setup controlled by a few commandline options:</p>
-<ul>
-<li><code>--no-gpu</code>: use software render instead of <code>DMABUF</code>-backed GPU. Useful
-to work around remote rendering bugs. Should not be required in
-perfect world.</li>
-<li><code>--compress</code>: compress tunneled traffic for image diffs: <code>none</code>, <code>zstd</code>, <code>lzo</code></li>
-<li><code>--video</code>: stream video compression instead of pixel diffs (<code>vp9</code>, <code>h264</code>)</li>
-<li><code>--video=hw</code>: use hardware video compression acceleration.</li>
-</ul>
-<p>By default <code>waypipe</code> enables GPU acceleration on a remote side, extracts
-the result as a texture via <code>DMABUF</code> and sends deltas (or video) over the
-netowork to reconstruct it locally and pass to the compositor.</p>
-<p>Does not sound too complicated. Or does it? Chosen common pixel buffer
-format matters here: both sides need to agree on supported configuration.
-And there are so many to choose from!</p>
-<p><code>wayland-info</code> can show supported modes:</p>
-<pre><code>$ wayland-info
-interface: 'wl_shm',                                     version:  1, name:  1
-        formats (fourcc):
-        0x48344241 = 'AB4H'
-        0x48344258 = 'XB4H'
-        0x30334241 = 'AB30'
-        0x30334258 = 'XB30'
-        0x36314752 = 'RG16'
-        0x35314152 = 'RA15'
-        0x35315852 = 'RX15'
-        0x32314152 = 'RA12'
-        0x32315852 = 'RX12'
-        0x34324742 = 'BG24'
-        0x34324241 = 'AB24'
-        0x34324258 = 'XB24'
-                 1 = 'XR24'
-                 0 = 'AR24'
-interface: 'wl_drm',                                     version:  2, name:  2
-interface: 'zwp_linux_dmabuf_v1',                        version:  4, name:  3
-        main device: 0xE280
-        tranche
-                target device: 0xE280
-                flags: none
-                formats (fourcc) and modifiers (names):
-                0x48344241 = 'AB4H'; 0x00ffffffffffffff = INVALID
-                0x48344241 = 'AB4H'; 0x00ffffffffffffff = INVALID
-                0x48344241 = 'AB4H'; 0x0000000000000000 = LINEAR
-                0x48344258 = 'XB4H'; 0x00ffffffffffffff = INVALID
-                0x48344258 = 'XB4H'; 0x00ffffffffffffff = INVALID
-                0x48344258 = 'XB4H'; 0x0000000000000000 = LINEAR
-                0x30335241 = 'AR30'; 0x00ffffffffffffff = INVALID
-                0x30335241 = 'AR30'; 0x00ffffffffffffff = INVALID
-                0x30335241 = 'AR30'; 0x0000000000000000 = LINEAR
-                0x30335258 = 'XR30'; 0x00ffffffffffffff = INVALID
-                0x30335258 = 'XR30'; 0x00ffffffffffffff = INVALID
-                0x30335258 = 'XR30'; 0x0000000000000000 = LINEAR
-                0x30334241 = 'AB30'; 0x00ffffffffffffff = INVALID
-                0x30334241 = 'AB30'; 0x00ffffffffffffff = INVALID
-                0x30334241 = 'AB30'; 0x0000000000000000 = LINEAR
-                0x30334258 = 'XB30'; 0x00ffffffffffffff = INVALID
-                0x30334258 = 'XB30'; 0x00ffffffffffffff = INVALID
-                0x30334258 = 'XB30'; 0x0000000000000000 = LINEAR
-                0x34325241 = 'AR24'; 0x00ffffffffffffff = INVALID
-                0x34325241 = 'AR24'; 0x00ffffffffffffff = INVALID
-                ...</code></pre>
-<p>Here my local machine supports a bunch of <code>LINEAR</code> formats of <code>DMABUF</code>s.
-And possibly a few tiled ones (<code>INVALID</code> entries with non-zero
-modifiers).</p>
-<p>What happens when <code>waypipe</code> somehow gets format match wrong? Say, uses
-tiled format on one side while unknowingly using <code>LINEAR</code> on another side?
-With <code>waypipe-0.8.3</code> I got this beauty:</p>
-<figure>
-<img src="http://trofi.github.io/posts.data/265-a-waypipe-bug/gears.png" alt="broken-gears" />
-<figcaption aria-hidden="true">broken-gears</figcaption>
-</figure>
-<p>It’s hard to see on a picture but it’s a <code>es2gears_wayland</code> application
-output (port of <code>glxgears</code>). Supposed to look like that:</p>
-<figure>
-<img src="https://upload.wikimedia.org/wikipedia/commons/6/62/Xf86_glxgears.png" alt="working gears" />
-<figcaption aria-hidden="true">working gears</figcaption>
-</figure>
-<p>In my case colors are fine, but the gears are inclined
-and shredded. I had to spend a bit of time resizing the
-window to get something that resembles gears at all. Otherwise
-it a line soup.</p>
-<p>I have machines with 2 card types: <code>amdgpu</code> (<code>nz</code>) and <code>i965</code> (<code>i7</code>).
-Before any <code>waypipe</code> fixes none of <code>amdgpu-&gt;i965</code>, <code>amdgpu-&gt;amdgpu</code>,
-<code>i965-&gt;amdgpu</code> GPU-accelerated piping modes worked:</p>
-<ul>
-<li><code>amdgpu-&gt;i965</code> generated garbled image (<a href="https://gitlab.freedesktop.org/mstoeckl/waypipe/-/issues/67">bug report</a>)</li>
-<li><code>amdgpu-&gt;amdgpu</code> and <code>i965-&gt;amdgpu</code> just <code>SIGSEGV</code>ed (<a href="https://gitlab.freedesktop.org/mstoeckl/waypipe/-/issues/69">bug report</a>)</li>
-</ul>
-<p>I was not sure if <code>waypipe</code> is maintained or abandoned given that
-nothing seemingly worked. I filed the issues anyway. To my surprise
-Manuel fixed both bugs before I had a chance to look into the details!</p>
-<p>Running <code>waypipe</code> from master I got a good picture out of everything I
-tried! I tested a few games and applications and got the following results:</p>
-<ul>
-<li><code>waypipe --no-gpu ssh i7</code> is usable only for terminals and
-static-mostly browsing</li>
-<li><code>waypipe ssh i7</code> gives me about 7 FPS on fast-paced games. Not quite
-usable for gaming, but good enough to get a picture back for minimal
-runtime testing.</li>
-<li><code>waypipe --video ssh i7</code> gives me about 45 FPS on fast-paced games
-in 1920x1080 resolution. Not perfect for gaming, but it’s almost there!
-You can certainly interact with the game without too much inconvenience.
-Lower resolution easily gives 95 FPS.</li>
-</ul>
-<p>45 FPS (or even 95!) is a lot more than I expected from this setup. I
-probably failed to enable hardware video codec compression. Tweaking that
-should get both better picture quality and performance when in <code>--video=hw</code>
-mode.</p>
-<h2 id="parting-words">Parting words</h2>
-<p><code>waypipe ssh &lt;host&gt;</code> while slow should just work on <code>waypipe</code> from <code>git</code>.
-If you still have artifacts try safest <code>waypipe --no-gpu ssh &lt;host&gt;</code>.
-Best interactive I got was from <code>waypipe --video=hw ssh &lt;host&gt;</code>.
-Upstream is alive and responsive.</p>
-<p>And finally <a href="http://trofi.github.io/posts.data/265-a-waypipe-bug/xonotic.png">a screnshot</a>
-extracted from <code>waypipe --video=hw ssh i7 nix run nixpkgs#xonotic</code>.</p>
-<p>You may notice quite a bit of video codec damage on the screen. But
-that’s just because <code>i7</code> is such an old slow box. I think it’s a good
-result overall.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on November  7, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>

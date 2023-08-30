@@ -27,11 +27,11 @@
 like <strong>i686-w64-mingw32</strong> (32-bit windows). As a cheap run time
 test I use <a href="https://www.winehq.org/">Wine</a>. Today I tried to
 run a simple executable:</p>
-<pre class><code>$ echo 'int main() {}' | i686-w64-mingw32-gcc -x c - -o a.exe -ggdb3 &amp;&amp; wine a.exe
+<pre><code>$ echo 'int main() {}' | i686-w64-mingw32-gcc -x c - -o a.exe -ggdb3 &amp;&amp; wine a.exe
 Segmentation fault</code></pre>
 <p>It crashed! I attempted to run standard <strong>wine</strong> programs.
 That also did not work:</p>
-<pre class><code>$ winecfg
+<pre><code>$ winecfg
 Segmentation fault</code></pre>
 <p>Maybe <strong>wine</strong> itself is broken? (and not just runtime
 linked into my <strong>a.exe</strong>).</p>
@@ -54,13 +54,13 @@ by communicating with <strong>wineserver</strong> standalone daemon.</p>
 <strong>wine</strong> comes with
 <a href="https://wiki.winehq.org/Wine_Developer%27s_Guide/Debugging_Wine">winedbg</a>
 tool that might help with that. I tried it:</p>
-<pre class><code>$ winedbg a.exe
+<pre><code>$ winedbg a.exe
 Segmentation fault
 $ winedbg
 Segmentation fault</code></pre>
 <p>No luck. Why did <strong>winedbg</strong> fail? I tried to find something
 I could attach <strong>gdb</strong> to:</p>
-<pre class><code>$ file $(which winedbg)
+<pre><code>$ file $(which winedbg)
 /usr/bin/winedbg: symbolic link to /usr/bin/winedbg-vanilla-5.22
 $ file $(which /usr/bin/winedbg-vanilla-5.22)
 /usr/bin/winedbg-vanilla-5.22: POSIX shell script, ASCII text executable
@@ -85,7 +85,7 @@ It makes <strong>windbg</strong> even more complex program than <strong>a.exe</s
 on debugging simpler <strong>a.exe</strong> program.</p>
 <h1 id="getting-clues">Getting clues</h1>
 <p>To get some idea what binary actually crashes I used <strong>strace</strong>:</p>
-<pre class><code>$ strace -s 10000 -f -etrace=execve wine a.exe
+<pre><code>$ strace -s 10000 -f -etrace=execve wine a.exe
 execve(&quot;/usr/bin/wine&quot;, [&quot;wine&quot;, &quot;a.exe&quot;], 0x7ffd82e380d8 /* 83 vars */) = 0
 execve(&quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, [&quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, &quot;a.exe&quot;], 0x55a3215c07c0 /* 81 vars */) = 0
 [ Process PID=2324610 runs in 32 bit mode. ]
@@ -116,7 +116,7 @@ $ file /usr/lib64/wine-vanilla-5.22/wine/fakedlls/conhost.exe
 <li><strong>wine</strong> binary execs <strong>wine-preloader</strong> binary</li>
 </ul></li>
 <li><p>it also <strong>fork()</strong>s and execs <strong>wine64-preloader</strong> to run <strong>conhost.exe</strong></p>
-<pre class><code>- wine a.exe -&gt; exec &quot;wine-preloader wine a.exe&quot;
+<pre><code>- wine a.exe -&gt; exec &quot;wine-preloader wine a.exe&quot;
   ` -&gt; fork -&gt; exec &quot;wine64-preloader conhost.exe&quot;</code></pre></li>
 <li><p><strong>wine-preloader</strong> is a 32-bit static <strong>ELF</strong> executable. It’s address space
 will host our future <strong>a.exe</strong>.</p></li>
@@ -128,7 +128,7 @@ equivalent of virtual terminal for windows.</p></li>
 processes seem to work fine.</p>
 <p>I rebuilt <strong>wine</strong> with <strong>CFLAGS+=-ggdb3</strong> to get plenty of
 debugging symbols and ran <strong>wine</strong> under <strong>gdb</strong>:</p>
-<pre class><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+<pre><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
 
@@ -165,7 +165,7 @@ modules (handled by <strong>wine-preloader</strong> ?). As a workaround we can
 manually add them.</p>
 <p>The <strong>2325141</strong> debugged process is not yet finished and we can poke at
 it’s address map:</p>
-<pre class><code>$ cat /proc/2325141/maps
+<pre><code>$ cat /proc/2325141/maps
 00010000-00110000 rw-p 00000000 00:00 0
 00110000-00120000 rwxp 00000000 00:00 0
 ...
@@ -207,7 +207,7 @@ ffcd0000-fffd0000 rw-p 00000000 00:00 0
 fffdc000-ffffe000 rw-p 00000000 00:00 0                                  [stack]</code></pre>
 <p>This is a huge list of objects present in our address space.</p>
 <p>Now looking at <strong>gdb</strong>’s view:</p>
-<pre class><code>(gdb) info files
+<pre><code>(gdb) info files
 Symbols from &quot;/usr/lib/wine-vanilla-5.22/bin/wine-preloader&quot;.
 Native process:
         Using the running image of child process 2326226.
@@ -225,7 +225,7 @@ Local exec file:
 but our backtrace contains addresses like <strong>0x7bc714dd</strong> which looks
 suspiciously close to <strong>ntdll.dll.so</strong> range from <strong>/proc/$pid/maps</strong>.</p>
 <p>Let’s add <strong>ntdll.dll.so</strong> symbols into our session:</p>
-<pre class><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so
+<pre><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so
 add symbol table from file &quot;/usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so&quot;
 (y or n) y
 
@@ -261,7 +261,7 @@ a <strong>NULL</strong> pointer dereference with small negative offset than a re
 stack pointer. No chance to get 8 frames here.</p>
 <p>Perhaps <strong>gdb</strong> used frame pointer (<strong>ebp 0x61ed88</strong>) before we loaded symbols?</p>
 <p>Let’s try to fake stack pointer to be closer to frame pointer with a hack:</p>
-<pre class><code>(gdb) set $esp=$ebp
+<pre><code>(gdb) set $esp=$ebp
 
 (gdb) bt
 #0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=0x7b03c0de, ansi=0x7ee405be, doalloc=0 '\000') at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
@@ -276,7 +276,7 @@ Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></p
 is likely off by a few values. But it’s better that nothing.</p>
 <p>Let’s add symbols for address <strong>0x7b03c0de</strong> from <strong>/proc/2325141/maps</strong>.
 <strong>kernelbase.dll.so</strong> looks closest.</p>
-<pre class><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so
+<pre><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so
 add symbol table from file &quot;/usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so&quot;
 (y or n) y
 Reading symbols from /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so...
@@ -328,7 +328,7 @@ pointer is wrong.</p>
 <span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span></code></pre></div>
 <p>Let’s see if we can find out something else about the way our program crashes
 by looking at exact instructions and register values around:</p>
-<pre class><code>(gdb) disassemble RtlAnsiStringToUnicodeString
+<pre><code>(gdb) disassemble RtlAnsiStringToUnicodeString
 Dump of assembler code for function RtlAnsiStringToUnicodeString:
    0x7bc71450 &lt;+0&gt;:     lea    0x4(%esp),%ecx
    0x7bc71454 &lt;+4&gt;:     and    $0xfffffff0,%esp
@@ -371,7 +371,7 @@ with <strong>ret $0xc</strong>. That is an explicit sign of stack corruption.</p
 <p>Let’s find out what overwrites <strong>ecx</strong> on stack
 while <strong>RtlAnsiStringToUnicodeString()</strong> is executing.</p>
 <p>I tried a naive attempt by running <strong>wine</strong> under <strong>gdb</strong> as is:</p>
-<pre class><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+<pre><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
 
@@ -399,7 +399,7 @@ is by checking <a href="https://source.winehq.org/git/wine.git/blob/HEAD:/dlls/n
 and similar variables (and switch 32/64-bit address space if needed)</p>
 <p>We should be able to set environment up as needed without the need for re-execution.</p>
 <p>I tried the simple way:</p>
-<pre class><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+<pre><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
 
@@ -444,7 +444,7 @@ Backtrace stopped: Cannot access memory at address 0xfffffffc
 <li>Observe where change happens.</li>
 </ol>
 <p>Full session that executes it:</p>
-<pre class><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
+<pre><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
 
@@ -528,7 +528,7 @@ RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, r
 Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
 <p>Aha! From the above we see that <strong>RtlCustomCPToUnicodeN()</strong>
 managed to write into stack of it’s grand-caller:</p>
-<pre class><code>-&gt; RtlAnsiStringToUnicodeString() [puts $ecx on stack ]
+<pre><code>-&gt; RtlAnsiStringToUnicodeString() [puts $ecx on stack ]
   -&gt;RtlMultiByteToUnicodeN()
     -&gt;RtlCustomCPToUnicodeN() [ corrupts $ecx on stack ]</code></pre>
 <p>The call chain is straightforward but unexpected. Let’s see the definitions
@@ -584,7 +584,7 @@ where stack corruption could happen due to a code bug:</p>
 <strong>if (reslen) *reslen = ret * sizeof(WCHAR);</strong>. But what is
 wrong with it?</p>
 <p>The hint is seen in backtrace itself:</p>
-<pre class><code>(gdb) bt
+<pre><code>(gdb) bt
 #0  RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, reslen=0x61ed28, src=&lt;optimized out&gt;, srclen=&lt;optimized out&gt;)
     at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:972
 #1  0x7bc5d3c5 in RtlMultiByteToUnicodeN (dst=0x3ffe2c00, dstlen=12, reslen=0x0, src=0x7fe205be &quot;CONIN$&quot;, srclen=6)
@@ -597,7 +597,7 @@ from <strong>reslen=0x0</strong> (frame 2) to <strong>reslen=0x61ed28</strong> (
 That smells like an ABI mismatch between caller and callee.</p>
 <p>Let’s have a peek at how <strong>RtlMultiByteToUnicodeN()</strong> calls <strong>RtlCustomCPToUnicodeN()</strong>
 in the assembly:</p>
-<pre class><code>(gdb) fr 1
+<pre><code>(gdb) fr 1
 #1  0x7bc5d3c5 in RtlMultiByteToUnicodeN (dst=0x3ffe2c00, dstlen=12, reslen=0x0, src=0x7fe205be &quot;CONIN$&quot;, srclen=6)
     at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:1019
 1019            return RtlCustomCPToUnicodeN( &amp;nls_info.AnsiTableInfo, dst, dstlen, reslen, src, srclen );
@@ -642,7 +642,7 @@ we need to track life of parameter 3 (<strong>reslen=0x0</strong>) being passed 
 (aka <strong>__attribute__((stdcall))</strong>). This means all argumens
 should be passed on stack. Specifically at <strong>RtlMultiByteToUnicodeN()</strong>
 entry first argument should be at <strong>esp + 4</strong>:</p>
-<pre class><code>; at RtlMultiByteToUnicodeN entry:
+<pre><code>; at RtlMultiByteToUnicodeN entry:
              | ...
  $esp     -&gt; | &lt;return address to RtlAnsiStringToUnicodeString&gt;
  $esp + 4 -&gt; | arg1: dst
@@ -653,7 +653,7 @@ entry first argument should be at <strong>esp + 4</strong>:</p>
              | ...</code></pre>
 <p>Let’s trace <strong>reslen</strong> through to <strong>RtlCustomCPToUnicodeN()</strong> call
 site (<strong>RtlMultiByteToUnicodeN+144</strong>).</p>
-<pre class><code>Dump of assembler code for function RtlMultiByteToUnicodeN:
+<pre><code>Dump of assembler code for function RtlMultiByteToUnicodeN:
    0x7bc5d330 &lt;+0&gt;:     lea    0x4(%esp),%ecx   ; $ecx=$esp+4 (save pointer to parameter 1 on stack)
    0x7bc5d334 &lt;+4&gt;:     and    $0xfffffff0,%esp ; align $esp to 16 bytes
    0x7bc5d337 &lt;+7&gt;:     push   -0x4(%ecx)       ; re-save return address on current top of stack
@@ -735,7 +735,7 @@ And as a result we load arguments at a wrong stack location!</p>
 <span id="cb24-44"><a href="#cb24-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> bug<span class="op">(</span><span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">12</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">34</span><span class="op">);</span></span>
 <span id="cb24-45"><a href="#cb24-45" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>The mismatch is seen on <strong>-O1</strong> / <strong>-O2</strong>:</p>
-<pre class><code>$ x86_64-pc-linux-gnu-gcc -m32 -fno-PIC -fno-builtin -pipe -fcf-protection=none -fno-stack-protector -fno-omit-frame-pointer \
+<pre><code>$ x86_64-pc-linux-gnu-gcc -m32 -fno-PIC -fno-builtin -pipe -fcf-protection=none -fno-stack-protector -fno-omit-frame-pointer \
     -O1 -mavx -o bug bug.c.c
 ./bug; echo $?
 12

@@ -26,7 +26,7 @@
             <h1 id="bug">Bug</h1>
 <p>On <strong>#gentoo-toolchain</strong> Matt Turner reported an obscure
 <strong>SIGSEGV</strong> of <strong>top</strong> program on one of <strong>mips</strong> boxes:</p>
-<pre class><code>07:01 &lt;@mattst88&gt; since upgrading to &gt;=glibc-2.25 on mips:
+<pre><code>07:01 &lt;@mattst88&gt; since upgrading to &gt;=glibc-2.25 on mips:
 07:01 &lt;@mattst88&gt; bcm91250a-be ~ # top
 07:01 &lt;@mattst88&gt; *** stack smashing detected ***: &lt;unknown&gt; terminated
 07:01 &lt;@mattst88&gt; Aborted</code></pre>
@@ -34,12 +34,12 @@
 Looks straightforward, right? Let’s see!</p>
 <h1 id="reproducing">Reproducing</h1>
 <p>As I don’t have any <strong>mips</strong> hardware I will fake some:</p>
-<pre class><code># crossdev -t mips64-unknown-linux-gnu
+<pre><code># crossdev -t mips64-unknown-linux-gnu
 # &lt;set a few profile variables&gt;
 # mips64-unknown-linux-gnu-emerge -1 procps</code></pre>
 <p>We’ve built a toolchain that targets <strong>mips64</strong> (<strong>N32</strong> ABI). Checking
 if it crashes:</p>
-<pre class><code>$ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top
+<pre><code>$ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top
 qemu: uncaught target signal 11 (Segmentation fault) - core dumped
 Segmentation fault</code></pre>
 <p>This is not exactly stack smash. But who knows, maybe my set of tools is slightly
@@ -48,7 +48,7 @@ different from Matt’s and the same bug manifests in a slightly different way.<
 <p>Gentoo recently enabled stack protection and already <a href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=81996">exposed a bug</a>
 at least on <strong>powerpc32</strong>.</p>
 <p>First, let’s check if it’s related to stack protector option:</p>
-<pre class><code># EXTRA_ECONF=--enable-stack-protector=no emerge -v1 cross-mips64-unknown-linux-gnu/glibc
+<pre><code># EXTRA_ECONF=--enable-stack-protector=no emerge -v1 cross-mips64-unknown-linux-gnu/glibc
 $ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top
 &lt;running top&gt;</code></pre>
 <p>That worked! To unbreak <strong>mips</strong> users I disabled <strong>glibc</strong> stack self-protection by
@@ -58,13 +58,13 @@ passing <a href="https://gitweb.gentoo.org/repo/gentoo.git/commit/sys-libs/glibc
 code generation. Could it be something similar here?</p>
 <p>First, we need a backtrace from <strong>qemu</strong>. Unfortunately <strong>qemu</strong>-generated <strong>.core</strong> files are truncated
 and are not directly readable by <strong>gdb</strong>:</p>
-<pre class><code>$ gdb --quiet /usr/mips64-unknown-linux-gnu/usr/bin/top qemu_top_20171216-220221_14697.core
+<pre><code>$ gdb --quiet /usr/mips64-unknown-linux-gnu/usr/bin/top qemu_top_20171216-220221_14697.core
 Reading symbols from /usr/mips64-unknown-linux-gnu/usr/bin/top...done.
 BFD: Warning: /home/slyfox/qemu_top_20171216-220221_14697.core is truncated: expected core file size &gt;= 8867840, found: 1504.</code></pre>
 <p>Let’s try <strong>gdbserver</strong> mode instead. Running <strong>qemu</strong> with <strong>-g 12345</strong> to wait for <strong>gdb</strong> session:</p>
-<pre class><code>$ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -g 12345 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top</code></pre>
+<pre><code>$ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -g 12345 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top</code></pre>
 <p>And in second terminal fire up <strong>gdb</strong>:</p>
-<pre class><code>$ gdb --quiet /usr/mips64-unknown-linux-gnu/usr/bin/top
+<pre><code>$ gdb --quiet /usr/mips64-unknown-linux-gnu/usr/bin/top
 Reading symbols from /usr/mips64-unknown-linux-gnu/usr/bin/top...done.
 (gdb) set sysroot /usr/mips64-unknown-linux-gnu
 (gdb) target remote :12345
@@ -117,7 +117,7 @@ I tried to write a minimal reproducer that only calls <strong>dlopen()</strong>:
 <span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
 <span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> <span class="op">*</span> h <span class="op">=</span> dlopen<span class="op">(</span><span class="st">&quot;libdoes-not-exist.so&quot;</span><span class="op">,</span> RTLD_LAZY<span class="op">);</span></span>
 <span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<pre class><code>$ mips64-unknown-linux-gnu-gcc dlopen-bug.c -o dlopen-bug -ldl
+<pre><code>$ mips64-unknown-linux-gnu-gcc dlopen-bug.c -o dlopen-bug -ldl
 $ qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu ./dlopen-bug
 qemu: uncaught target signal 11 (Segmentation fault) - core dumped
 Segmentation fault</code></pre>
@@ -126,7 +126,7 @@ somewhere in <strong>glibc</strong> internals and not in the client.</p>
 <h1 id="reproducing-on-master">Reproducing on master</h1>
 <p>Chances are we will need to fix <strong>glibc</strong> to get our stack protection back. I tried to
 reproduce the same failure on <strong>master</strong> branch:</p>
-<pre class><code>$ ../glibc/configure \
+<pre><code>$ ../glibc/configure \
       --enable-stack-protector=all \
       --enable-stackguard-randomization \
       --enable-kernel=3.2.0 \
@@ -156,13 +156,13 @@ $ make
 $ qemu-mipsn32 ./elf/ld.so --library-path .:dlfcn ~/tmp/dlopen-bug</code></pre>
 <p>No failure. It could mean the bug was fixed in <strong>master</strong> or something else introduces the error.</p>
 <p>I checked out <strong>glibc-2.26</strong> and retried above:</p>
-<pre class><code>$ qemu-mipsn32 ./elf/ld.so --library-path .:dlfcn ~/tmp/dlopen-bug
+<pre><code>$ qemu-mipsn32 ./elf/ld.so --library-path .:dlfcn ~/tmp/dlopen-bug
 qemu: uncaught target signal 11 (Segmentation fault) - core dumped
 Segmentation fault</code></pre>
 <p>Aha, the problem is still there in latest release.</p>
 <p>I bisected glibc from <strong>2.26</strong> to <strong>master</strong> to find the commit that fixes <strong>SIGSEGV</strong>.
 My bisection stopped at <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=2449ae7b2da24c9940962304a3e44bc80e389265">commit 2449ae7b</a></p>
-<pre class><code>commit 2449ae7b2da24c9940962304a3e44bc80e389265
+<pre><code>commit 2449ae7b2da24c9940962304a3e44bc80e389265
 Author: Florian Weimer &lt;fweimer@redhat.com&gt;
 Date:   Thu Aug 10 13:40:22 2017 +0200
 
@@ -176,7 +176,7 @@ The change shuffled a few things around but did not change behaviour too much.</
 <p>I decided to fetch <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=f87cc2bfba9b844da48a63441c6099342b1551c7">parent commit f87cc2bfb</a>
 and spend some time to understand the failure mode.</p>
 <p>First, the crash happens in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=dlfcn/dlerror.c;h=c0ead7dcb64e782ac4f2bee67d6117dc68a8314f;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l124">_dlerror_run()</a> code:</p>
-<pre class><code>0x40801c70 in __start () from /home/slyfox/tmp/lib32/ld.so.1
+<pre><code>0x40801c70 in __start () from /home/slyfox/tmp/lib32/ld.so.1
 (gdb) continue 
 Continuing.
 
@@ -227,7 +227,7 @@ into <strong>result-&gt;errcode</strong>.</p>
 <p>I poked in <strong>gdb</strong> at the values of <strong>result</strong> right before <strong>_dl_catch_error()</strong>
 call and after it. And values are different! Time to look at where <strong>result</strong> is physically
 stored:</p>
-<pre class><code>(gdb) disassemble /s _dlerror_run
+<pre><code>(gdb) disassemble /s _dlerror_run
 163       result-&gt;errcode = _dl_catch_error (&amp;result-&gt;objname, &amp;result-&gt;errstring,
 =&gt; 0x40839918 &lt;+184&gt;:   sw      v0,0(s0)
 (gdb) print (void*)$s0
@@ -369,7 +369,7 @@ It means <strong>s0</strong> should not be changed by callee functions.</p>
 <span id="cb20-39"><a href="#cb20-39" aria-hidden="true" tabindex="-1"></a>      catch_hook <span class="op">=</span> old<span class="op">;</span></span>
 <span id="cb20-40"><a href="#cb20-40" aria-hidden="true" tabindex="-1"></a>      <span class="op">*</span>objname <span class="op">=</span> NULL<span class="op">;</span></span>
 <span id="cb20-41"><a href="#cb20-41" aria-hidden="true" tabindex="-1"></a>      <span class="op">*</span>errstring <span class="op">=</span> NULL<span class="op">;</span></span>
-<span id="cb20-42"><a href="#cb20-42" aria-hidden="true" tabindex="-1"></a>      <span class="op">*</span>mallocedp <span class="op">=</span> false<span class="op">;</span></span>
+<span id="cb20-42"><a href="#cb20-42" aria-hidden="true" tabindex="-1"></a>      <span class="op">*</span>mallocedp <span class="op">=</span> <span class="kw">false</span><span class="op">;</span></span>
 <span id="cb20-43"><a href="#cb20-43" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb20-44"><a href="#cb20-44" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
 <span id="cb20-45"><a href="#cb20-45" aria-hidden="true" tabindex="-1"></a></span>
@@ -580,7 +580,7 @@ Here is the minimal reproducer:</p>
 <span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>        longjmp<span class="op">(</span>jb<span class="op">,</span> <span class="dv">1</span><span class="op">);</span></span>
 <span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;$s0 = </span><span class="sc">%lu\n</span><span class="st">&quot;</span><span class="op">,</span> s0<span class="op">);</span></span>
 <span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<pre class><code>$ qemu-mipsn32 -L ~/bad-libc ./mips-longjmp-bug
+<pre><code>$ qemu-mipsn32 -L ~/bad-libc ./mips-longjmp-bug
 $s0 = 1082346564
 $ qemu-mipsn32 -L ~/fixed-libc ./mips-longjmp-bug
 $s0 = 1234</code></pre>
