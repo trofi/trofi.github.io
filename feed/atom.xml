@@ -10,8 +10,264 @@
         <email>slyich@gmail.com</email>
         
     </author>
-    <updated>2023-09-07T00:00:00Z</updated>
+    <updated>2023-09-14T00:00:00Z</updated>
     <entry>
+    <title>Unexpected runtime dependencies in nixpkgs</title>
+    <link href="http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html" />
+    <id>http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html</id>
+    <published>2023-09-14T00:00:00Z</published>
+    <updated>2023-09-14T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<h2 id="intro">Intro</h2>
+<p><code>nix</code> uses a bit unusual way to detect runtime dependencies: it scans
+the build result for it’s hash inputs used during build and does not
+require manual specification of the dependencies.</p>
+<p>For example if we build a trivial package that just prints a string into
+the file it automatically pulls in that strings into runtime closure:</p>
+<pre><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; runCommand &quot;foo&quot; {} \
+  &quot;echo ${re2c}/bin/re2c &gt; $out&quot;'</code></pre>
+<p>This command builds a package that consists of a single <code>$out</code> file
+(symlinked to <code>./result</code>) which contains absolute path to <code>re2c</code> binary.
+It’s not a complicated package:</p>
+<pre><code>$ cat result
+/nix/store/pj9cdgj07iz3cj88rywapx2lfxfmdqd3-re2c-3.1/bin/re2c</code></pre>
+<p>And yet if we look at full closure of it’s inferred dependencies it
+already has <code>re2c</code> and all it’s runtime dependencies:</p>
+<pre><code>$ nix path-info -r ./result
+/nix/store/gnzwqa9df994g01yw5x75qnbl1rhp9ds-libunistring-1.1
+/nix/store/h3aw16j1c54jv8s39yvdhpfcx3538jwi-libidn2-2.3.4
+/nix/store/kv0v4h5i911gj39m7n9q10k8r8gbn3sa-xgcc-12.3.0-libgcc
+/nix/store/905gkx2q1pswixwmi1qfhfl6mik3f22l-glibc-2.37-8
+/nix/store/s2pgr9iqj60mfnmabixnqacxl4bzb408-gcc-12.3.0-libgcc
+/nix/store/gi26p79iq8jrw51irq5x82c2cqlgicxi-gcc-12.3.0-lib
+/nix/store/pj9cdgj07iz3cj88rywapx2lfxfmdqd3-re2c-3.1
+/nix/store/amiqn0hvnmrfcz2s8b47fb770v8hy9ny-foo</code></pre>
+<p>Such automatic scanning method method has both false positives and false
+negatives.</p>
+<p>Say, if we are to compress the file reference might disappear:</p>
+<pre><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; runCommand &quot;foo&quot; {} \
+  &quot;echo ${re2c}/bin/re2c | bzip2 &gt; $out&quot;'
+
+$ nix path-info -r ./result
+/nix/store/lwx722djnam7yjy439b9k6czb55h707q-foo</code></pre>
+<p>Missing reference detection is a bug here (false negative). False
+negatives can be worked around by explicitly adding plain text
+references into the file just like we did in the original example.</p>
+<p>But I would like to talk about false positives today.</p>
+<h2 id="the-problem">The problem</h2>
+<p>Let’s jump start from the motivating example: right now <code>nix</code> package
+has header only <code>nlohmann/json</code> dependency in it’s runtime closure:</p>
+<pre><code>$ nix path-info -r nixpkgs#nix | fgrep nlohmann_json
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2</code></pre>
+<p>There is nothing in <code>nlohmann/json</code> useful for <code>nix</code>’s runtime:</p>
+<pre><code>$ find /nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2 -type f | unnix
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/detail/conversions/from_json.hpp
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/detail/conversions/to_chars.hpp
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/detail/conversions/to_json.hpp
+...
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/ordered_map.hpp
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/cmake/nlohmann_json/nlohmann_jsonTargets.cmake
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/cmake/nlohmann_json/nlohmann_jsonConfig.cmake
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/cmake/nlohmann_json/nlohmann_jsonConfigVersion.cmake
+/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/pkgconfig/nlohmann_json.pc</code></pre>
+<p>These are a few headers and <code>cmake</code> and <code>pkg-config</code> plumbing.</p>
+<p>So why does <code>nix</code> retain those then?</p>
+<h2 id="debugging-the-details">Debugging the details</h2>
+<p>To figure out where the references come from we can grep the package for
+a raw string and see how it gets there:</p>
+<pre><code>$ LANG=C grep -R $(nix-build --no-link '&lt;nixpkgs&gt;' -A nlohmann_json) $(nix-build --no-link '&lt;nixpkgs&gt;' -A nix.out)
+grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix: binary file matches
+grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-build: binary file matches
+grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-channel: binary file matches
+grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-collect-garbage: binary file matches
+grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-copy-closure: binary file matches
+...</code></pre>
+<p>Here we see that even <code>nix</code> binary itself retains <code>nlohmann/json</code>
+reference. With <code>strings</code> tool from <code>GNU binutils</code> we can check how the
+reference looks like:</p>
+<pre><code>$ nix shell nixpkgs#binutils-unwrapped
+$$strings $(nix-build --no-link '&lt;nixpkgs&gt;' -A nix.out)/bin/nix | grep $(nix-build --no-link '&lt;nixpkgs&gt;' -A nlohmann_json)
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/json.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/output/serializer.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/conversions/to_chars.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/input/lexer.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/iterators/iter_impl.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/input/json_sax.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/iterators/iteration_proxy.hpp
+/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/input/parser.hpp</code></pre>
+<p>Note how absolute header paths are embedded into <code>nix</code> binary. It
+happens via <code>__FILE__</code> macro expansion in C++ code.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">//// in nlohmann_json/include/nlohmann.json.h</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> basic_json <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">template</span><span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">,</span> <span class="kw">typename</span><span class="op">...</span> Args<span class="op">&gt;</span> <span class="at">static</span> T<span class="op">*</span> create<span class="op">(</span>Args<span class="op">&amp;&amp;</span> <span class="op">...</span> args<span class="op">)</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ...</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>        JSON_ASSERT<span class="op">(</span>obj <span class="op">!=</span> <span class="kw">nullptr</span><span class="op">);</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>        <span class="co">// ...</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="co">//// in nlohmann_json/include/nlohmann/detail/macro_scope.hpp</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="co">// allow overriding assert</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a><span class="pp">#if !defined(JSON_ASSERT)</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    <span class="pp">#include </span><span class="im">&lt;cassert&gt;</span><span class="pp"> </span><span class="co">// assert</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="pp">#define JSON_ASSERT</span><span class="op">(</span>x<span class="op">)</span><span class="pp"> </span><span class="ot">assert</span><span class="op">(</span>x<span class="op">)</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="co">// in glibc/include/assert.h</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a><span class="pp"># if defined </span><span class="ot">__cplusplus</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a><span class="pp">#  define assert</span><span class="op">(</span>expr<span class="op">)</span><span class="pp">                                                  </span><span class="op">\</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="pp">     </span><span class="op">(</span><span class="kw">static_cast</span><span class="pp"> </span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;</span><span class="pp"> </span><span class="op">(</span>expr<span class="op">)</span><span class="pp">                                         </span><span class="op">\</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a><span class="pp">      </span><span class="op">?</span><span class="pp"> </span><span class="dt">void</span><span class="pp"> </span><span class="op">(</span><span class="dv">0</span><span class="op">)</span><span class="pp">                                                        </span><span class="op">\</span></span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a><span class="pp">      </span><span class="op">:</span><span class="pp"> </span>__assert_fail<span class="pp"> </span><span class="op">(#</span>expr<span class="op">,</span><span class="pp"> </span><span class="ot">__FILE__</span><span class="op">,</span><span class="pp"> </span><span class="ot">__LINE__</span><span class="op">,</span><span class="pp"> </span>__ASSERT_FUNCTION<span class="op">))</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span></code></pre></div>
+<p>In this case any code that happens to instantiate <code>basic_json::create()</code>
+function will embed <code>__FILE__</code> definition as part of the <code>assert()</code> call
+and will embed absolute path to the store.</p>
+<p>Absolute path to the store will retain <code>nlohmann/json</code> in runtime closure.
+It’s a completely redundant runtime dependency.</p>
+<h2 id="the-workaround">The workaround</h2>
+<p>Initially I though of using something like <code>nukeReferences</code>
+file-mangling tool to wipe out unexpected references. But I was not sure
+where should I plug this hammer: ideally any user of <code>nlohmann_json</code>
+package should run it just in case. And patching files after-the-fast is
+always prone to break something: be it broken file checksums, broken
+sort ordering, unrelated string sharing due to identical code folding.</p>
+<p>I wanted something milder: ideally tell <code>gcc</code> not to emit problematic
+paths at all. And <code>gcc</code> provides exactly that mechanism!</p>
+<p><code>gcc</code> has a way to slightly mangle absolute paths used by <code>__FILE__</code> via
+<code>-fmacro-prefix-map=old=new</code> set of options: <a href="https://gcc.gnu.org/onlinedocs/gcc/Preprocessor-Options.html" class="uri">https://gcc.gnu.org/onlinedocs/gcc/Preprocessor-Options.html</a>.</p>
+<p>It’s main use case is to untangle final binaries from the temporary
+directory sources are built against:
+<code>-fmacro-prefix-map=/tmp/autogenerated/foo=/usr/src/foo</code>.</p>
+<p>The problem feels vaguely similar: we want to avoid any mention of
+source directories in the final output. I tried to inject
+<code>-fmacro-prefix-map=</code> for every single build input used by <code>nixpkgs</code> as:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/build-support/cc-wrapper/setup-hook.sh</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/build-support/cc-wrapper/setup-hook.sh</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -65,15 +65,29 @@</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a> # function is guaranteed to be exactly the same.</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a> ccWrapper_addCVars () {</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>     # See ../setup-hooks/role.bash</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="st">-    local role_post</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="va">+    local role_post mangled_store map_flag var</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>     getHostRoleEnvHook</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="va">+    var=NIX_CFLAGS_COMPILE${role_post}</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>     if [ -d &quot;$1/include&quot; ]; then</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="st">-        export NIX_CFLAGS_COMPILE${role_post}+=&quot; -isystem $1/include&quot;</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="va">+        export $var+=&quot; -isystem $1/include&quot;</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>     fi</span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>     if [ -d &quot;$1/Library/Frameworks&quot; ]; then</span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a><span class="st">-        export NIX_CFLAGS_COMPILE${role_post}+=&quot; -iframework $1/Library/Frameworks&quot;</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a><span class="va">+        export $var+=&quot; -iframework $1/Library/Frameworks&quot;</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a><span class="va">+    fi</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a><span class="va">+    # Try hard to avoid hardcoding of -dev outputs via __FILE__.</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a><span class="va">+    # THe typical examples are: asserts in nlohmann_json leaking into</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="va">+    # nix executable closure, asserts from lttng-ust leaking into</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a><span class="va">+    # pipewire.</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a><span class="va">+    mangled_store=$(printf &quot;%s&quot; &quot;$1&quot; | sed -e &quot;s|$NIX_STORE/[a-z0-9]\{32\}-|$NIX_STORE/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-|g&quot;)</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a><span class="va">+    map_flag=&quot;-fmacro-prefix-map=$1=$mangled_store&quot;</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a><span class="va">+    # As it's a long flag try hard not to introduce duplicates as</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a><span class="va">+    # environment gets exhausted otherwise for large packages like qemu.</span></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a><span class="va">+    if [[ ${!var-} != *&quot; $map_flag&quot;* ]]; then</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a><span class="va">+        export $var+=&quot; $map_flag&quot;</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>     fi</span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>The change adds a bunch of compiler options on form of:</p>
+<pre><code>-fmacro-prefix-map=/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nlohmann_json-3.11.2</code></pre>
+<p>That way <code>__FILE__</code> values still have a reasonable form: we can see which
+package they come from. But we can’t use the path in any meaningful way
+as they don’t refer real files anymore. Does not look too bad.</p>
+<p>I also had to avoid attempts at inserting multiple identical values into
+the final <code>NIX_CFLAGS_COMPILE</code> variable. Otherwise some particularly
+large packages like <code>qemu</code> exhaust all the environment space and fail to
+run executables. We might want to do the same for the rest of variables:
+we add most of the options options thrice to <code>NIX_CFLAGS_COMPILE</code>.</p>
+<p>Proposed the workaround as <a href="https://github.com/NixOS/nixpkgs/pull/255192" class="uri">https://github.com/NixOS/nixpkgs/pull/255192</a>.</p>
+<h2 id="the-results">The results</h2>
+<p>Did the workaround help? I placed the patch into <code>~/n</code> checkout of
+<code>nixpkgs</code> repo.</p>
+<pre><code>$ LANG=C grep -R $(nix-build --no-link ~/n -A nlohmann_json) $(nix-build --no-link ~/n -A nix.out)
+&lt;empty&gt;</code></pre>
+<p>Yay! At the very least we got rid of the unneeded reference.</p>
+<p><code>nix</code> was a good example of a superfluous and small harmless dependency.</p>
+<p>Are there packages where this change would be more pronounced? My
+ulterior motive was to fix something similar in <code>lttng-ust.dev</code>. That
+one was not just a set of headers. It also contains python interpreter
+as a dependency:</p>
+<pre><code>$ nix path-info -r $(nix-build '&lt;nixpkgs&gt;' -A lttng-ust.dev) |&amp; unnix
+/&lt;&lt;NIX&gt;&gt;/libunistring-1.1
+/&lt;&lt;NIX&gt;&gt;/libidn2-2.3.4
+/&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0-libgcc
+/&lt;&lt;NIX&gt;&gt;/glibc-2.37-8
+/&lt;&lt;NIX&gt;&gt;/zlib-1.2.13
+/&lt;&lt;NIX&gt;&gt;/sqlite-3.42.0
+/&lt;&lt;NIX&gt;&gt;/numactl-2.0.16
+/&lt;&lt;NIX&gt;&gt;/lttng-ust-2.13.1
+/&lt;&lt;NIX&gt;&gt;/expat-2.5.0
+/&lt;&lt;NIX&gt;&gt;/ncurses-6.4
+/&lt;&lt;NIX&gt;&gt;/liburcu-0.14.0
+/&lt;&lt;NIX&gt;&gt;/xz-5.4.4
+/&lt;&lt;NIX&gt;&gt;/openssl-3.0.10
+/&lt;&lt;NIX&gt;&gt;/bzip2-1.0.8
+/&lt;&lt;NIX&gt;&gt;/libffi-3.4.4
+/&lt;&lt;NIX&gt;&gt;/libxcrypt-4.4.36
+/&lt;&lt;NIX&gt;&gt;/liburcu-0.14.0-dev
+/&lt;&lt;NIX&gt;&gt;/gcc-12.3.0-libgcc
+/&lt;&lt;NIX&gt;&gt;/gcc-12.3.0-lib
+/&lt;&lt;NIX&gt;&gt;/readline-8.2p1
+/&lt;&lt;NIX&gt;&gt;/bash-5.2-p15
+/&lt;&lt;NIX&gt;&gt;/mailcap-2.1.53
+/&lt;&lt;NIX&gt;&gt;/gdbm-1.23
+/&lt;&lt;NIX&gt;&gt;/tzdata-2023c
+/&lt;&lt;NIX&gt;&gt;/python3-3.10.12
+/&lt;&lt;NIX&gt;&gt;/lttng-ust-2.13.1-bin
+/&lt;&lt;NIX&gt;&gt;/lttng-ust-2.13.1-dev</code></pre>
+<p>One of the frequent users of <code>lttng-ust.dev</code> is <code>pipewire</code>:</p>
+<pre><code>$ nix path-info -r $(nix-build '&lt;nixpkgs&gt;' -A pipewire.out) | fgrep lttng
+/nix/store/23jh1m6irhvr16zjmrvy2cnpgz7yi6gj-lttng-ust-2.13.1
+/nix/store/xznqsvr1la1xnfnzia2yvnicfz03yjqb-lttng-ust-2.13.1-bin
+/nix/store/fckk2ncjnxdw1xsx8v8rxjnmhldbx8pr-lttng-ust-2.13.1-dev</code></pre>
+<p>And I’m glad to announce that it’s also gone with the patch above:</p>
+<pre><code>$ nix path-info -r $(nix-build ~/n -A pipewire.out) | fgrep lttng
+/nix/store/bv3i3qjphzgfzmmdhws9nhwz76qscy61-lttng-ust-2.13.1</code></pre>
+<p>Here is the closure size difference:</p>
+<p>Before:</p>
+<pre><code>$ nix path-info -rsSh $(nix-build '&lt;nixpkgs&gt;' -A pipewire.out) | nl | tail -n1
+   219  /nix/store/ff0w34nr807in3b1swmqklxy9g9v5hg9-pipewire-0.3.79 1.4M  543.4M</code></pre>
+<p>After:</p>
+<pre><code>$ nix path-info -rsSh $(nix-build ~/n -A pipewire.out) | nl | tail -n1
+   207  /nix/store/hl4dffvc73nsh3zfbji0y7h9lcnrk14b-pipewire-0.3.79 1.3M  452.0M</code></pre>
+<p>12 dependencies and ~90MB (<code>543.4</code> -&gt; <code>452.0</code> reduction, ~20% of the whole
+output) are just gone!</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Looking at the runtime closure is always fun. There are many other
+low-hanging fruits in <code>nixpkgs</code> to remove. Most of the time just adding
+an extra <code>dev</code> output is enough to slim down the output.</p>
+<p><code>__FILE__</code> is a tricky macro that makes <code>nix</code> builds to leak out
+unnecessary references into final closure.</p>
+<p><code>-fmacro-prefix-map=</code> seems to be a robust workaround for <code>__FILE__</code>
+induced leaks. The flag is supported in both <code>gcc</code> and <code>clang</code> for quite
+a while.</p>
+<p>Even <code>nix</code> package itself had a redundant dependency in it’s final
+closure.</p>
+<p><a href="https://github.com/NixOS/nixpkgs/pull/255192" class="uri">https://github.com/NixOS/nixpkgs/pull/255192</a> should fix it in <code>nixpkgs</code>.</p>
+<p>And for some packages like <code>pipewire</code> the closure size reduction is
+substantial and is taking about 20% of all closure size. Not bad for a
+single extra compiler option.</p>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on September 14, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>32-bit file API strikes back</title>
     <link href="http://trofi.github.io/posts/297-32-bit-file-API-strikes-back.html" />
     <id>http://trofi.github.io/posts/297-32-bit-file-API-strikes-back.html</id>
@@ -646,13 +902,13 @@ immediate and deferred assignments:</p>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="dt">AI</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dt">AD</span> <span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dv">a:</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo a: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> AI=</span><span class="ch">$(</span><span class="dt">AI</span><span class="ch">)</span><span class="fu"> AD=</span><span class="ch">$(</span><span class="dt">AD</span><span class="ch">)</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo a: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> AI=</span><span class="ch">$(</span><span class="dt">AI</span><span class="ch">)</span><span class="fu"> AD=</span><span class="ch">$(</span><span class="dt">AD</span><span class="ch">)</span></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">V</span> <span class="ch">:=</span><span class="st"> 2</span></span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="dt">BI</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="dt">BD</span> <span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="dv">b:</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo b: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> BI=</span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span><span class="fu"> BD=</span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span></span></code></pre></div>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo b: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> BI=</span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span><span class="fu"> BD=</span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span></span></code></pre></div>
 <p>Take some time time and try to predict the output here.</p>
 <p>Ready now? Here is the correct answer:</p>
 <pre><code>$ make
@@ -669,18 +925,18 @@ example.</p>
 <a href="https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html">Target-specific Variable Values</a>.</p>
 <p>The typical use looks benign:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> CFLAGS=-g</span></span></code></pre></div>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-g</span></span></code></pre></div>
 <p>Here we define 2 targets: <code>foo</code> and <code>bar</code>. But for <code>foo</code> (and it’s
 prerequisites) we specify <code>CFLAGS=-g</code> target-specific override.</p>
 <p><img src="http://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/1-mf.svg" /></p>
@@ -703,19 +959,19 @@ all</code></pre>
 happen to use different overrides for it?</p>
 <p>Here is our toy example:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o shared.o</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o shared.o</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> CFLAGS=-ffoo</span></span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> CFLAGS=-fbar</span></span></code></pre></div>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-ffoo</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fbar</span></span></code></pre></div>
 <p><img src="http://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf.svg" /></p>
 <p>What output do you expect here? Does <code>shared.o</code> get compiled once? Or
 twice? Does it use <code>-ffoo</code> or <code>-ffbar</code>? Is it deterministic?</p>
@@ -783,20 +1039,20 @@ non-intuitive, <code>GNU make</code> provides a few keywords including <code>pri
 does not recurse.</p>
 <p>I suggest the following fix:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o shared.o</span></span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o shared.o</span></span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="dv">a.o b.o:</span><span class="dt"> private CFLAGS=-ffoo</span></span>
-<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="dv">c.o d.o:</span><span class="dt"> private CFLAGS=-fbar</span></span>
-<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> private CFLAGS=-fshared</span></span></code></pre></div>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="dv">a.o b.o:</span><span class="dt"> </span><span class="kw">private</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-ffoo</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="dv">c.o d.o:</span><span class="dt"> </span><span class="kw">private</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fbar</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> </span><span class="kw">private</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fshared</span></span></code></pre></div>
 <p><img src="http://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf-fixed.svg" /></p>
 <p>Note that here we use the new <code>-fshared</code> value to make it distinct from
 the other two. Running:</p>
@@ -810,29 +1066,29 @@ with and without it.</p>
 prerequisites another <code>.o</code> file, say a generator that builds header
 files or some other input:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o shared.o</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o shared.o</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="dv">a.o b.o:</span><span class="dt"> CFLAGS=-ffoo</span></span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a><span class="dv">c.o d.o:</span><span class="dt"> CFLAGS=-fbar</span></span>
-<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> CFLAGS=-fshared</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="dv">a.o b.o:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-ffoo</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a><span class="dv">c.o d.o:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fbar</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fshared</span></span>
 <span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a><span class="co"># simulate that also shared.o depends on `generated.h`</span></span>
 <span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="co"># generated by `gen` tool.</span></span>
 <span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> gen</span></span>
 <span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="dv">gen:</span><span class="dt"> gen.o</span></span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo gen</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo gen</span></span>
 <span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="dv">gen.h:</span><span class="dt"> gen</span></span>
-<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>        <span class="ch">@</span><span class="fu">echo gen.h</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo gen.h</span></span>
 <span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> gen.h</span></span></code></pre></div>
 <p><img src="http://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/3-mf.svg" /></p>
@@ -867,10 +1123,10 @@ are not expected to depend on one another.</p>
 <p>And indeed <code>Makefile</code> uses <code>LIBS</code> variable to specify dependencies:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> libefivar.so libefisec.so efisecdb </span><span class="co"># and more ...</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="co"># ...</span></span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="dv">libefivar.so :</span><span class="dt"> LIBS=dl</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="dv">libefivar.so :</span><span class="dt"> LIBS</span><span class="ch">=</span><span class="st">dl</span></span>
 <span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="co"># ...</span></span>
 <span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="dv">efisecdb :</span><span class="dt"> </span><span class="ch">$(</span><span class="dt">EFISECDB_OBJECTS</span><span class="ch">)</span><span class="dt"> | libefisec.so</span></span>
-<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="dv">efisecdb :</span><span class="dt"> LIBS=efivar efisec dl</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="dv">efisecdb :</span><span class="dt"> LIBS</span><span class="ch">=</span><span class="st">efivar efisec dl</span></span>
 <span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a><span class="co"># ...</span></span>
 <span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a><span class="dv">libefisec.so :</span><span class="dt"> </span><span class="co"># nothing</span></span></code></pre></div>
 <p><img src="http://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/4-mf.svg" /></p>
@@ -7558,277 +7814,6 @@ optimizations.</li>
 
 <div class="info">
     Posted on December 10, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>Fixing wine-wayland on POLARIS</title>
-    <link href="http://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html" />
-    <id>http://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html</id>
-    <published>2022-11-28T00:00:00Z</published>
-    <updated>2022-11-28T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>After <a href="http://trofi.github.io/posts/261-trying-out-wayland.html">switching to wayland</a> I got
-most GUI programs to use <code>wayland</code> backend render. The two main
-exceptions are <code>pidgin</code> (used <code>gtk-2</code>) and <code>wine</code> (uses low level <code>x11</code>
-primitives for many things). <code>pidgin</code> worked fine in <code>Xwayland</code>, but
-<code>wine</code> did not always behave: sometimes input focus did not get passed
-to the emulated application, sometimes wine could not use
-<code>wayland</code>-native pixel screen dimensions and resorted back to
-down-scaled dimensions.</p>
-<p>There is an ongoing effort to get <code>wine</code> a new <code>wayland</code> backend by
-Alexandros Frantzis and others. It’s not yet merged to <code>wine</code> upstream
-proper and is developed at <a href="https://gitlab.collabora.com/alf/wine.git" class="uri">https://gitlab.collabora.com/alf/wine.git</a>
-as a <code>wine</code> fork in <code>wayland</code> branch. <code>nixpkgs</code> packages this fork as
-<code>wine-wayland</code> package.</p>
-<p>I tried <code>wine-wayland</code> for the first time this weekend. Unfortunately it
-was not able to run <code>DirectX</code> or <code>OpenGL</code> games for windows. When I
-started an application I heard expected sounds from the applications
-(good) but got only black screen back (bad!).</p>
-<p>I did not think I could fix it: <code>wine</code> was a huge project, I had no
-background in modern graphics be it <code>linux</code> or <code>windows</code>. But I was
-mildly curious about the following messages <code>wine</code> was dumping to
-<code>stderr</code>:</p>
-<pre><code>$ wine foo.exe
-00f0:err:waylanddrv:wayland_gl_drawable_update Failed to create GBM surface
-00f0:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface
-011c:err:waylanddrv:wayland_gl_drawable_update Failed to create GBM surface
-011c:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface</code></pre>
-<p>I wanted to find out why <code>wine</code> was failing to create these things.</p>
-<p><code>GBM</code> and <code>EGL</code> acronyms sounded vaguely graphics-related. Creating the
-rendering surface sounded like a simple procedure. Everything neededs a
-surface to draw anything. Maybe that error message is an actual bug?</p>
-<p><code>wine</code> has a great <code>WINEDEBUG=</code> mechanism to enable subsystem-specific
-debug prints at runtime (<code>man wine</code> has detailed synatax description).
-To get <code>wayland</code>-related debugging I used <code>WINEDEBUG=waylanddrv,opengl</code>:</p>
-<pre><code>$ WINEDEBUG=waylanddrv,opengl wine foo.exe
-...
-0124:trace:waylanddrv:wayland_gl_create_gbm_surface Using default format/modifier information
-0124:trace:waylanddrv:wayland_gbm_create_surface 640x480 AR24 scanout=0 count_mods=2
-0124:trace:waylanddrv:wayland_gbm_create_surface     mod: 0x00ffffffffffffff
-0124:trace:waylanddrv:wayland_gbm_create_surface     mod: 0x0000000000000000
-0124:err:waylanddrv:wayland_gl_drawable_update Failed to create GBM surface
-0124:trace:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface with SRGB colorspace, trying with default colorspace
-0124:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface
-...</code></pre>
-<p>Not knowing much about these <code>GBM</code> things it felt like creating a <code>640x480</code>
-surface with <code>AR24</code> format (8 bits for each of Red, Blue, Green, Alpha components)
-should not be a problem and the call should succeed. Why does it fail here?</p>
-<p>To ease exploration I started patching <code>mesa</code> and <code>wine-wayland</code> locally
-with <code>fprintf(stderr, ...);</code> calls to see what gets passed around.</p>
-<p><code>nixpkgs</code>’s <code>mesa</code> clients use <code>/run/opengl-driver-32</code> paths to load
-<code>opengl</code> <code>mesa</code> drivers. That means just rebuilding an application
-against patched <code>mesa</code> locally in <code>nixpkgs</code> checkout is not enough to
-get it used: applications will still load <code>/run/opengl-driver-32</code>
-drivers. One day we will fix this non-hermeticity.</p>
-<p>But until then we have to manually redirect used <code>mesa</code> from default
-paths. There are many ways to do it. I used the following global
-variables:</p>
-<pre><code>$ local_mesa=$(nix-build --no-link ~/nm -A pkgsi686Linux.mesa.drivers)
-$ GBM_BACKENDS_PATH=/not-really-used \
-  LIBGL_DRIVERS_PATH=$local_mesa/lib/dri \
-  __EGL_VENDOR_LIBRARY_DIRS=$local_mesa/share/glvnd/egl_vendor.d \
-      wine foo.exe</code></pre>
-<p>This allowed me to put patches to <code>~/nm</code> checkout of <code>nixpkgs</code> and
-immediately observe their effect on <code>wine-wayland</code>.</p>
-<p>I found that <code>wine</code>’s code at
-<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L373-L440">winewayland.drv</a>.
-calls <code>wayland_gbm_create_surface()</code> -&gt;
-<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L310-L371">wayland_gl_create_gbm_surface()</a>
--&gt; <a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/gbm.c#L267-L299">wayland_gbm_create_surface()</a>.
-All of the calls are shallow wrappers of one another. They just pass
-through the request to create surface. I’ll paste the latter in full
-here:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> gbm_surface <span class="op">*</span>wayland_gbm_create_surface<span class="op">(</span><span class="dt">uint32_t</span> drm_format<span class="op">,</span> <span class="dt">int</span> width<span class="op">,</span> <span class="dt">int</span> height<span class="op">,</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>                                               <span class="dt">size_t</span> count_modifiers<span class="op">,</span> <span class="dt">uint64_t</span> <span class="op">*</span>modifiers<span class="op">,</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                                               BOOL format_is_scanoutable<span class="op">)</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span> gbm_bo_flags <span class="op">=</span> GBM_BO_USE_RENDERING<span class="op">;</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>TRACE_ON<span class="op">(</span>waylanddrv<span class="op">))</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> i<span class="op">;</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        TRACE<span class="op">(</span><span class="st">&quot;</span><span class="sc">%d</span><span class="st">x</span><span class="sc">%d</span><span class="st"> </span><span class="sc">%.4s</span><span class="st"> scanout=</span><span class="sc">%d</span><span class="st"> count_mods=</span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>              width<span class="op">,</span> height<span class="op">,</span> <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*)&amp;</span>drm_format<span class="op">,</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>              format_is_scanoutable<span class="op">,</span> count_modifiers<span class="op">);</span></span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> count_modifiers<span class="op">;</span> i<span class="op">++)</span></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>            TRACE<span class="op">(</span><span class="st">&quot;    mod: 0x</span><span class="sc">%.16llx\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span><span class="dt">long</span> <span class="dt">long</span><span class="op">)</span>modifiers<span class="op">[</span>i<span class="op">]);</span></span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>format_is_scanoutable<span class="op">)</span> gbm_bo_flags <span class="op">|=</span> GBM_BO_USE_SCANOUT<span class="op">;</span></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>count_modifiers<span class="op">)</span></span>
-<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
-<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef HAVE_GBM_SURFACE_CREATE_WITH_MODIFIERS2</span></span>
-<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> gbm_surface_create_with_modifiers2<span class="op">(</span>process_gbm_device<span class="op">,</span> width<span class="op">,</span> height<span class="op">,</span></span>
-<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>                                                  drm_format<span class="op">,</span> modifiers<span class="op">,</span> count_modifiers<span class="op">,</span> gbm_bo_flags<span class="op">);</span></span>
-<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> gbm_surface_create_with_modifiers<span class="op">(</span>process_gbm_device<span class="op">,</span> width<span class="op">,</span> height<span class="op">,</span></span>
-<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>                                                 drm_format<span class="op">,</span> modifiers<span class="op">,</span> count_modifiers<span class="op">);</span></span>
-<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
-<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> gbm_surface_create<span class="op">(</span>process_gbm_device<span class="op">,</span> width<span class="op">,</span> height<span class="op">,</span> drm_format<span class="op">,</span> gbm_bo_flags<span class="op">);</span></span>
-<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here <code>wayland_gbm_create_surface()</code> tries to call
-<code>gbm_surface_create_with_modifiers2()</code> with 2 modifiers:</p>
-<ul>
-<li>unknown (tiled?): <code>0x00ffffffffffffff</code> (<code>DRM_FORMAT_MOD_INVALID</code>)</li>
-<li>linear: <code>0x0000000000000000</code> (<code>DRM_FORMAT_MOD_LINEAR</code>)</li>
-</ul>
-<p>Note that if there would be no modifiers then <code>gbm_surface_create()</code>
-would be called. From what I understand presence of extra modifiers is
-optional (depends on a driver implementation).</p>
-<p>From what I understand generic code should be able to work with all
-modifiers. Picking wrong modifier should only affect performance (and
-not correctness). An example modifier would be to enable tiled pixel
-layout instead of default linear.</p>
-<p>The fun thing is that <code>mesa</code> rejects
-<code>gbm_surface_create_with_modifiers2()</code> call for me with <code>errno = ENOSYS</code>
-at <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gbm/backends/dri/gbm_dri.c#L1343-L1404">src/gbm/backends/dri/gbm_dri.c</a>:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> gbm_surface <span class="op">*</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>gbm_dri_surface_create<span class="op">(</span><span class="kw">struct</span> gbm_device <span class="op">*</span>gbm<span class="op">,</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">uint32_t</span> width<span class="op">,</span> <span class="dt">uint32_t</span> height<span class="op">,</span></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">uint32_t</span> format<span class="op">,</span> <span class="dt">uint32_t</span> flags<span class="op">,</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">const</span> <span class="dt">uint64_t</span> <span class="op">*</span>modifiers<span class="op">,</span> <span class="dt">const</span> <span class="dt">unsigned</span> count<span class="op">)</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>   <span class="kw">struct</span> gbm_dri_device <span class="op">*</span>dri <span class="op">=</span> gbm_dri_device<span class="op">(</span>gbm<span class="op">);</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>   <span class="kw">struct</span> gbm_dri_surface <span class="op">*</span>surf<span class="op">;</span></span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>   <span class="cf">if</span> <span class="op">(</span>modifiers <span class="op">&amp;&amp;</span></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>       <span class="op">(!</span>dri<span class="op">-&gt;</span>image <span class="op">||</span> dri<span class="op">-&gt;</span>image<span class="op">-&gt;</span>base<span class="op">.</span>version <span class="op">&lt;</span> <span class="dv">14</span> <span class="op">||</span></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">!</span>dri<span class="op">-&gt;</span>image<span class="op">-&gt;</span>createImageWithModifiers<span class="op">))</span> <span class="op">{</span></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>      errno <span class="op">=</span> ENOSYS<span class="op">;</span> <span class="co">// &lt;- here</span></span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>      <span class="cf">return</span> NULL<span class="op">;</span></span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
-<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span></code></pre></div>
-<p>As I understand <code>mesa</code> assumes that <code>createImageWithModifiers</code> support
-should be present in the backend driver. But in my case of
-<code>GFX8 / POLARIS12</code> modifier support for image creation seems to be
-disabled by <code>mesa</code> at
-<a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/radeonsi/si_texture.c#L2378-L2401">src/gallium/drivers/radeonsi/si_texture.c</a>.
-Don’t know why.</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> si_init_screen_texture_functions<span class="op">(</span><span class="kw">struct</span> si_screen <span class="op">*</span>sscreen<span class="op">)</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_from_handle <span class="op">=</span> si_texture_from_handle<span class="op">;</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_get_handle <span class="op">=</span> si_texture_get_handle<span class="op">;</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_get_param <span class="op">=</span> si_resource_get_param<span class="op">;</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_get_info <span class="op">=</span> si_texture_get_info<span class="op">;</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_from_memobj <span class="op">=</span> si_resource_from_memobj<span class="op">;</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>memobj_create_from_handle <span class="op">=</span> si_memobj_from_handle<span class="op">;</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>memobj_destroy <span class="op">=</span> si_memobj_destroy<span class="op">;</span></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>check_resource_capability <span class="op">=</span> si_check_resource_capability<span class="op">;</span></span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>   sscreen<span class="op">-&gt;</span>b<span class="op">.</span>get_sparse_texture_virtual_page_size <span class="op">=</span></span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>      si_get_sparse_texture_virtual_page_size<span class="op">;</span></span>
-<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>   <span class="co">/* By not setting it the frontend will fall back to non-modifier create,</span></span>
-<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="co">    * which works around some applications using modifiers that are not</span></span>
-<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="co">    * allowed in combination with lack of error reporting in</span></span>
-<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="co">    * gbm_dri_surface_create */</span></span>
-<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>   <span class="cf">if</span> <span class="op">(</span>sscreen<span class="op">-&gt;</span>info<span class="op">.</span>gfx_level <span class="op">&gt;=</span> GFX9 <span class="op">&amp;&amp;</span> sscreen<span class="op">-&gt;</span>info<span class="op">.</span>kernel_has_modifiers<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>resource_create_with_modifiers <span class="op">=</span> si_texture_create_with_modifiers<span class="op">;</span></span>
-<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>query_dmabuf_modifiers <span class="op">=</span> si_query_dmabuf_modifiers<span class="op">;</span></span>
-<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>is_dmabuf_modifier_supported <span class="op">=</span> si_is_dmabuf_modifier_supported<span class="op">;</span></span>
-<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>      sscreen<span class="op">-&gt;</span>b<span class="op">.</span>get_dmabuf_modifier_planes <span class="op">=</span> si_get_dmabuf_modifier_planes<span class="op">;</span></span>
-<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
-<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here <code>GFX8</code> does not get a hint of <code>resource_create_with_modifiers</code> and
-as a result <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/frontends/dri/dri2.c#L2196-L2264">src/gallium/frontends/dri/dri2.c</a>
-does not set <code>createImageWithModifiers</code>:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>dri2_init_screen_extensions<span class="op">(</span><span class="kw">struct</span> dri_screen <span class="op">*</span>screen<span class="op">,</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>                            <span class="kw">struct</span> pipe_screen <span class="op">*</span>pscreen<span class="op">,</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>                            <span class="dt">bool</span> is_kms_screen<span class="op">)</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>   <span class="dt">const</span> __DRIextension <span class="op">**</span>nExt<span class="op">;</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>   STATIC_ASSERT<span class="op">(</span><span class="kw">sizeof</span><span class="op">(</span>screen<span class="op">-&gt;</span>screen_extensions<span class="op">)</span> <span class="op">&gt;=</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>                 <span class="kw">sizeof</span><span class="op">(</span>dri_screen_extensions_base<span class="op">));</span></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>   memcpy<span class="op">(&amp;</span>screen<span class="op">-&gt;</span>screen_extensions<span class="op">,</span> dri_screen_extensions_base<span class="op">,</span></span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>          <span class="kw">sizeof</span><span class="op">(</span>dri_screen_extensions_base<span class="op">));</span></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>   screen<span class="op">-&gt;</span>extensions <span class="op">=</span> screen<span class="op">-&gt;</span>screen_extensions<span class="op">;</span></span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>   <span class="co">/* Point nExt at the end of the extension list */</span></span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>   nExt <span class="op">=</span> <span class="op">&amp;</span>screen<span class="op">-&gt;</span>screen_extensions<span class="op">[</span>ARRAY_SIZE<span class="op">(</span>dri_screen_extensions_base<span class="op">)];</span></span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>   screen<span class="op">-&gt;</span>image_extension <span class="op">=</span> dri2ImageExtensionTempl<span class="op">;</span></span>
-<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>   <span class="cf">if</span> <span class="op">(</span>pscreen<span class="op">-&gt;</span>resource_create_with_modifiers<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>      screen<span class="op">-&gt;</span>image_extension<span class="op">.</span>createImageWithModifiers <span class="op">=</span></span>
-<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>         dri2_create_image_with_modifiers<span class="op">;</span></span>
-<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>      screen<span class="op">-&gt;</span>image_extension<span class="op">.</span>createImageWithModifiers2 <span class="op">=</span></span>
-<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>         dri2_create_image_with_modifiers2<span class="op">;</span></span>
-<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
-<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span></code></pre></div>
-<p>I’m not sure why <code>createImageWithModifiers</code> is skipped for me. Is it a
-<code>mesa</code> bug? Is it expected because video card does not expose enough
-information on tile format for <code>mesa</code> to reuse? I have no idea!</p>
-<p>Anyway, from the above I was able to fix <code>wine-wayland</code> with one simple
-trick by pretending there are no modifiers (assume <code>LINEAR</code>?):</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/dlls/winewayland.drv/gbm.c</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/dlls/winewayland.drv/gbm.c</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -286,13 +286,20 @@ struct gbm_surface *wayland_gbm_create_surface(uint32_t drm_format, int width, i</span></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>     if (count_modifiers)</span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>     {</span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="va">+        errno = 0;</span></span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="va">+        struct gbm_surface * s =</span></span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a> #ifdef HAVE_GBM_SURFACE_CREATE_WITH_MODIFIERS2</span>
-<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="st">-        return gbm_surface_create_with_modifiers2(process_gbm_device, width, height,</span></span>
-<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="va">+               gbm_surface_create_with_modifiers2(process_gbm_device, width, height,</span></span>
-<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>                                                   drm_format, modifiers, count_modifiers, gbm_bo_flags);</span>
-<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a> #else</span>
-<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="st">-        return gbm_surface_create_with_modifiers(process_gbm_device, width, height,</span></span>
-<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="va">+               gbm_surface_create_with_modifiers(process_gbm_device, width, height,</span></span>
-<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>                                                  drm_format, modifiers, count_modifiers);</span>
-<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a><span class="va">+        if (!s &amp;&amp; errno == ENOSYS) {</span></span>
-<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="va">+            TRACE(&quot;    =&gt; mesa can't create a surface with modifiers. Falling back to modifer-less.&quot;);</span></span>
-<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a><span class="va">+        } else {</span></span>
-<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a><span class="va">+            return s;</span></span>
-<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a><span class="va">+        }</span></span>
-<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>     }</span>
-<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>     return gbm_surface_create(process_gbm_device, width, height, drm_format, gbm_bo_flags);</span></code></pre></div>
-<p>The idea is to just ignore <code>gbm_surface_create_with_modifiers2()</code>’s
-result if it fails with <code>ENOSYS</code> and switch over to
-<code>gbm_surface_create()</code> assuming it can handle the the call without
-modifier presence.</p>
-<p>I’m not sure what such a fallback means for other video card types. Will
-it break some tiled workloads? Or at this point surface creation is
-already broken beyond repair and any try is better than nothing? I have
-no idea!</p>
-<p>With the hack I unexpectedly got my games back running on <code>wine-wayland</code>!</p>
-<p>I sent above hack to Alexandros to get help where the real fix belongs.
-Hopefully we can get <code>wine-wayland</code> to work on more GPUs than today.</p>
-<h2 id="parting-words">Parting words</h2>
-<p>Vanilla <code>wine</code> still has to run via <code>Xwayland</code> and it’s not the best
-experience for some picky applications. <code>wine-wayland</code> does a very
-decent job at providing something that works (modulo cards like mine).
-After I applied the fallback hack I was able to run all the games that
-used to work on <code>wine-x11</code>.</p>
-<p><code>wine</code>’s <code>WINEDEBUG=</code> debugging facility is great at tracing both
-application behaviour and <code>wine</code>’s driver behaviour. I had to add
-surprisingly little extra debugging to what is already available in
-<code>wine</code> in form of <code>TRACE(...);</code> calls.</p>
-<p><code>wine</code>’s error message was clear enough to understand why video
-rendering did not produce anything.</p>
-<p><code>nix</code>’s ability to build patched <code>wine</code> against patched <code>mesa</code> without
-destroying existing installation was critical for me to be able to do
-side-by-side comparisons.</p>
-<p><code>mesa</code>’s <code>LIBGL_DRIVERS_PATH=</code> and <code>libglvnd</code>’s
-<code>__EGL_VENDOR_LIBRARY_DIRS=</code> variables are ideal at fiddling with
-patched opengl stack while keeping the main system running.</p>
-<p><code>wine</code>’s and <code>wayland</code>’s way of handling <code>linux</code> <code>DRM</code> subsystem is very
-lightweiht: they effectively pass available configuration around without
-much of application-specific mangling. At least around surface creation
-logic. That was very easy to get through.</p>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on November 28, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
