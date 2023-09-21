@@ -10,8 +10,615 @@
         <email>slyich@gmail.com</email>
         
     </author>
-    <updated>2023-09-14T00:00:00Z</updated>
+    <updated>2023-09-21T00:00:00Z</updated>
     <entry>
+    <title>Maximum argument count on linux and in gcc</title>
+    <link href="http://trofi.github.io/posts/299-maximum-argument-count-on-linux-and-in-gcc.html" />
+    <id>http://trofi.github.io/posts/299-maximum-argument-count-on-linux-and-in-gcc.html</id>
+    <published>2023-09-21T00:00:00Z</published>
+    <updated>2023-09-21T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<h2 id="tldr">Tl;DR</h2>
+<p>By default on <code>linux</code> argument list (and environment) is limited by
+less than <code>2MB</code> all bytes calculated across all arguments and environment
+(including <code>argv/envp</code> array overheads and null terminators).</p>
+<p><code>ulimit -s</code> can increase this limit to <code>6MB</code>. Individual command line
+and environment <code>K=V</code> pairs are limited to <code>128KB</code>.</p>
+<p>And due to internal implementation deficiencies of <code>gcc</code> argument list
+for <code>gcc</code> happens to be limited by the same <code>128KB</code> limit.</p>
+<h2 id="story-mode">Story mode</h2>
+<p>My <a href="http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html">previous attempt</a>
+to “just add” a bunch of <code>-fmacro-prefix-map=</code> flags to each <code>nixpkgs</code>
+package worked for most packages. But it started failing for <code>qemu</code> as:</p>
+<pre><code>Command line: `gcc -m64 -mcx16 /build/qemu-8.1.0/build/meson-private/tmpbyikv8nc/testfile.c \
+  -o /build/qemu-8.1.0/build/meson-private/tmpbyikv8nc/output.exe -D_FILE_OFFSET_BITS=64 \
+  -O0 -Wl,--start-group -laio -Wl,--end-group -Wl,--allow-shlib-undefined` -&gt; 1
+stderr:
+gcc: fatal error: cannot execute 'cc1': execv: Argument list too long
+compilation terminated.</code></pre>
+<p>The failure happens because we have exhausted some command line argument
+limit. In case of <code>qemu</code> we pass around a few thousands of
+<code>-fmacro-prefix-map=</code> options (<code>qemu</code> is a big package and has many
+build inputs).</p>
+<p>Ideally I would like to be able to pass a lot more options without
+hitting the arguments limit (10x? 100x?). Luckily <code>gcc</code> and other tools
+like <code>ld</code> do support a way to pass many options indirectly via response
+files:</p>
+<pre><code>$ gcc -g -O2 -c a.c</code></pre>
+<p>The above should be equivalent to the below:</p>
+<pre><code>$ echo &quot;-g&quot;   &gt; a.rsp
+$ echo &quot;-O2&quot; &gt;&gt; a.rsp
+$ gcc @a.rsp -c a.c</code></pre>
+<p>But I’ll leave response files to another post as it ended up being
+it’s own rabbit hole.</p>
+<p>Instead let’s explore how many arguments you can pass to a single
+command in <code>linux</code>.</p>
+<h2 id="exploring-the-argument-count-limits">Exploring the argument count limits</h2>
+<p>So what are the actual limits we are hitting against here? How many
+arguments can we pass to <code>gcc</code> without any problems?</p>
+<p>Let’s explore it! I’ll start by adding more and more <code>-g</code> options to
+<code>gcc</code> call until it starts failing for a command line limit:</p>
+<pre><code>$ nix shell nixpkgs#gcc
+$$ set -x; touch a.c; args=(-g); while gcc ${args[@]} -c a.c; do args+=(&quot;${args[@]}&quot;); done; echo ${#args[@]}
+
++ set -x
++ touch a.c
++ args=(-g)
++ gcc -g -c a.c
++ args+=(&quot;${args[@]}&quot;)
++ gcc -g -g -c a.c
++ args+=(&quot;${args[@]}&quot;)
++ gcc -g -g -g -g -c a.c
++ args+=(&quot;${args[@]}&quot;)
++ gcc -g -g -g -g -g -g -g -g -c a.c
+...
+gcc: fatal error: cannot execute 'cc1': execv: Argument list too long
+compilation terminated.
++ echo 32768
+32768</code></pre>
+<p>Our limit is somewhere below 32K (this is a lot lower than I expected).</p>
+<p>In the above snippet we double the length of argument list to speed the
+search up a bit, thus it’s not an exact value and some closest
+power-of-2 ceiling.</p>
+<p>Let’s extend this snippet a bit and build more flexible argument count
+probe that returns us precise value. I called it <code>probe-argsize.bash</code>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="co"># $1 - payload</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co"># $2... - prober command to test against argument list</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="co"># create an aray of enough elements to start failing the allocation:</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="va">large</span><span class="op">=</span><span class="va">(</span><span class="st">&quot;</span><span class="va">$1</span><span class="st">&quot;</span><span class="va">)</span><span class="kw">;</span> <span class="bu">shift</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span> <span class="st">&quot;</span><span class="va">${large</span><span class="op">[@]</span><span class="va">}</span><span class="st">&quot;</span> <span class="op">&gt;</span>/dev/null <span class="dv">2</span><span class="op">&gt;</span>/dev/null<span class="kw">;</span> <span class="cf">do</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    <span class="co"># double the array lenght until execution start failing</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="va">large</span><span class="op">+=</span><span class="va">(</span><span class="st">&quot;</span><span class="va">${large</span><span class="op">[@]</span><span class="va">}</span><span class="st">&quot;</span><span class="va">)</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Use binary search to find largest successfully running prober</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="va">l</span><span class="op">=</span>0</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="va">u</span><span class="op">=</span><span class="va">${</span><span class="op">#</span><span class="va">large</span><span class="op">[@]</span><span class="va">}</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> <span class="kw">((</span> <span class="va">l</span> <span class="op">&lt;</span> <span class="va">u</span> <span class="kw">));</span> <span class="cf">do</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="va">m</span><span class="op">=</span><span class="va">$((</span> (<span class="va">l</span> <span class="op">+</span> <span class="va">u</span> <span class="op">+</span> <span class="dv">1</span>) <span class="op">/</span> <span class="dv">2</span> <span class="va">))</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span> <span class="st">&quot;</span><span class="va">${large</span><span class="op">[@]:</span><span class="dv">0</span><span class="op">:</span>m<span class="va">}</span><span class="st">&quot;</span> <span class="op">&gt;</span>/dev/null <span class="dv">2</span><span class="op">&gt;</span>/dev/null<span class="kw">;</span> <span class="cf">then</span></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>        <span class="co"># can survive</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>        <span class="kw">((</span> <span class="va">l</span> <span class="op">=</span> <span class="va">m</span> <span class="kw">))</span></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>        <span class="kw">((</span> <span class="va">u</span> <span class="op">=</span> <span class="va">m</span> <span class="op">-</span> <span class="dv">1</span> <span class="kw">))</span></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>    <span class="cf">fi</span></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="va">$l</span></span></code></pre></div>
+<p>The first half of the script does the same 2x argument list growth on
+every step as before. And the second half does binary search for an
+exact value.</p>
+<p>Let’s try it out:</p>
+<pre><code>$$ touch a.c; ./probe-argsize.bash -g gcc -c a.c
+
+26118</code></pre>
+<p>~26K parameters. Seems to work!</p>
+<p>What if we make our argument a bit larger? Say, pass <code>-ggdb3</code> instead of
+<code>-g</code>?</p>
+<pre><code>$ touch a.c; ./probe-argsize.bash -ggdb3 gcc -c a.c
+14510</code></pre>
+<p>Just ~14K. That degrades very quickly. The available length is decreased
+by half! (or something like that)</p>
+<p>How about longer option? I’ll try ~100 bytes long one:</p>
+<pre><code>$ touch a.c; ./probe-argsize.bash -I0123456789-90123456789-0123456789-0123456789-0123456789-0123456789-01234567889-0123456789-0123456789 \
+  gcc -c a.c
+1209</code></pre>
+<p>1209 is extremely low. That is on par with what <code>qemu</code> exercises in
+<code>nixpkgs</code>. Looks like our limit here is about <code>~120K</code> bytes if we sum up
+all our argument lengths to <code>gcc</code>.</p>
+<p>What if the problem is in some internal <code>gcc</code> limit and not the OS
+itself? Let’s <code>strace</code> <code>gcc</code> call just to make sure:</p>
+<pre><code>$$ strace -f gcc ${args[@]} -c a.c
+...
+[pid 1360260] execve(&quot;cc1&quot;, [&quot;cc1&quot;, &quot;-quiet&quot;, &quot;-idirafter&quot;, ..., &quot;-g&quot;, ...], \
+    0x1474b80 /* 103 vars */) = -1 E2BIG (Argument list too long)</code></pre>
+<p>Here we see that <code>E2BIG</code> comes right from an <code>execve()</code> system call.
+Thus it’s kernel’s limitation of some sort.</p>
+<h2 id="getting-the-formula">Getting the formula</h2>
+<p>Can we easily increase the limit? Let’s find out how <code>linux</code> implements
+limits in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L1888C1-L1894C13">fs/exec.c</a>.
+Maybe there is a <code>linux</code>-specific hack somewhere we could pull out.</p>
+<p>There are a few places where <code>-E2BIG</code> is returned. This code looks most
+relevant:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> do_execveat_common<span class="op">(</span><span class="dt">int</span> fd<span class="op">,</span> <span class="kw">struct</span> filename <span class="op">*</span>filename<span class="op">,</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>			      <span class="kw">struct</span> user_arg_ptr argv<span class="op">,</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>			      <span class="kw">struct</span> user_arg_ptr envp<span class="op">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>			      <span class="dt">int</span> flags<span class="op">)</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> linux_binprm <span class="op">*</span>bprm<span class="op">;</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>	<span class="dt">int</span> retval<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>	<span class="co">// ...</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>	retval <span class="op">=</span> count<span class="op">(</span>argv<span class="op">,</span> MAX_ARG_STRINGS<span class="op">);</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>retval <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> out_free<span class="op">;</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>	bprm<span class="op">-&gt;</span>argc <span class="op">=</span> retval<span class="op">;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>	retval <span class="op">=</span> count<span class="op">(</span>envp<span class="op">,</span> MAX_ARG_STRINGS<span class="op">);</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>retval <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> out_free<span class="op">;</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>	bprm<span class="op">-&gt;</span>envc <span class="op">=</span> retval<span class="op">;</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>	<span class="co">// ...</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>	retval <span class="op">=</span> bprm_stack_limits<span class="op">(</span>bprm<span class="op">);</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>retval <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> out_free<span class="op">;</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>	<span class="co">// ...</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>	retval <span class="op">=</span> copy_strings<span class="op">(</span>bprm<span class="op">-&gt;</span>envc<span class="op">,</span> envp<span class="op">,</span> bprm<span class="op">);</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>retval <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> out_free<span class="op">;</span></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>	retval <span class="op">=</span> copy_strings<span class="op">(</span>bprm<span class="op">-&gt;</span>argc<span class="op">,</span> argv<span class="op">,</span> bprm<span class="op">);</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>retval <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> out_free<span class="op">;</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a>	<span class="co">// ...</span></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I wondered if <code>MAX_ARG_STRINGS</code> could be one of our limits once
+we solve the smaller limit we are bumping into now, but nope it’s defined
+in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/include/uapi/linux/binfmts.h#L9">include/uapi/linux/binfmts.h</a>
+as:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * These are the maximum length and maximum number of strings passed to the</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="co"> * execve() system call.  MAX_ARG_STRLEN is essentially random but serves to</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="co"> * prevent the kernel from being unduly impacted by misaddressed pointers.</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="co"> * MAX_ARG_STRINGS is chosen to fit in a signed 32-bit integer.</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#define MAX_ARG_STRLEN </span><span class="op">(</span><span class="pp">PAGE_SIZE </span><span class="op">*</span><span class="pp"> </span><span class="dv">32</span><span class="op">)</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="pp">#define MAX_ARG_STRINGS </span><span class="bn">0x7FFFFFFF</span></span></code></pre></div>
+<p>Which is a ridiculously large number:</p>
+<pre><code>$ printf &quot;%d\n&quot; 0x7FFFFFFF
+2147483647</code></pre>
+<p>Maybe it’s a stack limit then? <code>bprm_stack_limits()</code> looks promising:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> bprm_stack_limits<span class="op">(</span><span class="kw">struct</span> linux_binprm <span class="op">*</span>bprm<span class="op">)</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>	<span class="dt">unsigned</span> <span class="dt">long</span> limit<span class="op">,</span> ptr_size<span class="op">;</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>	<span class="co">/*</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="co">	 * Limit to 1/4 of the max stack size or 3/4 of _STK_LIM</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="co">	 * (whichever is smaller) for the argv+env strings.</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co">	 * This ensures that:</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="co">	 *  - the remaining binfmt code will not run out of stack space,</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="co">	 *  - the program will have a reasonable amount of stack left</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="co">	 *    to work from.</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">	 */</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>	limit <span class="op">=</span> _STK_LIM <span class="op">/</span> <span class="dv">4</span> <span class="op">*</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>	limit <span class="op">=</span> min<span class="op">(</span>limit<span class="op">,</span> bprm<span class="op">-&gt;</span>rlim_stack<span class="op">.</span>rlim_cur <span class="op">/</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>	<span class="co">/*</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a><span class="co">	 * We've historically supported up to 32 pages (ARG_MAX)</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a><span class="co">	 * of argument strings even with small stacks</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="co">	 */</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>	limit <span class="op">=</span> max_t<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span><span class="op">,</span> limit<span class="op">,</span> ARG_MAX<span class="op">);</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>	<span class="co">/*</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="co">	 * We must account for the size of all the argv and envp pointers to</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a><span class="co">	 * the argv and envp strings, since they will also take up space in</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="co">	 * the stack. They aren't stored until much later when we can't</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="co">	 * signal to the parent that the child has run out of stack space.</span></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a><span class="co">	 * Instead, calculate it here so it's possible to fail gracefully.</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a><span class="co">	 *</span></span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a><span class="co">	 * In the case of argc = 0, make sure there is space for adding a</span></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a><span class="co">	 * empty string (which will bump argc to 1), to ensure confused</span></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a><span class="co">	 * userspace programs don't start processing from argv[1], thinking</span></span>
+<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a><span class="co">	 * argc can never be 0, to keep them from walking envp by accident.</span></span>
+<span id="cb13-31"><a href="#cb13-31" aria-hidden="true" tabindex="-1"></a><span class="co">	 * See do_execveat_common().</span></span>
+<span id="cb13-32"><a href="#cb13-32" aria-hidden="true" tabindex="-1"></a><span class="co">	 */</span></span>
+<span id="cb13-33"><a href="#cb13-33" aria-hidden="true" tabindex="-1"></a>	ptr_size <span class="op">=</span> <span class="op">(</span>max<span class="op">(</span>bprm<span class="op">-&gt;</span>argc<span class="op">,</span> <span class="dv">1</span><span class="op">)</span> <span class="op">+</span> bprm<span class="op">-&gt;</span>envc<span class="op">)</span> <span class="op">*</span> <span class="kw">sizeof</span><span class="op">(</span><span class="dt">void</span> <span class="op">*);</span></span>
+<span id="cb13-34"><a href="#cb13-34" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>limit <span class="op">&lt;=</span> ptr_size<span class="op">)</span></span>
+<span id="cb13-35"><a href="#cb13-35" aria-hidden="true" tabindex="-1"></a>		<span class="cf">return</span> <span class="op">-</span>E2BIG<span class="op">;</span></span>
+<span id="cb13-36"><a href="#cb13-36" aria-hidden="true" tabindex="-1"></a>	limit <span class="op">-=</span> ptr_size<span class="op">;</span></span>
+<span id="cb13-37"><a href="#cb13-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-38"><a href="#cb13-38" aria-hidden="true" tabindex="-1"></a>	bprm<span class="op">-&gt;</span>argmin <span class="op">=</span> bprm<span class="op">-&gt;</span>p <span class="op">-</span> limit<span class="op">;</span></span>
+<span id="cb13-39"><a href="#cb13-39" aria-hidden="true" tabindex="-1"></a>	<span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb13-40"><a href="#cb13-40" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This well-commented function tells us that formula here is. I’ll
+compress it as:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> _STK_LIM <span class="op">/</span> <span class="dv">4</span> <span class="op">*</span> <span class="dv">3</span><span class="op">;</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> min<span class="op">(</span>limit<span class="op">,</span> bprm<span class="op">-&gt;</span>rlim_stack<span class="op">.</span>rlim_cur <span class="op">/</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> max<span class="op">(</span>limit<span class="op">,</span> ARG_MAX<span class="op">);</span></span></code></pre></div>
+<p>Let’s inline as many constants as we can here:</p>
+<pre><code>// from include/uapi/linux/resource.h
+#define _STK_LIM  (8*1024*1024)
+// from include/uapi/linux/limits.h
+#define ARG_MAX 131072 /* # bytes of args + environ for exec() */</code></pre>
+<p>We’ll get this 3-liner:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> <span class="dv">6</span><span class="er">MB</span><span class="op">;</span> <span class="co">// 8MB / 4 * 3</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> min<span class="op">(</span>limit<span class="op">,</span> CURRENT_STACK_LIMIT <span class="op">/</span> <span class="dv">4</span><span class="op">);</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> max<span class="op">(</span>limit<span class="op">,</span> <span class="dv">128</span><span class="er">K</span><span class="op">);</span></span></code></pre></div>
+<p>The above in plain words: argument limits (in bytes) are at least 128K
+and at most are 6MB. And by default it’s <code>CURRENT_STACK_LIMIT / 4</code>.</p>
+<p><code>CURRENT_STACK_LIMIT</code> default is set to <code>_STK_LIM</code> as well:</p>
+<pre><code>$ ulimit -s
+8192</code></pre>
+<p>Thus the argument length limit by default is <code>2MB</code>. And wee can raise up
+to 6MB (3x) maximum if we set <code>ulimit -s</code> up to <code>24MB</code>. Setting stack
+to anything higher would not affect argument limit.</p>
+<p>That is the theory. Does it match the practice?</p>
+<p>What did I miss? Why do we get only ~128K or argument limit for <code>gcc</code>
+and not ~2MB?</p>
+<p>There is a small catch: I kept exploring limits of <code>gcc</code> executable. In
+<code>nixpkgs</code> it’s a big shell wrapper. Part of wrapper’s work is to set
+various environment variables. Not just pass through the arguments.
+And each environment variable is treated roughly like a command line
+parameter.</p>
+<p>Let’s use known simple <code>printf</code> binary instead (it should not set any
+environment variables internally) and see what are it’s limits:</p>
+<pre><code>$ ./probe-argsize.bash -g $(which printf) &quot;%s&quot; --
+189929</code></pre>
+<p>189K arguments! This looks more like <code>400KB</code> of argument bytes. But if you
+know anything about <code>char * argv[]</code> parameter to <code>main()</code> you might know
+that it’s a pointer array. And pointers probably take most overhead
+here.</p>
+<p>Let’s use longer arguments to mitigate pointer overhead:</p>
+<pre><code>$ filler=0123456789-90123456789-0123456789-0123456789-0123456789-0123456789-01234567889-0123456789-0123456789
+$ ./probe-argsize.bash $filler $(which printf) &quot;%s&quot; --
+19165</code></pre>
+<p>19K arguments 100 bytes each: that looks more like <code>~2MB</code> limit. Phew!
+We finally got our theoretical limit.</p>
+<h2 id="ultimate-argument-count-linux-allows-today">Ultimate argument count <code>linux</code> allows today</h2>
+<p>Given that argument count somehow depends on stack size via
+<code>CURRENT_STACK_LIMIT</code> can we just change default stack size and set
+<code>10x</code> limit for argument count?</p>
+<p>What is The Largest argument count we can pass on <code>linux</code>?</p>
+<p>It’s not very hard to figure it out from the <code>bprm_stack_limits()</code> code
+above.</p>
+<p>To recap our environment structure in memory (on stack) is an array of
+pointers to the null-terminated string pool:</p>
+<pre><code> | (char *)argv[0] -&gt; &quot;arg0\0&quot;
+ | (char *)argv[1] -&gt; &quot;arg1\0&quot;
+ | (char *)argv[2] -&gt; &quot;arg2\0&quot;
+ | (char *)argv[3] -&gt; &quot;arg3\0&quot;
+ | (char *)argv[4] -&gt; &quot;arg4\0&quot;
+ | (char *)argv[5] -&gt; &quot;arg5\0&quot;
+ | ...
+ | (char *)argv[N] -&gt; &quot;argN\0&quot;
+ | (char *)NULL</code></pre>
+<p>This means that our most memory-efficient input would be an array of
+zero-byte arguments. Note, that in this case main overhead is on
+pointer array and not on the arguments themselves.</p>
+<p>That would be something like:</p>
+<pre><code> | (char *)argv[0] -&gt; &quot;\0&quot;
+ | (char *)argv[1] -&gt; &quot;\0&quot;
+ | (char *)argv[2] -&gt; &quot;\0&quot;
+ | (char *)argv[3] -&gt; &quot;\0&quot;
+ | (char *)argv[4] -&gt; &quot;\0&quot;
+ | (char *)argv[5] -&gt; &quot;\0&quot;
+ | ...
+ | (char *)argv[N] -&gt; &quot;\0&quot;
+ | (char *)NULL</code></pre>
+<p>On 64-bit systems this gives us 9 bytes per argument. That gives us
+<code>2MB / 9 = 233016</code> arguments. The experiment confirms that we are very
+close:</p>
+<pre><code>$ ./probe-argsize.bash &quot;&quot; env -i $(which printf) &quot;%s&quot; --
+232134</code></pre>
+<p>An exercise for the reader: why is it 822 arguments shorter that our
+maximum theoretical value? A word of warning: it’s not a very simple
+question.</p>
+<p>Given that <code>2MB</code> is derived from <code>1/4 * CURRENT_STACK_LIMIT</code> we can
+increase that as well using <code>ulimit -s</code>. Let’s add 100x:</p>
+<pre><code>$ ulimit -s
+8192
+$ ulimit -s 819200
+
+$ ./probe-argsize.bash &quot;&quot; env -i $(which printf) &quot;%s&quot; --
+698168</code></pre>
+<p>Note that it’s only a 3x improvement (and not a 100x improvement).</p>
+<p>This is exactly our <code>limit = 6MB;</code> absolute limit above. Once again: i
+you need to get maximum out of your argument limits on today’s <code>linux</code>
+it’s enough to set <code>ulimit -s</code> from <code>8MB</code> to <code>24MB</code>.</p>
+<p>Which gives us final formula of <code>6MB / 9 = 699050</code> argument count on
+64-bit systems.</p>
+<p>Fun fact: on 32-bit host kernel the limit should probably be slightly higher
+due to shorter pointer size:</p>
+<ul>
+<li><code>2MB / 5 = 419430</code> arguments (compared to <code>233016</code> on <code>64-bit</code>)</li>
+<li><code>6MB / 5 = 1258291</code> arguments (compared to <code>699050</code> on <code>64-bit</code>)</li>
+</ul>
+<p>That is 1.8x larger than 64-bit systems!</p>
+<p>Once again: it’s a pretty silly benchmark as it’s not very useful to
+pass a million empty strings to the program. But it’s a good model to
+understand the absolute limits.</p>
+<p>We can do more realistic estimates if we know average argument length
+in our use case. Say, if the bulk of our parameters are paths to the
+<code>/nix/store</code> we can safely say those are at least 50 bytes long.</p>
+<p>For 100-bytes long use case we would get:</p>
+<ul>
+<li><code>2MB / 109 = 19239</code> (64-bit), <code>2MB / 105 = 19972</code> (32-bit)</li>
+<li><code>6MB / 109 = 57719</code> (64-bit), <code>6MB / 105 = 59918</code> (32-bit)</li>
+</ul>
+<p>Thus for simple case we should be able to pull out almost <code>~20K</code> by
+default and almost <code>~60K</code> with larger stack size.</p>
+<h2 id="nixpkgs-gcc-wrapper-mystery"><code>nixpkgs</code> <code>gcc</code> wrapper mystery</h2>
+<p>So why does <code>gcc</code> have so much overhead of <code>-g</code> options? We get about
+<code>190K</code> options for for <code>printf -g</code> and only 20K for <code>gcc -g</code> above.
+That is almost 10x reduction.</p>
+<p>Could <code>nixpkgs</code>’s <code>gcc</code> wrapper artificially inflate it’s arguments
+somehow? <code>strace</code> should help us verify that:</p>
+<pre><code>$ nix shell nixpkgs#gcc
+$$ touch a.c &amp;&amp; strace -etrace=execve -s 10000 -f -v -olog gcc -Ihow-many-duplcates -c a.c
+
+$$ grep cc1 log
+1290300 execve(&quot;.../cc1&quot;, [..., , &quot;-I&quot;, &quot;how-many-duplcates&quot;, ...], [..., &quot;COLLECT_GCC_OPTIONS='-I' 'how-many-duplcates' ...&quot;, ...]) = 0</code></pre>
+<p>Not too bad: we see 2x explosion here:</p>
+<ul>
+<li>one option is in argument list</li>
+<li>another is in <code>COLLECT_GCC_OPTIONS=</code> environment</li>
+</ul>
+<p>The <code>2x</code> explosion itself does not explain 10x reduction.</p>
+<p>There is also an extra catch: the way I tried to set the variable in
+<code>qemu</code> is via <code>NIX_CFLAGS_COMPILE=</code> environment variable. Those get
+translated by package setup hooks not visible in <code>nix shell</code>. Let’s
+check their full effect.</p>
+<p>I’ll write a complete small derivation to demonstrate the explosion
+closer to <code>qemu</code> failure mode.</p>
+<p>Here is a <code>default.nix</code> derivation that should demonstrate the point:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">pkgs</span> <span class="op">?</span> <span class="bu">import</span> &lt;nixpkgs&gt; <span class="op">{</span> <span class="op">}</span> <span class="op">}</span>:</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>pkgs.stdenv.mkDerivation <span class="op">{</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;probe-wrapper&quot;</span><span class="op">;</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">dontUnpack</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">nativeBuildInputs</span> <span class="op">=</span> <span class="op">[</span> pkgs.strace <span class="op">];</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>  <span class="va">NIX_CFLAGS_COMPILE</span> <span class="op">=</span> <span class="st">&quot;-Ihow-many-duplcates&quot;</span><span class="op">;</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>  <span class="va">postInstall</span> <span class="op">=</span> <span class="st">''</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a><span class="st">    touch a.c</span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a><span class="st">    strace -etrace=execve -s 10000 -f -v -o$out -- $CC -c a.c -o a.o</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a><span class="st">  ''</span><span class="op">;</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Now we can quickly build it and explore it’s contents:</p>
+<pre><code>$ nix-build
+$ grep cc1 result
+
+31 execve(&quot;.../cc1&quot;, [..., &quot;-I&quot;, &quot;how-many-duplcates&quot;, ...], &quot;NIX_CFLAGS_COMPILE_x86_64_unknown_linux_gnu=... -Ihow-many-duplcates ...&quot;, &quot;NIX_CFLAGS_COMPILE=-Ihow-many-duplcates ...&quot;, &quot;COLLECT_GCC_OPTIONS=... '-I' 'how-many-duplcates' ...&quot;]) = 0</code></pre>
+<p>Things are a bit worse here: we see 4x explosion:</p>
+<ul>
+<li>[as before] one option is in argument list</li>
+<li>[as before] another is in <code>COLLECT_GCC_OPTIONS=</code> environment</li>
+<li>[new] <code>NIX_CFLAGS_COMPILE</code> variable, the one we added and are using for injection</li>
+<li>[new] <code>NIX_CFLAGS_COMPILE_x86_64_unknown_linux_gnu</code> variable, the one
+<code>pkgs/build-support/cc-wrapper/setup-hook.sh</code> setup hook set for us</li>
+</ul>
+<p>And if we throw cross-compilation into the picture (ideally I wanted to
+avoid <code>__FILE__</code> leaks in all cases) and use all three
+<code>NIX_CFLAGS_COMPILE_FOR_BUILD</code>, <code>NIX_CFLAGS_COMPILE</code> and
+<code>NIX_CFLAGS_COMPILE_FOR_TARGET</code>:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">pkgs</span> <span class="op">?</span> <span class="bu">import</span> &lt;nixpkgs&gt; <span class="op">{</span> <span class="va">crossSystem</span> <span class="op">=</span> <span class="st">&quot;riscv64-linux&quot;</span><span class="op">;</span> <span class="op">}</span> <span class="op">}</span>:</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>pkgs.stdenv.mkDerivation <span class="op">{</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;probe-wrapper&quot;</span><span class="op">;</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">dontUnpack</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">nativeBuildInputs</span> <span class="op">=</span> <span class="op">[</span> pkgs.buildPackages.strace <span class="op">];</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  <span class="va">NIX_CFLAGS_COMPILE_FOR_BUILD</span> <span class="op">=</span>  <span class="st">&quot;-Ihow-many-duplcates&quot;</span><span class="op">;</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="va">NIX_CFLAGS_COMPILE</span> <span class="op">=</span>            <span class="st">&quot;-Ihow-many-duplcates&quot;</span><span class="op">;</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  <span class="va">NIX_CFLAGS_COMPILE_FOR_TARGET</span> <span class="op">=</span> <span class="st">&quot;-Ihow-many-duplcates&quot;</span><span class="op">;</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>  <span class="va">postInstall</span> <span class="op">=</span> <span class="st">''</span></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a><span class="st">    touch a.c</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a><span class="st">    strace -etrace=execve -s 10000 -f -v -o$out -- $CC -c a.c -o a.o</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a><span class="st">  ''</span><span class="op">;</span></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code>$ nix-build
+$ grep cc1 result
+
+35 execve(&quot;.../cc1&quot;, [..., &quot;-I&quot;, &quot;how-many-duplcates&quot;, ...], &quot;NIX_CFLAGS_COMPILE_riscv64_unknown_linux_gnu=... -Ihow-many-duplcates ...&quot;, &quot;NIX_CFLAGS_COMPILE_FOR_BUILD=-Ihow-many-duplcates ...&quot;, &quot;NIX_CFLAGS_COMPILE=-Ihow-many-duplcates ...&quot;, NIX_CFLAGS_COMPILE_FOR_TARGET=-Ihow-many-duplcates ...&quot;, &quot;COLLECT_GCC_OPTIONS=... '-I' 'how-many-duplcates' ...&quot;]) = 0</code></pre>
+<p>Here we see 6x explosion:</p>
+<ul>
+<li>[as before] one option is in argument list</li>
+<li>[as before] another is in <code>COLLECT_GCC_OPTIONS=</code> environment</li>
+<li>[as before] <code>NIX_CFLAGS_COMPILE</code> variable, the one we added and are using for injection</li>
+<li>[as before] <code>NIX_CFLAGS_COMPILE_riscv64_unknown_linux_gnu</code> variable, the one
+<code>pkgs/build-support/cc-wrapper/setup-hook.sh</code> setup hook set for us</li>
+<li>[new] <code>NIX_CFLAGS_COMPILE_FOR_BUILD</code> variable, we set ourselves</li>
+<li>[new] <code>NIX_CFLAGS_COMPILE_FOR_TARGET</code> variable, we set ourselves</li>
+</ul>
+<p>None of these variables looks redundant: they serve the purpose to
+propagate flags across shell wrappers. Thus we’ll have to keep in mind
+this 6x explosion.</p>
+<p>And yet. 6x explosion does not explain why mere <code>-g</code> option can be
+present only 20K times instead of 200K times.</p>
+<h2 id="another-nasty-limit">Another nasty limit</h2>
+<p>I skimmed through maximum individual variable length limit above as if
+it did not exist. But it’s there! Look:</p>
+<pre><code>$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; 100000) $(printf &quot;%0*d&quot; 100000) $(printf &quot;%0*d&quot; 100000) $(printf &quot;%0*d&quot; 100000) &gt;/dev/null; echo $?
+0
+$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; 200000) &gt;/dev/null; echo $?
+-bash: /run/current-system/sw/bin/printf: Argument list too long
+126</code></pre>
+<p>More precise limit is <code>128K</code>:</p>
+<pre><code>$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; $((2 ** 17)) ) &gt;/dev/null; echo $?
+-bash: /run/current-system/sw/bin/printf: Argument list too long
+126
+$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; $((2 ** 17 - 1)) ) &gt;/dev/null; echo $?
+0
+$ echo $((2 ** 17))
+131072</code></pre>
+<p>It comes from <code>copy_string()</code> from the same
+<a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L523">fs/exec.c</a>:</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> copy_strings<span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="kw">struct</span> user_arg_ptr argv<span class="op">,</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>			<span class="kw">struct</span> linux_binprm <span class="op">*</span>bprm<span class="op">)</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>	<span class="kw">struct</span> page <span class="op">*</span>kmapped_page <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>	<span class="dt">char</span> <span class="op">*</span>kaddr <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>	<span class="dt">unsigned</span> <span class="dt">long</span> kpos <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>	<span class="dt">int</span> ret<span class="op">;</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>	<span class="cf">while</span> <span class="op">(</span>argc<span class="op">--</span> <span class="op">&gt;</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>		<span class="dt">const</span> <span class="dt">char</span> __user <span class="op">*</span>str<span class="op">;</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>		<span class="dt">int</span> len<span class="op">;</span></span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>		<span class="dt">unsigned</span> <span class="dt">long</span> pos<span class="op">;</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a>		ret <span class="op">=</span> <span class="op">-</span>EFAULT<span class="op">;</span></span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>		str <span class="op">=</span> get_user_arg_ptr<span class="op">(</span>argv<span class="op">,</span> argc<span class="op">);</span></span>
+<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(</span>IS_ERR<span class="op">(</span>str<span class="op">))</span></span>
+<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a>			<span class="cf">goto</span> out<span class="op">;</span></span>
+<span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-19"><a href="#cb31-19" aria-hidden="true" tabindex="-1"></a>		len <span class="op">=</span> strnlen_user<span class="op">(</span>str<span class="op">,</span> MAX_ARG_STRLEN<span class="op">);</span></span>
+<span id="cb31-20"><a href="#cb31-20" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(!</span>len<span class="op">)</span></span>
+<span id="cb31-21"><a href="#cb31-21" aria-hidden="true" tabindex="-1"></a>			<span class="cf">goto</span> out<span class="op">;</span></span>
+<span id="cb31-22"><a href="#cb31-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-23"><a href="#cb31-23" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(!</span>len<span class="op">)</span></span>
+<span id="cb31-24"><a href="#cb31-24" aria-hidden="true" tabindex="-1"></a>			<span class="cf">goto</span> out<span class="op">;</span></span>
+<span id="cb31-25"><a href="#cb31-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-26"><a href="#cb31-26" aria-hidden="true" tabindex="-1"></a>		ret <span class="op">=</span> <span class="op">-</span>E2BIG<span class="op">;</span></span>
+<span id="cb31-27"><a href="#cb31-27" aria-hidden="true" tabindex="-1"></a>		<span class="cf">if</span> <span class="op">(!</span>valid_arg_len<span class="op">(</span>bprm<span class="op">,</span> len<span class="op">))</span></span>
+<span id="cb31-28"><a href="#cb31-28" aria-hidden="true" tabindex="-1"></a>			<span class="cf">goto</span> out<span class="op">;</span></span>
+<span id="cb31-29"><a href="#cb31-29" aria-hidden="true" tabindex="-1"></a>	<span class="co">// ...</span></span>
+<span id="cb31-30"><a href="#cb31-30" aria-hidden="true" tabindex="-1"></a>out<span class="op">:</span></span>
+<span id="cb31-31"><a href="#cb31-31" aria-hidden="true" tabindex="-1"></a>	<span class="co">// ...</span></span>
+<span id="cb31-32"><a href="#cb31-32" aria-hidden="true" tabindex="-1"></a>	<span class="cf">return</span> ret<span class="op">;</span></span>
+<span id="cb31-33"><a href="#cb31-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb31-34"><a href="#cb31-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-35"><a href="#cb31-35" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">bool</span> valid_arg_len<span class="op">(</span><span class="kw">struct</span> linux_binprm <span class="op">*</span>bprm<span class="op">,</span> <span class="dt">long</span> len<span class="op">)</span></span>
+<span id="cb31-36"><a href="#cb31-36" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb31-37"><a href="#cb31-37" aria-hidden="true" tabindex="-1"></a>	<span class="cf">return</span> len <span class="op">&lt;=</span> MAX_ARG_STRLEN<span class="op">;</span></span>
+<span id="cb31-38"><a href="#cb31-38" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>MAX_ARG_STRLEN</code> (<code>128K</code>) limits individual entries in arguments
+and environment variable entries:</p>
+<pre><code>$ E=$(printf &quot;%0*d&quot; $((2 ** 17 - 3)) ) $(which printf) &quot;1&quot; &gt;/dev/null; echo $?
+0
+$ E=$(printf &quot;%0*d&quot; $((2 ** 17 - 2)) ) $(which printf) &quot;1&quot; &gt;/dev/null; echo $?
+-bash: /run/current-system/sw/bin/printf: Argument list too long
+126</code></pre>
+<p>Here we run <code>printf 1</code> with a large <code>E=000000...000</code> variable and expose
+the same <code>128K</code> limit.</p>
+<p>This is bad news. As we saw above <code>gcc</code> uses single <code>COLLECT_GCC_OPTIONS</code>
+variable to pass all options around. And on top of that it quotes each
+argument.</p>
+<p>As a result <code>gcc -g -g ...</code> turns into
+<code>COLLECT_GCC_OPTIONS="'-g' '-g' ..."</code>. This means that we are limited by
+a <code>128K</code> limit when it comes to <code>gcc</code> flags.</p>
+<p>To estimate our best limit <code>-g</code> gets translated to <code>"'-g' "</code>: 2 bytes
+get turned into 5. That means we can put <code>128K / 5 = 26214</code> entries.</p>
+<p>That is very close to our <code>26118</code> limit we got above. Again, why the
+values differ by <code>96</code> entries is another exercise to the reader.</p>
+<h2 id="the-variable-budget">The variable budget</h2>
+<p>Let’s see what worst-case scenario for the longest option we have for
+<code>-fmacro-prefix-map=</code> on my system for directories that have <code>include</code>
+subdirectory:</p>
+<pre><code>$ for d in *; do [[ -d &quot;$d/include&quot; ]] &amp;&amp; echo &quot;${#d} $d&quot;; done | sort -k 1 -n | tail -n 10
+87 s2zpr18vjr274yaalgz5c4g7dx51cvb9-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+87 s5gn9gwwwpm8ln84apjb8hbrhihq72d4-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+87 scihnclavazxzk0vgblhp4371s3gr40c-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+87 sdf4v7s0avfkgnnnx1hq000ydl7bz9sd-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+87 xfl1c6qmr8b39bxgpmjp004afknm54av-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+87 y00bh71xvsrkazdjy5w4ii8pdkdwb5hr-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+87 z8k642hwqflwmp16ql3jj7z1pslyznzq-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
+88 6lw175bhq8d669jl1ddvwy49hcmlysi0-gmp-with-cxx-static-x86_64-unknown-linux-musl-6.3.0-dev
+89 ljrwhpdcv7xzmxbank3jdi2xyga553s5-gmp-with-cxx-static-aarch64-unknown-linux-musl-6.3.0-dev
+94 r5gzvnjnq024gr830nvpkcyd7n4ip33v-libnetfilter_conntrack-static-x86_64-unknown-linux-musl-1.0.9</code></pre>
+<p>About 90 bytes. With added <code>/nix/store</code> prefix that would be <code>100</code>
+characters long paths. Nice round number.</p>
+<p>This makes <code>-fmacro-prefix-map=/nix/store/...=/nix/store/...</code> options
+around 220 bytes.</p>
+<p>How many of those can we realistically set for our <code>2MB</code> budget?</p>
+<ul>
+<li>for 4x overhead: <code>2 * 1024 * 1024 / (220 + 9) / 4 = 2289</code> variables</li>
+<li>for 6x overhead: <code>2 * 1024 * 1024 / (220 + 9) / 6 = 1526</code> variables</li>
+</ul>
+<p>But given <code>COLLECT_GCC_OPTIONS</code> limitation for <code>128K</code> our calculation
+becomes even more pessimistic:</p>
+<ul>
+<li>for no overhead: <code>128 * 1024 / (220 + 9) / 4 = 143</code> variables!</li>
+</ul>
+<p>It might sound like a lot but it’s not that much of a budget: some
+packaging systems (like <code>haskell</code>’s <code>hackage</code>) do like small
+fine-grained packages and occasionally do install <code>C</code> header files.
+<code>nix</code> itself favours smaller packages to speed up rebuilds and shrink
+runtime closure. <code>pkg-config</code> is geared towards installing packages
+into individual directories.</p>
+<p>And what is worse: <code>NIX_CFLAGS_COMPILE</code> is not the only option
+that exhibits this behaviour. Here is the longer list following
+<code>mangleVarList</code> used in <code>nixpkgs</code>:</p>
+<pre><code># from pkgs/build-support/cc-wrapper/add-flags.sh
+NIX_CFLAGS_COMPILE
+NIX_CFLAGS_COMPILE_BEFORE
+NIX_CFLAGS_LINK
+NIX_CXXSTDLIB_COMPILE
+NIX_CXXSTDLIB_LINK
+NIX_GNATFLAGS_COMPILE
+
+# from ./pkgs/build-support/bintools-wrapper/add-flags.sh
+NIX_IGNORE_LD_THROUGH_GCC
+NIX_LDFLAGS
+NIX_LDFLAGS_BEFORE
+NIX_DYNAMIC_LINKER
+NIX_LDFLAGS_AFTER
+NIX_LDFLAGS_HARDEN
+NIX_HARDENING_ENABLE
+
+# from pkgs/build-support/cc-wrapper/add-gnat-extra-flags.sh
+NIX_GNATMAKE_CARGS
+
+# from pkgs/build-support/pkg-config-wrapper/add-flags.sh
+PKG_CONFIG_PATH</code></pre>
+<p>Thus worst case we get to set at most ~150 entries for all of these
+variables.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Even on <code>linux</code> command line argument limits are hard. If you can try to
+use files to pass inputs of unbounded sizes.</p>
+<p><code>linux</code> has unreachable <code>0-x7fffFFFF</code> argument count limit when executing
+the commands. It does have an overall limit <code>2MB</code> limit that one can
+increase to <code>6MB</code>. And on top of that individual arguments are limited
+by <code>128K</code> limit that you can’t raise.</p>
+<p>The above effectively means that argument passing overheads define
+argument count limit. For arguments of length <code>0</code> by default you can
+pass <code>233016</code> empty strings on 64-bit kernel and <code>419430</code> on 32-bit one.</p>
+<p>If you increase the default stack size with <code>ulimit -s</code> you can get up
+to <code>1258291</code> empty string arguments on 32-bits and <code>699050</code> on 64-bits.</p>
+<p>For practical argument lengths actual values are way smaller: in order
+of thousands to tens of thousands.</p>
+<p><code>gcc</code> is a special <code>COLLECT_GCC_OPTIONS</code> case and it has a limit of
+<code>128KB</code> making argument limits onto hundreds.</p>
+<p>Initially I planned to workaround <code>qemu</code> failure by using <code>gcc</code>’s
+response files. I thought it would save the problem completely.
+Unfortunately <code>COLLECT_GCC_OPTIONS</code> contains already expanded response
+file contents and thus response files will only remove multiplication
+factor but will not sidestep 128KB limit.</p>
+<p>On the bright side <code>COLLECT_GCC_OPTIONS</code> is an internal <code>gcc</code>
+implementation detail that should be fixable without much external
+impact. Even if we move it to proper argument list it should already
+unlock <code>2MB</code> limit. And if we could pass response files through we cloud
+sidestep the limit entirely.</p>
+<p>But meanwhile I’ll try to patch <code>gcc</code> (and maybe <code>clang</code>?) just for
+<code>nixpkgs</code> to apply programmatic mangling similar to:</p>
+<pre><code># Pseudocode. real regexps do not work for `gcc`:
+-fmacro-prefix-map=s,$NIX_STORE/[a-z0-9]{32}-,$NIX_STORE/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-</code></pre>
+<p>Have fun!</p>
+
+<div class="info">
+    Posted on September 21, 2023 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
+    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
+    are welcome!
+</div>
+]]></summary>
+</entry>
+<entry>
     <title>Unexpected runtime dependencies in nixpkgs</title>
     <link href="http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html" />
     <id>http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html</id>
@@ -7485,335 +8092,6 @@ blog post. It will hopefully reduce load on your RSS feed.</p>
 
 <div class="info">
     Posted on December 18, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
-    <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
-    are welcome!
-</div>
-]]></summary>
-</entry>
-<entry>
-    <title>A dataflow gcc bug</title>
-    <link href="http://trofi.github.io/posts/269-a-dataflow-gcc-bug.html" />
-    <id>http://trofi.github.io/posts/269-a-dataflow-gcc-bug.html</id>
-    <published>2022-12-10T00:00:00Z</published>
-    <updated>2022-12-10T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>Let’s look at a simpler <code>gcc</code> bug today:
-<a href="https://gcc.gnu.org/PR107879">PR107879</a>. There <code>ffmpeg-4</code> started
-failing it’s testsuite on <code>gcc-13</code> from this week’s master:</p>
-<pre><code>$ ./tests/fate-run.sh fate-swr-resample-s16p-2626-8000 &quot;&quot; &quot;&quot; \
-  &quot;ffmpeg&quot; 'ffmpeg -i tests/data/asynth-2626-1.wav \
-  -af atrim=end_sample=10240,\
-aresample=8000:internal_sample_fmt=s16p:exact_rational=0:linear_interp=0,\
-aformat=s16p,\
-aresample=2626:internal_sample_fmt=s16p:exact_rational=0:linear_interp=0 \
-  -f wav -c:a pcm_s16le -' 'stddev' 'tests/data/asynth-2626-1.wav' '0.1' '1' '' '' '' '1393.36' '31512 - 20482' 's16' '' '' '' ''
-...
-FAIL fate-swr-resample-s16p-2626-8000</code></pre>
-<h2 id="on-ffmpeg-structure">On ffmpeg structure</h2>
-<p>While the prospect of debugging multimedia package might sound scary
-<code>ffmpeg</code> is a lot simpler to explore than other complex projects like
-<code>llvm</code> or <code>gcc</code>.</p>
-<p><code>ffmpeg</code> can be viewed as a simple buffer-in / buffer-out stream codec
-(just like <code>zlib</code> or <code>zstd</code>). It’s hard to come up with a new clever
-algorithm. But debugging already written one is usually straightforward.</p>
-<p>Individual bytes when they get from input to output are either copied as
-is or get slightly transformed without too much state to be collected
-along the way. The code is written to be not too slow which means there
-are not many high level abstractions or deep memory indirections.</p>
-<p>Then if it’s all so somple what could possible go wrong there then? Is
-there even a place for <code>gcc</code> to find a crack to fall in? Let’s find out.</p>
-<p>The only caveat is that for most algorithms use floating points all over
-the place. That might make computations not bit-for-bit reproducible
-even on different optimization levels.</p>
-<p>The change in behaviour we see might not be the bug at all.</p>
-<h2 id="extracting-minimized-example">Extracting minimized example</h2>
-<p>The above <code>$ ./tests/fate-run.sh fate-swr-resample-s16p-2626-8000 ...</code>
-command was failing consistently when built with <code>gcc-master</code> and was
-succeeding when built with <code>gcc-12</code>. With help of
-<code>#pragma GCC optimize(0)</code> I nailed the misclmpilation down to
-<a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c">libswresample/resample.c</a>
-file. <code>build_filter()</code> function produced different filters for good and
-bad cases.</p>
-<p>Once I extracted test inputs for <code>build_filter()</code> I managed to craft the
-following self-contained example that exhibits the problem:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">,</span> noipa<span class="op">))</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">double</span> build_filter<span class="op">(</span><span class="dt">double</span> <span class="op">*</span> y<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">int</span> ph <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">double</span> vf <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> factor <span class="op">=</span> vf<span class="op">;</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> x <span class="op">=</span> <span class="op">-</span> <span class="op">(</span><span class="dt">double</span><span class="op">)</span>ph <span class="op">*</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;z = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> x<span class="op">);</span>   <span class="co">/* prints -0.0, ok */</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* This 'if / else' code should not affect calculation of 'ffm', but</span></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="co">       removing it does change things. */</span></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>x <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span>    <span class="co">/* should be 1.0 or .. */</span></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span> <span class="op">/</span> x<span class="op">;</span>       <span class="co">/* -inf? */</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;*y = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">*</span>y<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> w <span class="op">=</span> <span class="fl">2.0</span> <span class="op">*</span> x <span class="op">/</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;w = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> w<span class="op">);</span> <span class="co">/* prints -0.0, ok */</span></span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> omww <span class="op">=</span> <span class="dv">1</span> <span class="op">-</span> w<span class="op">;</span>                  <span class="co">/* should be 1.0 */</span></span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;omww = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> omww<span class="op">);</span> <span class="co">/* printf 1.0, ok */</span></span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="dv">0</span><span class="er">.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;ffm = </span><span class="sc">%f\n</span><span class="st">&quot;</span><span class="op">,</span> ffm<span class="op">);</span> <span class="co">/* printf 0.0 or 1.0, </span><span class="al">BUG</span><span class="co"> */</span></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ffm<span class="op">;</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span></span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> y <span class="op">=</span> <span class="fl">42.0</span><span class="op">;</span></span>
-<span id="cb2-32"><a href="#cb2-32" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> filter <span class="op">=</span> build_filter<span class="op">(&amp;</span>y<span class="op">);</span></span>
-<span id="cb2-33"><a href="#cb2-33" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-34"><a href="#cb2-34" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = </span><span class="sc">%.20f</span><span class="st">; y = </span><span class="sc">%.20f\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
-<span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should be 1.0, sometimes returns 0.0. */</span></span>
-<span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;</span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
-<span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>It’s a bit long but very straightforward: no loops, just one condition.</p>
-<p>Here is the output difference in <code>-O0</code> / <code>-O1</code> comparison on
-<code>gcc-master</code>:</p>
-<pre><code># -O0, good:
-$ gcc-HEAD/bin/gcc -O0 -lm a.c -o a -mfpmath=sse -fexcess-precision=standard -Wall -Wextra &amp;&amp; ./a
-z = -0.000000
-*y = 1.000000
-w = -0.000000
-omww = 1.000000
-ffm = 1.000000
-f = 1.00000000000000000000; y = 1.00000000000000000000
-OK
-
-# -O1, bad:
-$ gcc-HEAD/bin/gcc -O1 -lm a.c -o a -mfpmath=sse -fexcess-precision=standard -Wall -Wextra &amp;&amp; ./a
-z = -0.000000
-*y = 1.000000
-w = -0.000000
-omww = 1.000000
-ffm = 0.000000
-f = 0.00000000000000000000; y = 1.00000000000000000000
-BUG</code></pre>
-<p>Note how <code>-O0</code> case computes correct <code>f = 1.0</code> and <code>-O1</code> computes
-incorrect <code>f = 0.0</code>. There are no denormalized values. Just <code>0.0</code>,
-<code>1.0</code> and <code>2.0</code>. All of them are representable perfectly in 32-bit
-<code>float</code> or 64 <code>double</code> types. Thus the result should not be affected
-by finer optimizations like fused-multiply-add which might observably
-increase precision.</p>
-<p>Let’s strip all the <code>printf()</code> calls off <code>build_filter()</code> to ease
-inspection of <code>gcc</code> optimization process:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">,</span> noipa<span class="op">))</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">double</span> build_filter<span class="op">(</span><span class="dt">double</span> <span class="op">*</span> y<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">int</span> ph <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">double</span> vf <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> factor <span class="op">=</span> vf<span class="op">;</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> x <span class="op">=</span> <span class="op">-</span> <span class="op">(</span><span class="dt">double</span><span class="op">)</span>ph <span class="op">*</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* This 'if / else' code should not affect calculation of 'ffm', but</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="co">       removing it does change things. */</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>x <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span><span class="op">;</span>    <span class="co">/* should be 1.0 or .. */</span></span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">*</span>y <span class="op">=</span> <span class="fl">1.0</span> <span class="op">/</span> x<span class="op">;</span>       <span class="co">/* -inf? */</span></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> w <span class="op">=</span> <span class="fl">2.0</span> <span class="op">*</span> x <span class="op">/</span> factor<span class="op">;</span> <span class="co">/* should be -0.0 */</span></span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> omww <span class="op">=</span> <span class="dv">1</span> <span class="op">-</span> w<span class="op">;</span>                  <span class="co">/* should be 1.0 */</span></span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> ffm <span class="op">=</span> <span class="op">(</span>omww <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.0</span><span class="op">)</span> <span class="op">?</span> omww <span class="op">:</span> <span class="dv">0</span><span class="er">.0</span><span class="op">;</span> <span class="co">/* should be 1.0 */</span></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ffm<span class="op">;</span></span>
-<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span></span>
-<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> y <span class="op">=</span> <span class="fl">42.0</span><span class="op">;</span></span>
-<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> filter <span class="op">=</span> build_filter<span class="op">(&amp;</span>y<span class="op">);</span></span>
-<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;f = </span><span class="sc">%.1f</span><span class="st">; y = </span><span class="sc">%.1f\n</span><span class="st">&quot;</span><span class="op">,</span> filter<span class="op">,</span> y<span class="op">);</span></span>
-<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should be 1.0, sometimes returns 0.0. */</span></span>
-<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;</span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">(</span>filter <span class="op">&gt;</span> <span class="dv">0</span><span class="er">.5</span><span class="op">)</span> <span class="op">?</span> <span class="st">&quot;OK&quot;</span> <span class="op">:</span> <span class="st">&quot;BUG&quot;</span><span class="op">);</span></span>
-<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The bug is still here:</p>
-<pre><code># -O0, good:
-$ gcc-HEAD/bin/gcc -O0 -lm b.c -o b &amp;&amp; ./b
-f = 1.0; y = 1.0
-OK
-
-# -O1, bad:
-$ gcc-HEAD/bin/gcc -O1 -lm b.c -o b &amp;&amp; ./b
-f = 0.0; y = 1.0
-BUG</code></pre>
-<p>I had to use a bit fo <code>volatile</code> to prevent <code>gcc</code> from folding constants
-early and eliminate the the bug condition.</p>
-<p>Fun fact: this test case still fails on <code>gcc-master</code> while original
-<code>ffmpef-4</code> test suite does not. Looks like some unrelated detail of
-<code>gcc</code> changed to partially mask the bug. If I was not quick enough
-to extract the reproducer it might take a bit more time to restore
-the envieonment and get it.</p>
-<h2 id="diving-into-iptimization-process">Diving into iptimization process</h2>
-<p>As usual <code>-fdump-tree-all</code> is our friend to find out when suspicios
-pass broke our program.</p>
-<p><code>gcc-HEAD/bin/gcc -O1 -lm b.c -o b -fdump-tree-optimized-slim</code> shows the
-following final state in <code>b.c.254t.optimized</code>:</p>
-<pre><code>__attribute__((noipa, noinline, noclone, no_icf))
-double build_filter (double * y)
-{
-  double omww;
-  double w;
-  double x;
-  double factor;
-  volatile double vf;
-  volatile int ph;
-  int ph.4_1;
-  double _2;
-  double _3;
-  double _4;
-  double _5;
-  double iftmp.5_6;
-  double _20;
-
-  &lt;bb 2&gt; [local count: 1073741824]:
-  ph ={v} 0;
-  vf ={v} 1.0e+0;
-  factor_11 ={v} vf;
-  ph.4_1 ={v} ph;
-  _2 = (double) ph.4_1;
-  _3 = -_2;
-  x_12 = _3 * factor_11;
-  if (x_12 == 0.0)
-    goto &lt;bb 5&gt;; [50.00%]
-  else
-    goto &lt;bb 3&gt;; [50.00%]
-
-  &lt;bb 3&gt; [local count: 633507680]:
-  _4 = 1.0e+0 / x_12;
-  _5 = x_12 * 2.0e+0;
-  w_16 = _5 / factor_11;
-  omww_17 = 1.0e+0 - w_16;
-  if (omww_17 &gt; 0.0)
-    goto &lt;bb 4&gt;; [100.00%]
-  else
-    goto &lt;bb 5&gt;; [0.00%]
-
-  &lt;bb 4&gt; [local count: 633507680]:
-
-  &lt;bb 5&gt; [local count: 1073741824]:
-  # iftmp.5_6 = PHI &lt;omww_17(4), 0.0(3), 0.0(2)&gt;
-  # _20 = PHI &lt;_4(4), _4(3), 1.0e+0(2)&gt;
-  *y_13(D) = _20;
-  return iftmp.5_6;
-}</code></pre>
-<p>Can you spot the bug? It might be a bit hard to read. I can’t easily
-follow it due to many branch conditions. I could vaguely see that this
-example is incorrect, but tracing the dumps through each of ~100 <code>gcc</code>
-passes would be too slow. I asked <code>gcc</code> to dump <code>graphviz</code> style outputs
-with <code>-fdump-tree-optimized-graph</code>. <code>b.c.254t.optimized.dot</code> generates
-the following picture:</p>
-<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.254t.optimized.svg" /></p>
-<p>Arc legend here is the following:</p>
-<ul>
-<li>green color is <code>TRUE</code> case of branch in <code>if</code> condition.</li>
-<li>orange color is <code>FALSE</code> case of branch in <code>if</code> condition.</li>
-</ul>
-<p>I find graphical output to be slightly easier to follow: our
-<code>x_12 == 0.0</code> is supposed to be <code>TRUE</code>. Fun fact: <code>-0.0</code> is equal to
-<code>0.0</code> according to <code>C</code> and <code>IEEE-754</code> rules.</p>
-<p>This means that none of <code>bb3</code> or <code>bb4</code> are executed and
-<code>iftmp.5_6</code> <code>PHI</code> node brings in <code>0.0</code> value from <code>bb2</code>:</p>
-<pre><code>  &lt;bb 5&gt; [local count: 1073741824]:
-  # iftmp.5_6 = PHI &lt;omww_17(4), 0.0(3), 0.0(2)&gt;
-  ...
-  *y_13(D) = _20;
-  return iftmp.5_6;</code></pre>
-<p>I went through the graphs of all tree passes dumped with
-<code>gcc-HEAD/bin/gcc -O1 -lm b.c -o b -fdump-tree-all-graph</code> to find the
-seemingly problematic graph.</p>
-<p>Here is our <code>b.c.015t.cfg.dot</code> original unoptimized graph as a reference:</p>
-<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.015t.cfg.svg" /></p>
-<p>Let’s trace it through to make sure it’s correct. It wil also help
-getting used to variable names and expected basic block effects:</p>
-<ul>
-<li>in <code>bb2</code> (entrance):
-<ul>
-<li><code>ph.4_1 = ph = 0;</code></li>
-<li><code>factor = vf = 1.0;</code></li>
-<li><code>_2 = ph.4_1; /* 0.0 */</code></li>
-<li><code>_3 = -_2; /* -0.0 */</code></li>
-<li><code>x = factor * _3; /* -0.0 */</code></li>
-<li><code>if (x == 0.0) goto bb3;</code></li>
-</ul></li>
-<li>in <code>bb3</code> (branch taken):
-<ul>
-<li><code>*y = 1.0;</code> (not interesting)</li>
-<li><code>goto bb5;</code></li>
-</ul></li>
-<li>in <code>bb5</code>:
-<ul>
-<li><code>_5 = x * 2.0; /* -0.0 */</code></li>
-<li><code>w = _5 / factor; /* -0.0 */</code></li>
-<li><code>omw = 1.0 - w; /* 1.0 */</code></li>
-<li><code>if (omww &gt; 0.0) goto bb6;</code></li>
-</ul></li>
-<li>in <code>bb6</code>: (return)
-<ul>
-<li><code>iftmp.5 = omww; /* 1.0 */</code></li>
-<li><code>goto bb8;</code></li>
-</ul></li>
-<li>in <code>bb8</code>:
-<ul>
-<li><code>ffm = iftmp.5; /* 1.0 */</code></li>
-<li><code>D.3203 = ffm; /* 1.0 */</code></li>
-<li><code>return D.3203; /* 1.0 */</code></li>
-</ul></li>
-</ul>
-<p>It’s a bit verbose but very straightforward. The effect is:</p>
-<ul>
-<li><code>w</code> gets calculated to <code>0.0</code></li>
-<li><code>omww</code> and <code>ffm</code> get calculated to <code>1.0</code> and return the value</li>
-</ul>
-<p>If we look further down the optimization passes I think the
-<code>b.c.128t.sra</code> is last valid step:</p>
-<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.128t.sra.svg" /></p>
-<p>And <code>b.c.130t.dom2</code> is first problematic step:</p>
-<p><img src="http://trofi.github.io/posts.data/269-a-dataflow-gcc-bug/b.c.130t.dom2.svg" /></p>
-<p>Note how <code>omww_22 = 1.0 - w_21;</code> in <code>bb6</code> is never read. Instead our
-<code>PHI</code> node <code># iftmp.5_6 = PHI &lt;omww_17(3), 0.0(4), 0.0(6)&gt;</code> claims
-that <code>bb6</code> always brings in <code>0.0</code> value in <code>0.0(6)</code> alternative.</p>
-<p>Why does it happen? At this point I gave up and filed
-<a href="https://gcc.gnu.org/PR107879" class="uri">https://gcc.gnu.org/PR107879</a> bug.</p>
-<p>Then I bisected <code>gcc</code> down to <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=d4c2f1d376da6f">commit d4c2f1d3</a>:</p>
-<pre><code>commit d4c2f1d376da6fc3f3c30a9d3160e43c95399343
-Date:   Sat Nov 12 09:39:00 2022 +0100
-
-    range-op: Implement op[12]_range operators for {PLUS,MINUS,MULT,RDIV}_EXPR</code></pre>
-<p>The commit changed value ranges inferred for variables to simplify the
-call graph by eliminating impossible edges. Alexander confirmed that
-<code>dom2/dom3</code> passes take part in destroying original program and Jakub
-nailed it down to incorrect inferred ranges around the division.</p>
-<p>I would like to get a bit better understanding at how and when ranges
-get computed for this example. So far I don’t know how to look at them
-in detail.</p>
-<h2 id="parting-words">Parting words</h2>
-<ul>
-<li><code>ffmpeg</code> while being simple and full of assembly still can step on
-<code>gcc</code> bugs in more obscure areas.</li>
-<li><code>ffmpeg</code> uses
-<a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c#L182-L183">cubic formula</a>
-to upsample inputs.</li>
-<li><code>-0.0</code> is equal to <code>0.0</code> according to IEEE754 even if binary encodings
-differ.</li>
-<li><code>gcc</code>’s dataflow related to value ranges is a bit hard to follow even in
-<code>-fdump-*</code> outputs.</li>
-<li><code>gcc</code>’s <code>-fdump-*-graph</code> set of options dump nice <code>.dot</code>-style outputs
-for visual debugging.</li>
-<li><code>volatile</code> is great at inhibiting complex constant propagation
-optimizations.</li>
-</ul>
-<p>Have fun!</p>
-
-<div class="info">
-    Posted on December 10, 2022 by trofi. <a href="mailto:slyich@gmail.com">Email</a>,
     <a href="https://github.com/trofi/trofi.github.io.gen">pull requests or comments</a>
     are welcome!
 </div>
