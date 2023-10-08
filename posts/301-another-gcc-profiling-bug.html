@@ -55,7 +55,7 @@ I had to do two minor tweaks:</p>
 <li>set <code>--enable-checking=yes</code> for <code>gcc_debug</code></li>
 <li>change <code>python3</code> <code>nixpkgs</code> package to use <code>gcc_debug</code></li>
 </ol>
-<p>Out of laziness I patched <code>--enable-checkoing=yes</code> into local checkout
+<p>Out of laziness I patched <code>--enable-checking=yes</code> into local checkout
 and changed <code>python3</code> dependency in development shell invocation. Both
 tweaks are below:</p>
 <p><code>gcc_debug</code> patch:</p>
@@ -361,7 +361,7 @@ thing that plagues <code>python</code> <code>PGO</code> build? I tried to get th
 can somehow work around the failure and see if <code>gcc_debug</code> crashes
 somewhere else as well.</p>
 <p>Even before looking at the <code>gcc</code> code I knew quite a bit about the
-failure: the identical code folding fails on a functions most of which
+failure: the identical code folding fails on a function most of which
 bodies is not executed: <code>if (p)</code> is always <code>false</code>.</p>
 <p>Before doing <code>gcc</code> bisection I had a look at recent <code>gcc</code> commits.
 <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=0c78240fd7d519">commit “Check that passes do not forget to define profile”</a>
@@ -433,8 +433,9 @@ Breakpoint 2, internal_error (gmsgid=gmsgid@entry=0x285290d &quot;in %s, at %s:%
 <p>Here is the initial probability value we are about to overwrite:</p>
 <pre><code>(gdb) call dste-&gt;probability.debug()
 always</code></pre>
-<p>I proposed the conservative fix by ignoring such “unitializing” updates
-as an <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=043a6fcbc27f8721301eb2f72a7839f54f393003">“ipa-utils: avoid uninitialized probabilities on ICF [PR111559]” commit</a>:</p>
+<p>I proposed the conservative fix by ignoring such updates that change
+probability from “initialized” to “uninitialized” as an
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=043a6fcbc27f8721301eb2f72a7839f54f393003">“ipa-utils: avoid uninitialized probabilities on ICF [PR111559]” commit</a>:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/ipa-utils.cc</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/ipa-utils.cc</span></span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -651,13 +651,14 @@ ipa_merge_profiles (struct cgraph_node *dst,</span></span>
@@ -462,8 +463,8 @@ as an <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=043a6fcbc27f872
 <p>It might not be the best fix as we discard the fact that branch was
 never executed during the profile run. But at least we don’t compromise
 correctness.</p>
-<p>This fixed reduced example and actual <code>python</code> <code>PGO</code> build for me. Yay!
-That was easier than I expected.</p>
+<p>This fixed the reduced example and the actual <code>python</code> <code>PGO</code> build for
+me. Yay! That was easier than I expected.</p>
 <h2 id="a-minor-comment">A minor comment</h2>
 <p>All done?</p>
 <p>All looked very well. The patch was not reviewed yet and <code>master</code> branch
@@ -504,7 +505,7 @@ during IPA pass: inline
 0xad2197 symbol_table::finalize_compilation_unit()
         ../../gcc/cgraphunit.cc:2583
 Please submit a full bug report, with preprocessed source (by using -freport-bug).</code></pre>
-<p>There <code>gcc</code>’s own build using profile feedback information. That made
+<p>There <code>gcc</code>’s own build is using profile feedback information. That made
 sense: there is a big chance <code>STL</code> (or other <code>gcc</code> internals) produces
 identical functions worth folding. And looking at the crash log in
 Franz’s case <code>handle_noclone_attribute()</code> was folded with something else.</p>
@@ -665,10 +666,10 @@ produce <code>.gcda</code> files and to produce next compiler stage</li>
 </ol>
 <p>All of <code>[2.]-[3.]-[4.]</code> added are faster than single <code>[1.]</code> as all of
 them use <code>-O2</code> option. And <code>[1.]</code> uses <code>CFLAGS=-O0</code> by default.</p>
-<p>The speed-up workaround was to build optimized <code>stage1-gcc</code> with
-optimizations (<code>-O2</code> instead of default <code>-O0</code>). <code>gcc</code> build system
-provides <code>STAGE1_CFLAGS</code> option for that. And while at it we will enable
-<code>-ggdb3</code> instead of default <code>-g</code> option:</p>
+<p>The speed-up workaround was to build <code>stage1-gcc</code> with optimizations
+(<code>-O2</code> instead of default <code>-O0</code>). <code>gcc</code> build system provides
+<code>STAGE1_CFLAGS</code> option for that. And while at it we will enable <code>-ggdb3</code>
+instead of default <code>-g</code> option:</p>
 <pre><code>$ ~/dev/git/gcc/configure
 $ make profiledbootstrap STAGE1_CFLAGS='-O2 -ggdb3' BOOT_CFLAGS='-O2 -ggdb3'</code></pre>
 <p>That made the build a lot faster for me.</p>
