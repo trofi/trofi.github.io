@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>upgrading an ssd</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>upgrading an ssd</h1>
+            
+                <div class="info">December 15, 2023</div>
+            
+
+            <p>In search of bugs I build a lot of software locally. About ~20000
+packages per day. I usually keep all builds around to speed up
+regression debugging.</p>
+<p>That way (and with help of filesystem compression, <code>duperemove</code> and
+identical file hardlinking) I manage to fill up my <code>512G</code> SSD with build
+results within 2-3 weeks.</p>
+<p>Once the disk is full I have to trigger garbage collection that frees
+all that space and start over.</p>
+<p>I decided to switch to a larger <code>2T</code> SSD to expand the time budget to
+1-2 months.</p>
+<p>This is my boot disk on <code>btrfs</code> and I would like to preserve most of
+it’s properties without too much of mountpoint juggling or machine
+downtime. AFAIU does not handle advanced filesystem features like
+subvolume layouts and already deduplicated data.</p>
+<p>I ended up plugging in a new device and did two commands to transfer all
+the data live from one device to another:</p>
+<pre><code>$ btrfs device add    /dev/nvme1n1p2 /
+$ btrfs device remove /dev/nvme0n1p3 /</code></pre>
+<p>15 minutes later all the data was on the new <code>SSD</code>! Magic!</p>
+<h2 id="the-actual-procedure">The actual procedure</h2>
+<p>It required a tiny bit of extra work to handle partitioning on a new
+device and <code>EFI</code> <code>vfat</code> partition move.</p>
+<p>Here is the sequence I used:</p>
+<ol type="1">
+<li><p>Plug a new device in, it detected as <code>/dev/nvme1n1</code>.</p></li>
+<li><p>Partition new device:</p>
+<pre><code># fdisk /dev/nvme1n1
+g; n; 1; 2048 (default); +4G; t; 1 (EFI); n; 2; w</code></pre>
+<p>Here we create 2 partitions: 4G <code>EFI</code> and the rest on Linux.</p></li>
+<li><p>[prepare] Format <code>EFI</code> partition:</p>
+<pre><code># mkfs.fat -F 32 /dev/nvme1n1p1</code></pre></li>
+<li><p>Sync <code>EFI</code> data to the new partition:</p>
+<pre><code># mkdir /new-boot
+# mount /dev/nvme1n1p1 /new-boot
+# rsync -av /boot/ /new-boot/
+# umount /new-boot
+# rmdir /new-boot</code></pre></li>
+<li><p>Update <code>/etc/nixos/hardware-configuration.nix</code> to point <code>EFI</code>
+partition to the new <code>device = "/dev/disk/by-uuid/ABCD-1234";</code></p></li>
+<li><p><strong>Migrate the root filesystem</strong>:</p>
+<pre><code># btrfs device add    /dev/nvme1n1p2 /
+# btrfs device remove /dev/nvme0n1p3 /</code></pre></li>
+<li><p>Rebuild boot loader configuration and reinstall it:</p>
+<pre><code># nixops-rebuild switch --install-bootloader</code></pre></li>
+<li><p>Reboot the machine.</p></li>
+</ol>
+<p>Done!</p>
+<p>It took 15 minutes to remove the device and evacuate all the data out.</p>
+<p>A snapshot of migration state somewhere in the middle of the process:</p>
+<pre><code># btrfs fi show /
+Label: none  uuid: abcdef12-...
+        Total devices 2 FS bytes used 201.63GiB
+        devid    1 size 0.00B used 64.03GiB path /dev/nvme0n1p3
+        devid    2 size 1.86TiB used 141.00GiB path /dev/nvme1n1p2</code></pre>
+<p>Note how to-be-removed device had <code>size 0.00B</code> while it still had to
+drain <code>64G</code> of data.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>btrfs</code> device handling is magic! It does not matter if the new device
+is smaller or larger than existing one: you add bytes to the pool and
+new block groups get allocated there. Deleting old devices is also
+straightforward: evacuated device stops being used for new object
+allocation and existing block groups are evacuated to other devices.</p>
+<p><code>btrfs device remove</code> wipes filesystem superblock and removes the device
+from device tree of filesystem once data is fully drained. There is no
+easy way to access data on the old device after the move. It is slightly
+scary but has it’s charm as well: there is no chance to accidentally
+mount old device and use it as new for a while.</p>
+<p>By default <code>NixOS</code> uses <code>/dv/disk/by-uuid/...</code> device paths:</p>
+<pre><code>$ cat /etc/fstab
+/dev/disk/by-uuid/abcdef12-1dbb-... / btrfs x-initrd.mount,subvol=nixos,noatime,compress=zstd 0 0
+/dev/disk/by-uuid/ABCD-1234 /boot vfat umask=1022,quiet,codepage=866,iocharset=utf8,dmask=1022,fmask=1133 0 2</code></pre>
+<p>That means device rename and move on <code>btrfs</code> is transparent to the
+configuration as <code>UUID</code> gets preserved on new device addition.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
