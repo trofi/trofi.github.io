@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>a breakage example in C variadic function</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>a breakage example in C variadic function</h1>
+            
+                <div class="info">December 20, 2023</div>
+            
+
+            <h2 id="intro">Intro</h2>
+<p>This post is about <code>C</code> functions with ellipsis (<code>...</code>) in their
+signatures. The most famous example of such is probably <code>printf()</code>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> printf<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>format<span class="op">,</span> <span class="op">...);</span></span></code></pre></div>
+<p>If you ever tried to use it you probably know that using wrong types
+that don’t match format arguments might crash your program. A simple
+faulty example could be:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>printf<span class="op">(</span><span class="st">&quot;</span><span class="sc">%s</span><span class="st">&quot;</span><span class="op">,</span> <span class="dv">42</span><span class="op">);</span> <span class="co">// this will crash</span></span></code></pre></div>
+<p>Luckily <code>gcc</code> and <code>clang</code> do have <code>-Wformat</code> warning that complains
+about the mismatch between expected types by a format string and
+actually passed types:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat simple.c</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;</span><span class="sc">%s</span><span class="st">&quot;</span><span class="op">,</span> <span class="dv">42</span><span class="op">);</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code>$ gcc -Wformat -c simple.c
+
+simple.c: In function 'main':
+simple.c:5:14: warning: format '%s' expects argument of type 'char *', but argument 2 has type 'int' [-Wformat=]
+    5 |     printf(&quot;%s&quot;, 42);
+      |             ~^   ~~
+      |              |   |
+      |              |   int
+      |              char *
+      |             %d</code></pre>
+<p>Many distributions turn these warnings into errors by default.</p>
+<h2 id="argument-count">Argument count</h2>
+<p>An ellipsis (<code>...</code>) means that the function accepts unknown count and
+unknown type of parameters. There has to be a way to somehow signal
+actual argument list in ellipsis. As <code>&lt;stdarg.h&gt;</code> does not provide a
+standard way to do it code author has to come up with their own scheme
+to solve the problem.</p>
+<p>A few examples come to mind:</p>
+<ul>
+<li><code>int printf(const char *format, ...)</code> uses <code>format</code> parameter to pass
+the argument count by interpreting the format string.</li>
+<li><code>int open(const char *pathname, int flags, mode_t mode)</code> uses <code>flags</code>
+to distinguish 3-argument form from 2-argument
+<code>int open(const char *pathname, int flags)</code>.</li>
+<li><code>glib</code>’s <code>gchar* g_strconcat (const gchar* string1, ...)</code> consumes
+parameters until <code>NULL</code> parameter is encountered.</li>
+</ul>
+<p>Each of the examples above implements a different scheme.</p>
+<p><code>g_strconcat</code> is especially scary as you might pass non-strings there
+and get no warning from the compiler. Or forget to pass a <code>NULL</code> value
+(<a href="https://github.com/proftpd/proftpd/pull/1028/files"><code>proftpd</code> example</a>
+comes to mind). But at least all the arguments are expected to have the
+same <code>const gchar*</code> type.</p>
+<p>But the above is not an exhaustive list. You can bake any assumption
+into ellipsis meaning.</p>
+<h2 id="an-example-of-variadic-c-function">An example of variadic C function</h2>
+<p>I’ll use yet another (arguably the simplest) form to pass argument count
+to a variadic function: I’ll pass the number explicitly. Let’s explore
+the following example:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo<span class="op">(</span><span class="dt">int</span> n<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> va<span class="op">;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>va<span class="op">,</span> n<span class="op">);</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> n<span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> l <span class="op">=</span> va_arg<span class="op">(</span>va<span class="op">,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;[</span><span class="sc">%u</span><span class="st">]: </span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span> i<span class="op">,</span> l<span class="op">);</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>va<span class="op">);</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>    foo<span class="op">(</span><span class="dv">3</span><span class="op">,</span> strlen<span class="op">(</span><span class="st">&quot;foo&quot;</span><span class="op">),</span> strlen<span class="op">(</span><span class="st">&quot;barr&quot;</span><span class="op">),</span> strlen<span class="op">(</span><span class="st">&quot;bazzz&quot;</span><span class="op">));</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here we explicitly pass count of variadic arguments as the first <code>n</code>
+parameter of the <code>foo()</code> function. The program should be correct.</p>
+<p>Running it:</p>
+<pre><code>$ gcc a.c -o a &amp;&amp;./a
+[0]: 3
+[1]: 4
+[2]: 5</code></pre>
+<p>All good.</p>
+<p>Now I’ll change the above program slightly:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo<span class="op">(</span><span class="dt">int</span> n<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> va<span class="op">;</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>va<span class="op">,</span> n<span class="op">);</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> n<span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> l <span class="op">=</span> va_arg<span class="op">(</span>va<span class="op">,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;[</span><span class="sc">%u</span><span class="st">]: </span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span> i<span class="op">,</span> l<span class="op">);</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>va<span class="op">);</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>    foo<span class="op">(</span><span class="dv">3</span><span class="op">,</span> <span class="dv">3</span><span class="op">,</span> <span class="dv">4</span><span class="op">,</span> <span class="dv">5</span><span class="op">);</span></span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I inlined the results of <code>strlen()</code> calls to their literal values. Is it
+still a correct program? Is it always expected to print <code>3 4 5</code>?</p>
+<p>Let’s run it:</p>
+<pre><code>$ gcc a.c -o a &amp;&amp;./a
+[0]: 3
+[1]: 4
+[2]: 5</code></pre>
+<p>Seems to work. Let’s throw more arguments just for fun:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat a.c</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo<span class="op">(</span><span class="dt">int</span> n<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> va<span class="op">;</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>va<span class="op">,</span> n<span class="op">);</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> n<span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> l <span class="op">=</span> va_arg<span class="op">(</span>va<span class="op">,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;[</span><span class="sc">%u</span><span class="st">]: </span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span> i<span class="op">,</span> l<span class="op">);</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>va<span class="op">);</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    foo<span class="op">(</span><span class="dv">16</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span><span class="dv">2</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span><span class="dv">4</span><span class="op">,</span><span class="dv">5</span><span class="op">,</span><span class="dv">6</span><span class="op">,</span><span class="dv">7</span><span class="op">,</span><span class="dv">8</span><span class="op">,</span><span class="dv">9</span><span class="op">,</span><span class="dv">10</span><span class="op">,</span><span class="dv">11</span><span class="op">,</span><span class="dv">12</span><span class="op">,</span><span class="dv">13</span><span class="op">,</span><span class="dv">14</span><span class="op">,</span><span class="dv">15</span><span class="op">,</span><span class="dv">16</span><span class="op">);</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I increased argument count to <code>16</code>. Running it on <code>x86_64</code>:</p>
+<pre><code>$ gcc a.c -o a &amp;&amp;./a
+[0]: 1
+[1]: 2
+[2]: 3
+[3]: 4
+[4]: 5
+[5]: 6
+[6]: 7
+[7]: 8
+[8]: 9
+[9]: 10
+[10]: 11
+[11]: 12
+[12]: 13
+[13]: 14
+[14]: 15
+[15]: 16</code></pre>
+<p>Still all good!</p>
+<p>Running on <code>aarch64-linux</code> just in case:</p>
+<pre><code>$ aarch64-unknown-linux-gnu-gcc a.c -o a &amp;&amp;./a
+[0]: 1
+[1]: 2
+[2]: 3
+[3]: 4
+[4]: 5
+[5]: 6
+[6]: 7
+[7]: 70368744177672
+[8]: 70368744177673
+[9]: 70368744177674
+[10]: 70368744177675
+[11]: 70368744177676
+[12]: 13
+[13]: 70368744177678
+[14]: 15
+[15]: 70368744177680</code></pre>
+<p>Uh-oh. It’s broken!</p>
+<p>What is worse: first seven parameters look totally fine and degradation
+start only <code>8th</code> one. Is it a coincidence? Some architecture-specific
+property? Or maybe a compiler bug?</p>
+<p>Or maybe you noticed a bug in the original program? How would you fix it
+or work it around?</p>
+<h2 id="argument-passing-mechanics">Argument passing mechanics</h2>
+<p>Let’s have a look at the generated code and check how parameters are
+passed across the call boundary. I’ll use the same <code>17</code>-argument example
+above:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo<span class="op">(</span><span class="dt">int</span> n<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> va<span class="op">;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>va<span class="op">,</span> n<span class="op">);</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> n<span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">size_t</span> l <span class="op">=</span> va_arg<span class="op">(</span>va<span class="op">,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;[</span><span class="sc">%u</span><span class="st">]: </span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span> i<span class="op">,</span> l<span class="op">);</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>va<span class="op">);</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>    foo<span class="op">(</span><span class="dv">16</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span><span class="dv">2</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span><span class="dv">4</span><span class="op">,</span><span class="dv">5</span><span class="op">,</span><span class="dv">6</span><span class="op">,</span><span class="dv">7</span><span class="op">,</span><span class="dv">8</span><span class="op">,</span><span class="dv">9</span><span class="op">,</span><span class="dv">10</span><span class="op">,</span><span class="dv">11</span><span class="op">,</span><span class="dv">12</span><span class="op">,</span><span class="dv">13</span><span class="op">,</span><span class="dv">14</span><span class="op">,</span><span class="dv">15</span><span class="op">,</span><span class="dv">16</span><span class="op">);</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h2 id="x86_64"><code>x86_64</code></h2>
+<p>Full <code>x86_64</code> code on <code>gcc</code> looks this way:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">; gcc -O1 -S a.c -o -</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>        subq    <span class="op">$</span><span class="bn">16</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">; push some of the arguments on stack:</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">16</span> <span class="co">; va[15] = 16</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">15</span> <span class="co">; va[14] = 15</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">14</span> <span class="co">; va[13] = 14</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">13</span> <span class="co">; va[12] = 13</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">12</span> <span class="co">; va[11] = 12</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">11</span> <span class="co">; va[10] = 11</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">10</span> <span class="co">; va[9] = 10</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">9</span>  <span class="co">; va[8] = 9</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">8</span>  <span class="co">; va[7] = 8</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">7</span>  <span class="co">; va[6] = 7</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">6</span>  <span class="co">; va[5] = 6</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">5</span><span class="op">,</span> <span class="op">%</span>r9d  <span class="co">; va[4] = 5</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">4</span><span class="op">,</span> <span class="op">%</span>r8d  <span class="co">; va[3] = 4</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">3</span><span class="op">,</span> <span class="op">%</span><span class="kw">ecx</span>  <span class="co">; va[2] = 3</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">2</span><span class="op">,</span> <span class="op">%</span><span class="kw">edx</span>  <span class="co">; va[1] = 2</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">esi</span>  <span class="co">; va[0] = 1</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">16</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span> <span class="co">; n = 16</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>        <span class="cf">call</span>    foo</span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>        addq    <span class="op">$</span><span class="bn">104</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span>
+<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-31"><a href="#cb13-31" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC0:</span></span>
+<span id="cb13-32"><a href="#cb13-32" aria-hidden="true" tabindex="-1"></a>        .string <span class="st">&quot;[%u]: %zu\n&quot;</span></span>
+<span id="cb13-33"><a href="#cb13-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-34"><a href="#cb13-34" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb13-35"><a href="#cb13-35" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">%</span><span class="kw">rbp</span></span>
+<span id="cb13-36"><a href="#cb13-36" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">%</span><span class="kw">rbx</span></span>
+<span id="cb13-37"><a href="#cb13-37" aria-hidden="true" tabindex="-1"></a>        subq    <span class="op">$</span><span class="bn">88</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb13-38"><a href="#cb13-38" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rsi</span><span class="op">,</span> <span class="dv">40</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-39"><a href="#cb13-39" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rdx</span><span class="op">,</span> <span class="dv">48</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-40"><a href="#cb13-40" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rcx</span><span class="op">,</span> <span class="dv">56</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-41"><a href="#cb13-41" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">r8</span><span class="op">,</span> <span class="dv">64</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-42"><a href="#cb13-42" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">r9</span><span class="op">,</span> <span class="dv">72</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-43"><a href="#cb13-43" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-44"><a href="#cb13-44" aria-hidden="true" tabindex="-1"></a>        leaq    <span class="dv">112</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rax</span></span>
+<span id="cb13-45"><a href="#cb13-45" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rax</span><span class="op">,</span> <span class="dv">16</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-46"><a href="#cb13-46" aria-hidden="true" tabindex="-1"></a>        leaq    <span class="dv">32</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rax</span></span>
+<span id="cb13-47"><a href="#cb13-47" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rax</span><span class="op">,</span> <span class="dv">24</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-48"><a href="#cb13-48" aria-hidden="true" tabindex="-1"></a>        testl   <span class="op">%</span><span class="kw">edi</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb13-49"><a href="#cb13-49" aria-hidden="true" tabindex="-1"></a>        <span class="cf">jle</span>     <span class="op">.</span>L1</span>
+<span id="cb13-50"><a href="#cb13-50" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">%</span><span class="kw">edi</span><span class="op">,</span> <span class="op">%</span><span class="kw">ebp</span></span>
+<span id="cb13-51"><a href="#cb13-51" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">ebx</span></span>
+<span id="cb13-52"><a href="#cb13-52" aria-hidden="true" tabindex="-1"></a>        <span class="cf">jmp</span>     <span class="op">.</span>L5</span>
+<span id="cb13-53"><a href="#cb13-53" aria-hidden="true" tabindex="-1"></a><span class="fu">.L3:</span></span>
+<span id="cb13-54"><a href="#cb13-54" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="dv">16</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rdx</span></span>
+<span id="cb13-55"><a href="#cb13-55" aria-hidden="true" tabindex="-1"></a>        leaq    <span class="dv">8</span><span class="op">(%</span><span class="kw">rdx</span><span class="op">),</span> <span class="op">%</span><span class="kw">rax</span></span>
+<span id="cb13-56"><a href="#cb13-56" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">%</span><span class="kw">rax</span><span class="op">,</span> <span class="dv">16</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-57"><a href="#cb13-57" aria-hidden="true" tabindex="-1"></a><span class="fu">.L4:</span></span>
+<span id="cb13-58"><a href="#cb13-58" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">(%</span><span class="kw">rdx</span><span class="op">),</span> <span class="op">%</span><span class="kw">rdx</span>  <span class="co">; size_t l = va_arg(va, size_t);</span></span>
+<span id="cb13-59"><a href="#cb13-59" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">%</span><span class="kw">ebx</span><span class="op">,</span> <span class="op">%</span><span class="kw">esi</span>    <span class="co">; int i (loop variable)</span></span>
+<span id="cb13-60"><a href="#cb13-60" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$.</span>LC0<span class="op">,</span> <span class="op">%</span><span class="kw">edi</span>   <span class="co">; format = &quot;%[u]: %zu\n&quot;</span></span>
+<span id="cb13-61"><a href="#cb13-61" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb13-62"><a href="#cb13-62" aria-hidden="true" tabindex="-1"></a>        <span class="cf">call</span>    printf</span>
+<span id="cb13-63"><a href="#cb13-63" aria-hidden="true" tabindex="-1"></a>        addl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">ebx</span></span>
+<span id="cb13-64"><a href="#cb13-64" aria-hidden="true" tabindex="-1"></a>        cmpl    <span class="op">%</span><span class="kw">ebx</span><span class="op">,</span> <span class="op">%</span><span class="kw">ebp</span></span>
+<span id="cb13-65"><a href="#cb13-65" aria-hidden="true" tabindex="-1"></a>        <span class="cf">je</span>      <span class="op">.</span>L1</span>
+<span id="cb13-66"><a href="#cb13-66" aria-hidden="true" tabindex="-1"></a><span class="fu">.L5:</span></span>
+<span id="cb13-67"><a href="#cb13-67" aria-hidden="true" tabindex="-1"></a>        movl    <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb13-68"><a href="#cb13-68" aria-hidden="true" tabindex="-1"></a>        cmpl    <span class="op">$</span><span class="bn">47</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb13-69"><a href="#cb13-69" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ja</span>      <span class="op">.</span>L3</span>
+<span id="cb13-70"><a href="#cb13-70" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">edx</span></span>
+<span id="cb13-71"><a href="#cb13-71" aria-hidden="true" tabindex="-1"></a>        addq    <span class="dv">24</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),</span> <span class="op">%</span><span class="kw">rdx</span></span>
+<span id="cb13-72"><a href="#cb13-72" aria-hidden="true" tabindex="-1"></a>        addl    <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb13-73"><a href="#cb13-73" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="dv">8</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span></span>
+<span id="cb13-74"><a href="#cb13-74" aria-hidden="true" tabindex="-1"></a>        <span class="cf">jmp</span>     <span class="op">.</span>L4</span>
+<span id="cb13-75"><a href="#cb13-75" aria-hidden="true" tabindex="-1"></a><span class="fu">.L1:</span></span>
+<span id="cb13-76"><a href="#cb13-76" aria-hidden="true" tabindex="-1"></a>        addq    <span class="op">$</span><span class="bn">88</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb13-77"><a href="#cb13-77" aria-hidden="true" tabindex="-1"></a>        popq    <span class="op">%</span><span class="kw">rbx</span></span>
+<span id="cb13-78"><a href="#cb13-78" aria-hidden="true" tabindex="-1"></a>        popq    <span class="op">%</span><span class="kw">rbp</span></span>
+<span id="cb13-79"><a href="#cb13-79" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span></code></pre></div>
+<p>It’s a lot of text! We can ignore most of it and focus on the following
+few lines to get to the argument passing mechanics:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>        <span class="co">; ...</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>        pushq   <span class="op">$</span><span class="bn">6</span>  <span class="co">; va[5] = 6</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">5</span><span class="op">,</span> <span class="op">%</span>r9d  <span class="co">; va[4] = 5</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">; ...</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>        <span class="co">; ...</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movq</span>    <span class="op">(%</span><span class="kw">rdx</span><span class="op">),</span> <span class="op">%</span><span class="kw">rdx</span>  <span class="co">; size_t l = va_arg(va, size_t);</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">%</span><span class="kw">ebx</span><span class="op">,</span> <span class="op">%</span><span class="kw">esi</span>    <span class="co">; int i (loop variable)</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$.</span>LC0<span class="op">,</span> <span class="op">%</span><span class="kw">edi</span>   <span class="co">; format = &quot;%[u]: %zu\n&quot;</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>        movl    <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">call</span>    printf</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>        <span class="co">; ...</span></span></code></pre></div>
+<p>The <code>main</code> function is trivial: it shows us that first 6 arguments are
+passed in registers alone (<code>%edi = 16</code>, <code>%esi = 1</code>, <code>%edx = 2</code>,
+<code>%ecx = 3</code>, <code>%r8d = 4</code> <code>%r9d = 5</code>). And starting from <code>7</code>th argument
+they are passed via stack (<code>pushq $6</code>). This is a standard
+<code>x86_64-linux</code> calling convention.</p>
+<p>The <code>foo</code> is more complicated. The gist of it is that our <code>va_arg</code>
+always gets fetched from stack as a 64-bit value via <code>movq (%rdx), %rdx</code>
+instruction. To make it work <code>foo</code> stores all register-passed arguments
+on stack. The fetch result gets passed later as a third argument to
+<code>printf("%[u]: %zu\n", i, l)</code> call in <code>%rdx</code> register.</p>
+<p>A few notes before we continue:</p>
+<p>Instructions like <code>movl $1, %esi</code> tell the CPU to store <code>$1</code> to
+32-bit <code>esi</code> register (lower half of <code>rsi</code> register). <code>movl</code> (or any
+other write instruction that works on 32-bit registers) also zeroes out
+upper 64-bits of <code>rsi</code> register. Thus it’s a functional equivalent of
+<code>movq $1, %rsi</code>. But the encoding might be more efficient as it does not
+need a <code>REX</code> prefix.</p>
+<p>Instructions like <code>pushq $6</code> write full 64-bit constant on stack as if
+we pushed full <code>size_t</code> value instead of <code>int</code>.</p>
+<p>In both register store and memory store cases <code>int</code> literals are stored
+as 64-bit values. This means that on <code>x86_64</code> it’s not too bad to mix
+these two types as the example does.</p>
+<h2 id="aarch64"><code>aarch64</code></h2>
+<p>Now let’s do the same exercise for <code>aarch64</code> target:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">; aarch64-unknown-linux-gnu-gcc -O1 -S a.c -o -</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>        <span class="bu">sub</span>     <span class="kw">sp</span><span class="op">,</span> <span class="kw">sp</span><span class="op">,</span> <span class="op">#</span><span class="dv">96</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>        stp     x29<span class="op">,</span> x30<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">80</span><span class="op">]</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x29<span class="op">,</span> <span class="kw">sp</span><span class="op">,</span> <span class="dv">80</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w0<span class="op">,</span> <span class="dv">16</span> <span class="co">; n = 16</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">64</span><span class="op">]</span> <span class="co">; va[15] = 16</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">15</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">56</span><span class="op">]</span> <span class="co">; va[14] = 15</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">14</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">48</span><span class="op">]</span> <span class="co">; va[13] = 14</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">13</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">40</span><span class="op">]</span> <span class="co">; va[12] = 13</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">12</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">32</span><span class="op">]</span> <span class="co">; va[11] = 12</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">11</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">24</span><span class="op">]</span> <span class="co">; va[10] = 11</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">10</span></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">16</span><span class="op">]</span> <span class="co">; va[9]  = 10</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">9</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">8</span><span class="op">]</span>  <span class="co">; va[8]  = 9</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">8</span></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">]</span>     <span class="co">; va[7]  = 8</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w7<span class="op">,</span> <span class="dv">7</span>        <span class="co">; va[6]  = 7</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w6<span class="op">,</span> <span class="dv">6</span>        <span class="co">; va[5]  = 6</span></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w5<span class="op">,</span> <span class="dv">5</span>        <span class="co">; va[4]  = 5</span></span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w4<span class="op">,</span> <span class="dv">4</span>        <span class="co">; va[3]  = 4</span></span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w3<span class="op">,</span> <span class="dv">3</span>        <span class="co">; va[2]  = 3</span></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w2<span class="op">,</span> <span class="dv">2</span>        <span class="co">; va[1]  = 2</span></span>
+<span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">1</span>        <span class="co">; va[0]  = 1</span></span>
+<span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>        bl      foo</span>
+<span id="cb15-32"><a href="#cb15-32" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w0<span class="op">,</span> <span class="dv">0</span></span>
+<span id="cb15-33"><a href="#cb15-33" aria-hidden="true" tabindex="-1"></a>        ldp     x29<span class="op">,</span> x30<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">80</span><span class="op">]</span></span>
+<span id="cb15-34"><a href="#cb15-34" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     <span class="kw">sp</span><span class="op">,</span> <span class="kw">sp</span><span class="op">,</span> <span class="dv">96</span></span>
+<span id="cb15-35"><a href="#cb15-35" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span>
+<span id="cb15-36"><a href="#cb15-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-37"><a href="#cb15-37" aria-hidden="true" tabindex="-1"></a><span class="fu">.LC0:</span></span>
+<span id="cb15-38"><a href="#cb15-38" aria-hidden="true" tabindex="-1"></a>        .string <span class="st">&quot;[%u]: %zu\n&quot;</span></span>
+<span id="cb15-39"><a href="#cb15-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-40"><a href="#cb15-40" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb15-41"><a href="#cb15-41" aria-hidden="true" tabindex="-1"></a>        stp     x29<span class="op">,</span> x30<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="op">-</span><span class="dv">144</span><span class="op">]!</span></span>
+<span id="cb15-42"><a href="#cb15-42" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     x29<span class="op">,</span> <span class="kw">sp</span></span>
+<span id="cb15-43"><a href="#cb15-43" aria-hidden="true" tabindex="-1"></a>        stp     x19<span class="op">,</span> x20<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">16</span><span class="op">]</span></span>
+<span id="cb15-44"><a href="#cb15-44" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w20<span class="op">,</span> w0</span>
+<span id="cb15-45"><a href="#cb15-45" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">88</span><span class="op">]</span></span>
+<span id="cb15-46"><a href="#cb15-46" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x2<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">96</span><span class="op">]</span></span>
+<span id="cb15-47"><a href="#cb15-47" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x3<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">104</span><span class="op">]</span></span>
+<span id="cb15-48"><a href="#cb15-48" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x4<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">112</span><span class="op">]</span></span>
+<span id="cb15-49"><a href="#cb15-49" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x5<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">120</span><span class="op">]</span></span>
+<span id="cb15-50"><a href="#cb15-50" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x6<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">128</span><span class="op">]</span></span>
+<span id="cb15-51"><a href="#cb15-51" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x7<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">136</span><span class="op">]</span></span>
+<span id="cb15-52"><a href="#cb15-52" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x0<span class="op">,</span> <span class="kw">sp</span><span class="op">,</span> <span class="dv">144</span></span>
+<span id="cb15-53"><a href="#cb15-53" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">48</span><span class="op">]</span></span>
+<span id="cb15-54"><a href="#cb15-54" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">56</span><span class="op">]</span></span>
+<span id="cb15-55"><a href="#cb15-55" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x0<span class="op">,</span> <span class="kw">sp</span><span class="op">,</span> <span class="dv">80</span></span>
+<span id="cb15-56"><a href="#cb15-56" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">64</span><span class="op">]</span></span>
+<span id="cb15-57"><a href="#cb15-57" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w0<span class="op">,</span> <span class="op">-</span><span class="dv">56</span></span>
+<span id="cb15-58"><a href="#cb15-58" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">72</span><span class="op">]</span></span>
+<span id="cb15-59"><a href="#cb15-59" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     wzr<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">76</span><span class="op">]</span></span>
+<span id="cb15-60"><a href="#cb15-60" aria-hidden="true" tabindex="-1"></a>        <span class="bu">cmp</span>     w20<span class="op">,</span> <span class="dv">0</span></span>
+<span id="cb15-61"><a href="#cb15-61" aria-hidden="true" tabindex="-1"></a>        ble     <span class="op">.</span>L1</span>
+<span id="cb15-62"><a href="#cb15-62" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x21<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">32</span><span class="op">]</span></span>
+<span id="cb15-63"><a href="#cb15-63" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w19<span class="op">,</span> <span class="dv">0</span></span>
+<span id="cb15-64"><a href="#cb15-64" aria-hidden="true" tabindex="-1"></a>        adrp    x21<span class="op">,</span> <span class="op">.</span>LC0</span>
+<span id="cb15-65"><a href="#cb15-65" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x21<span class="op">,</span> x21<span class="op">,</span> <span class="op">:</span>lo12<span class="op">:.</span>LC0</span>
+<span id="cb15-66"><a href="#cb15-66" aria-hidden="true" tabindex="-1"></a>        b       <span class="op">.</span>L6</span>
+<span id="cb15-67"><a href="#cb15-67" aria-hidden="true" tabindex="-1"></a><span class="fu">.L3:</span></span>
+<span id="cb15-68"><a href="#cb15-68" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     w0<span class="op">,</span> w2<span class="op">,</span> <span class="dv">8</span></span>
+<span id="cb15-69"><a href="#cb15-69" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">72</span><span class="op">]</span></span>
+<span id="cb15-70"><a href="#cb15-70" aria-hidden="true" tabindex="-1"></a>        <span class="bu">cmp</span>     w0<span class="op">,</span> <span class="dv">0</span></span>
+<span id="cb15-71"><a href="#cb15-71" aria-hidden="true" tabindex="-1"></a>        ble     <span class="op">.</span>L5</span>
+<span id="cb15-72"><a href="#cb15-72" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x0<span class="op">,</span> x1<span class="op">,</span> <span class="dv">15</span></span>
+<span id="cb15-73"><a href="#cb15-73" aria-hidden="true" tabindex="-1"></a>        <span class="bu">and</span>     x0<span class="op">,</span> x0<span class="op">,</span> <span class="op">-</span><span class="dv">8</span></span>
+<span id="cb15-74"><a href="#cb15-74" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x0<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">48</span><span class="op">]</span></span>
+<span id="cb15-75"><a href="#cb15-75" aria-hidden="true" tabindex="-1"></a><span class="fu">.L4:</span></span>
+<span id="cb15-76"><a href="#cb15-76" aria-hidden="true" tabindex="-1"></a>        ldr     x2<span class="op">,</span> <span class="op">[</span>x1<span class="op">]</span> <span class="co">; size_t l = va_arg(va, size_t);</span></span>
+<span id="cb15-77"><a href="#cb15-77" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> w19  <span class="co">; int i (loop variable)</span></span>
+<span id="cb15-78"><a href="#cb15-78" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     x0<span class="op">,</span> x21  <span class="co">; format = &quot;%[u]: %zu\n&quot;</span></span>
+<span id="cb15-79"><a href="#cb15-79" aria-hidden="true" tabindex="-1"></a>        bl      printf</span>
+<span id="cb15-80"><a href="#cb15-80" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     w19<span class="op">,</span> w19<span class="op">,</span> <span class="dv">1</span></span>
+<span id="cb15-81"><a href="#cb15-81" aria-hidden="true" tabindex="-1"></a>        <span class="bu">cmp</span>     w20<span class="op">,</span> w19</span>
+<span id="cb15-82"><a href="#cb15-82" aria-hidden="true" tabindex="-1"></a>        beq     <span class="op">.</span>L9</span>
+<span id="cb15-83"><a href="#cb15-83" aria-hidden="true" tabindex="-1"></a><span class="fu">.L6:</span></span>
+<span id="cb15-84"><a href="#cb15-84" aria-hidden="true" tabindex="-1"></a>        ldr     w2<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">72</span><span class="op">]</span></span>
+<span id="cb15-85"><a href="#cb15-85" aria-hidden="true" tabindex="-1"></a>        ldr     x1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">48</span><span class="op">]</span></span>
+<span id="cb15-86"><a href="#cb15-86" aria-hidden="true" tabindex="-1"></a>        tbnz    w2<span class="op">,</span> <span class="op">#</span><span class="dv">31</span><span class="op">,</span> <span class="op">.</span>L3</span>
+<span id="cb15-87"><a href="#cb15-87" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x2<span class="op">,</span> x1<span class="op">,</span> <span class="dv">15</span></span>
+<span id="cb15-88"><a href="#cb15-88" aria-hidden="true" tabindex="-1"></a>        <span class="bu">and</span>     x2<span class="op">,</span> x2<span class="op">,</span> <span class="op">-</span><span class="dv">8</span></span>
+<span id="cb15-89"><a href="#cb15-89" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     x2<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">48</span><span class="op">]</span></span>
+<span id="cb15-90"><a href="#cb15-90" aria-hidden="true" tabindex="-1"></a>        b       <span class="op">.</span>L4</span>
+<span id="cb15-91"><a href="#cb15-91" aria-hidden="true" tabindex="-1"></a><span class="fu">.L5:</span></span>
+<span id="cb15-92"><a href="#cb15-92" aria-hidden="true" tabindex="-1"></a>        ldr     x1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">56</span><span class="op">]</span></span>
+<span id="cb15-93"><a href="#cb15-93" aria-hidden="true" tabindex="-1"></a>        <span class="bu">add</span>     x1<span class="op">,</span> x1<span class="op">,</span> w2<span class="op">,</span> sxtw</span>
+<span id="cb15-94"><a href="#cb15-94" aria-hidden="true" tabindex="-1"></a>        b       <span class="op">.</span>L4</span>
+<span id="cb15-95"><a href="#cb15-95" aria-hidden="true" tabindex="-1"></a><span class="fu">.L9:</span></span>
+<span id="cb15-96"><a href="#cb15-96" aria-hidden="true" tabindex="-1"></a>        ldr     x21<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">32</span><span class="op">]</span></span>
+<span id="cb15-97"><a href="#cb15-97" aria-hidden="true" tabindex="-1"></a><span class="fu">.L1:</span></span>
+<span id="cb15-98"><a href="#cb15-98" aria-hidden="true" tabindex="-1"></a>        ldp     x19<span class="op">,</span> x20<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">,</span> <span class="dv">16</span><span class="op">]</span></span>
+<span id="cb15-99"><a href="#cb15-99" aria-hidden="true" tabindex="-1"></a>        ldp     x29<span class="op">,</span> x30<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">],</span> <span class="dv">144</span></span>
+<span id="cb15-100"><a href="#cb15-100" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span></code></pre></div>
+<p>Again, it’s a lot of repetitive text. We can ignore most of it and focus
+on arguments passed over call boundary:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>        <span class="co">; ...</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> <span class="dv">8</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>        <span class="bu">str</span>     w1<span class="op">,</span> <span class="op">[</span><span class="kw">sp</span><span class="op">]</span>     <span class="co">; va[7]  = 8</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w7<span class="op">,</span> <span class="dv">7</span>        <span class="co">; va[6]  = 7</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w6<span class="op">,</span> <span class="dv">6</span>        <span class="co">; va[5]  = 6</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">; ...</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>        ldr     x2<span class="op">,</span> <span class="op">[</span>x1<span class="op">]</span> <span class="co">; size_t l = va_arg(va, size_t);</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     w1<span class="op">,</span> w19  <span class="co">; int i (loop variable)</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>     x0<span class="op">,</span> x21  <span class="co">; format = &quot;%[u]: %zu\n&quot;</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>        bl      printf</span></code></pre></div>
+<p>The <code>main</code> structure is very similar to <code>x86_64</code>: first few parameters
+(<code>8</code> this time) get passed via registers: <code>w0 = 16</code>, <code>w1 = 1</code>, <code>w2 = 2</code>,
+…. <code>w7 = 7</code>. The rest goes to stack: <code>mov w1, 8</code> / <code>str w1, [sp]</code>,
+<code>mov w1, 9</code> / <code>str w1, [sp, 8]</code>, and so on.</p>
+<p>Similarly to <code>x86_64</code> the instruction <code>mov w1, 1</code> sets lower 32-bit part
+of 64-bit <code>x1</code> register to an immediate value. Higher 32-bit part is
+zeroed out. This makes it equivalent to <code>mov x1, 1</code> instruction.</p>
+<p>The difference starts in the way stack variables are stored: while
+<code>mov w1, 8</code> initializes both <code>w1</code> and <code>x1</code> to value <code>8</code> the
+<code>str w1, [sp]</code> instruction writes only 32 bits of value on stack. Upper
+32 bits of stack value contain existing value (some garbage). If we
+wanted to fix it then <code>str x1, [sp]</code> would place all <code>64</code> bits as. In
+theory <code>gcc</code> could have used that instruction even for your unmodified
+case. But it does not have to.</p>
+<p>This is our corruption mechanic: we store 32 bits on stack for
+parammeters <code>8</code> and above and then read 64-bit values from store
+locations in <code>C</code> pseudo-code:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// main():</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> val<span class="op">;</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">size_t</span> location <span class="op">=</span> uninitialized<span class="op">();</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(</span><span class="dt">int</span><span class="op">*)(&amp;</span>location<span class="op">)</span> <span class="op">=</span> val<span class="op">;</span> <span class="co">// store 32 initialized bits</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="co">// foo():</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">size_t</span> result <span class="op">=</span> <span class="op">*(</span><span class="dt">size_t</span><span class="op">*)(&amp;</span>location<span class="op">);</span> <span class="co">// load 64 bits</span></span></code></pre></div>
+<h2 id="possible-fix">Possible fix</h2>
+<p>Once the breakage is clear the fix is simple: use exact expected type
+at call site. In this case <code>size_t</code> instead of <code>int</code>:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a.c</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ a.fixed.c</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -16,3 +16,3 @@</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a> int main() {</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="st">-    foo(16, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16);</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="va">+    foo(16, (size_t)1,(size_t)2,(size_t)3,(size_t)4,(size_t)5,(size_t)6,(size_t)7,(size_t)8,(size_t)9,(size_t)10,(size_t)11,(size_t)12,(size_t)13,(size_t)14,(size_t)15,(size_t)16);</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>Not the prettiest change, but it gets the job done:</p>
+<pre><code>$ aarch64-unknown-linux-gnu-gcc -O1 a.fixed.c -o a &amp;&amp; ./a
+[0]: 1
+[1]: 2
+[2]: 3
+[3]: 4
+[4]: 5
+[5]: 6
+[6]: 7
+[7]: 8
+[8]: 9
+[9]: 10
+[10]: 11
+[11]: 12
+[12]: 13
+[13]: 14
+[14]: 15
+[15]: 16</code></pre>
+<p>The code change looks as expected:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff -U0 a.S a.fixed.S</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a.S 2023-12-17 23:51:24.749893552 +0000</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ a.fixed.S   2023-12-17 23:51:29.687979158 +0000</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2 +2 @@</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="st">-       .file   &quot;a.c&quot;</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a><span class="va">+       .file   &quot;a.fixed.c&quot;</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -102,13 +102,13 @@</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w0, 16</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w0, [sp, 64]</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 15</span></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 56]</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 14</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 48]</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 13</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 40]</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 12</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 32]</span></span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 11</span></span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 24]</span></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 10</span></span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 16]</span></span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 9</span></span>
+<span id="cb20-23"><a href="#cb20-23" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp, 8]</span></span>
+<span id="cb20-24"><a href="#cb20-24" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 8</span></span>
+<span id="cb20-25"><a href="#cb20-25" aria-hidden="true" tabindex="-1"></a><span class="st">-       str     w1, [sp]</span></span>
+<span id="cb20-26"><a href="#cb20-26" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x0, 16</span></span>
+<span id="cb20-27"><a href="#cb20-27" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x0, [sp, 64]</span></span>
+<span id="cb20-28"><a href="#cb20-28" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 15</span></span>
+<span id="cb20-29"><a href="#cb20-29" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 56]</span></span>
+<span id="cb20-30"><a href="#cb20-30" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 14</span></span>
+<span id="cb20-31"><a href="#cb20-31" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 48]</span></span>
+<span id="cb20-32"><a href="#cb20-32" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 13</span></span>
+<span id="cb20-33"><a href="#cb20-33" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 40]</span></span>
+<span id="cb20-34"><a href="#cb20-34" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 12</span></span>
+<span id="cb20-35"><a href="#cb20-35" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 32]</span></span>
+<span id="cb20-36"><a href="#cb20-36" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 11</span></span>
+<span id="cb20-37"><a href="#cb20-37" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 24]</span></span>
+<span id="cb20-38"><a href="#cb20-38" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 10</span></span>
+<span id="cb20-39"><a href="#cb20-39" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 16]</span></span>
+<span id="cb20-40"><a href="#cb20-40" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 9</span></span>
+<span id="cb20-41"><a href="#cb20-41" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp, 8]</span></span>
+<span id="cb20-42"><a href="#cb20-42" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 8</span></span>
+<span id="cb20-43"><a href="#cb20-43" aria-hidden="true" tabindex="-1"></a><span class="va">+       str     x1, [sp]</span></span>
+<span id="cb20-44"><a href="#cb20-44" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -119,7 +119,7 @@</span></span>
+<span id="cb20-45"><a href="#cb20-45" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w7, 7</span></span>
+<span id="cb20-46"><a href="#cb20-46" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w6, 6</span></span>
+<span id="cb20-47"><a href="#cb20-47" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w5, 5</span></span>
+<span id="cb20-48"><a href="#cb20-48" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w4, 4</span></span>
+<span id="cb20-49"><a href="#cb20-49" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w3, 3</span></span>
+<span id="cb20-50"><a href="#cb20-50" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w2, 2</span></span>
+<span id="cb20-51"><a href="#cb20-51" aria-hidden="true" tabindex="-1"></a><span class="st">-       mov     w1, 1</span></span>
+<span id="cb20-52"><a href="#cb20-52" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x7, 7</span></span>
+<span id="cb20-53"><a href="#cb20-53" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x6, 6</span></span>
+<span id="cb20-54"><a href="#cb20-54" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x5, 5</span></span>
+<span id="cb20-55"><a href="#cb20-55" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x4, 4</span></span>
+<span id="cb20-56"><a href="#cb20-56" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x3, 3</span></span>
+<span id="cb20-57"><a href="#cb20-57" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x2, 2</span></span>
+<span id="cb20-58"><a href="#cb20-58" aria-hidden="true" tabindex="-1"></a><span class="va">+       mov     x1, 1</span></span></code></pre></div>
+<p>Only <code>main</code> saw the change. The change is shift from 32-bit to 64-bit
+registers in value assignments and value stores.</p>
+<h2 id="is-this-bug-real">Is this bug real?</h2>
+<p>The main takeaway from the above is that on <code>aarch64</code> arguments <code>9</code> and
+above must not mix <code>int</code> / <code>size_t</code> and pass exact type if those
+arguments are present in variadic template.</p>
+<p>Could such bug happen on real code or 9 arguments are too much to be
+seen in the wild? Guess how I found this obscurity!</p>
+<p>Here is the <a href="https://git.kernel.org/pub/scm/network/wireless/iwd.git/tree/src/dpp-util.c?h=2.11#n1379"><code>iwd-0.11</code></a> code:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="dt">bool</span> prf_plus<span class="op">(</span><span class="kw">enum</span> l_checksum_type type<span class="op">,</span> <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>key<span class="op">,</span> <span class="dt">size_t</span> key_len<span class="op">,</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>              <span class="dt">void</span> <span class="op">*</span>out<span class="op">,</span> <span class="dt">size_t</span> out_len<span class="op">,</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>              <span class="dt">size_t</span> n_extra<span class="op">,</span> <span class="op">...)</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> iovec iov<span class="op">[</span>n_extra <span class="op">+</span> <span class="dv">2</span><span class="op">];</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> va<span class="op">;</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">size_t</span> i<span class="op">;</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>va<span class="op">,</span> n_extra<span class="op">);</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> n_extra<span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>        iov<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">].</span>iov_base <span class="op">=</span> va_arg<span class="op">(</span>va<span class="op">,</span> <span class="dt">void</span> <span class="op">*);</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>        iov<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">].</span>iov_len  <span class="op">=</span> va_arg<span class="op">(</span>va<span class="op">,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a><span class="dt">bool</span> dpp_derive_z<span class="op">(</span><span class="dt">const</span> <span class="dt">uint8_t</span> <span class="op">*</span>mac_i<span class="op">,</span> more params<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>z_out<span class="op">,</span> <span class="dt">size_t</span> <span class="op">*</span>z_len<span class="op">)</span></span>
+<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>    prf_plus<span class="op">(</span>sha<span class="op">,</span> prk<span class="op">,</span> bytes<span class="op">,</span> z_out<span class="op">,</span> bytes<span class="op">,</span></span>
+<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>             <span class="dv">5</span><span class="op">,</span></span>
+<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>             mac_i<span class="op">,</span> <span class="dv">6</span><span class="op">,</span></span>
+<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>             mac_r<span class="op">,</span> <span class="dv">6</span><span class="op">,</span></span>
+<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>             m_x<span class="op">,</span> bytes<span class="op">,</span></span>
+<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a>             n_x<span class="op">,</span> bytes<span class="op">,</span></span>
+<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>             key<span class="op">,</span> strlen<span class="op">(</span>key<span class="op">));</span></span></code></pre></div>
+<p>Do you see where the thing breaks?</p>
+<p>Here <code>prf_plus()</code> expects <code>n_extra</code> pairs of <code>void *</code> / <code>size_t</code> in the
+variadic arguments. But <code>dpp_derive_z()</code> passes <code>void *</code> / <code>int</code> as
+first two pairs.</p>
+<p>I would never notice it if not for mysteriously failing <code>iwd</code> test on
+<code>aarch64</code> platform:</p>
+<pre><code>    $ unit/test-dpp
+    TEST: DPP test responder-only key derivation
+    TEST: DPP test mutual key derivation
+    TEST: DPP test PKEX key derivation
+    test-dpp: unit/test-dpp.c:514: test_pkex_key_derivation: Assertion `!memcmp(tmp, __tmp, 32)' failed.</code></pre>
+<p><code>strace</code> shown the smoking gun this way:</p>
+<pre><code>$ strace unit/test-dpp
+...
+sendmsg(4, {
+    msg_name=NULL,
+    msg_namelen=0,
+    msg_iov=[
+        {iov_base=&quot;&quot;, iov_len=0},
+        {iov_base=&quot;\254d\221\364R\7&quot;, iov_len=6},
+        {iov_base=&quot;n^\316n\363\335\0\0\0\0&quot;..., iov_len=281470681743366},
+        {iov_base=&quot;\274\312\216#\345\300P2&quot;..., iov_len=32},
+        {iov_base=&quot;\n\221\340r\210\t\273\2&quot;..., iov_len=32},
+        {iov_base=&quot;thisisreallysecret&quot;, iov_len=18},
+        {iov_base=&quot;\1&quot;, iov_len=1}],
+    msg_iovlen=7, msg_controllen=0, msg_flags=0}, MSG_MORE) = 3136</code></pre>
+<p>See anything suspicious?</p>
+<p>Length of the third element of <code>msg_iov</code> array is <code>281470681743366</code> (or
+<code>0xffff00000006</code> in hex). It should have been <code>6</code> if not for higher
+<code>0xffff</code> garbage bits.</p>
+<p>While we are at it: <code>sendmsg()</code> did not fail with an <code>-EINVAL</code> error and
+consumed <code>3K</code> of data. At best it will fail at the key derivation. At
+worst it might send your unrelated process memory over the network.</p>
+<p>A nasty kind of bug.</p>
+<h2 id="bonus-section">Bonus section</h2>
+<p>If we go back to our original broken example are there any other 64-bit
+architectures where <code>size_t</code> / <code>int</code> mismatch is as problematic as on
+<code>aarch64</code>?</p>
+<p>I’ll show the result for the following list of <code>8</code> <code>64</code>-bit
+architectures I could remember:</p>
+<ul>
+<li><code>alpha</code></li>
+<li><code>mips64 -mabi=64</code></li>
+<li><code>loongarch64</code></li>
+<li><code>s390x</code></li>
+<li><code>powerpc64</code></li>
+<li><code>sparc64</code></li>
+<li><code>riscv64</code></li>
+<li><code>ia64</code></li>
+</ul>
+<p>What is your guess? Is <code>aarch64</code> the unique one being broken here, or
+maybe <code>x86_64</code> is unique in that it happens to work anyway? Will it be
+endianness-specific? Or it’s closer to <code>50/50</code>?</p>
+<p>Let’s see:</p>
+<ul>
+<li><p><code>alpha</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    lda t0<span class="op">,</span><span class="dv">6</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    stq t0<span class="op">,</span><span class="dv">0</span><span class="op">(</span><span class="kw">sp</span><span class="op">)</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    ldq a3<span class="op">,</span><span class="dv">0</span><span class="op">(</span>t0<span class="op">)</span></span></code></pre></div>
+<p>The target passes first <code>6</code> arguments in registers.</p></li>
+<li><p><code>mips64 -mabi=64</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    li v0<span class="op">,</span><span class="dv">8</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>    sd v0<span class="op">,</span><span class="dv">0</span><span class="op">(</span><span class="kw">sp</span><span class="op">)</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    ld a3<span class="op">,-</span><span class="dv">8</span><span class="op">(</span>s1<span class="op">)</span></span></code></pre></div>
+<p>The target passes first <code>8</code> arguments in registers.</p></li>
+<li><p><code>loongarch64</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    addi<span class="op">.</span>w <span class="op">$</span>t0<span class="op">,</span> <span class="op">$</span>zero<span class="op">,</span> <span class="dv">9</span><span class="op">(</span><span class="bn">0x9</span><span class="op">)</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>    st<span class="op">.</span>d <span class="op">$</span>t0<span class="op">,</span> <span class="op">$</span>sp<span class="op">,</span> <span class="dv">8</span><span class="op">(</span><span class="bn">0x8</span><span class="op">)</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb29"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    ld<span class="op">.</span>d <span class="op">$</span>a3<span class="op">,</span> <span class="op">$</span>s1<span class="op">,</span> <span class="op">-</span><span class="dv">8</span><span class="op">(</span><span class="bn">0xff8</span><span class="op">)</span></span></code></pre></div>
+<p>The target passes first <code>8</code> arguments in registers.</p></li>
+<li><p><code>s390x</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>    lghi <span class="op">%</span>r1<span class="op">,</span><span class="dv">5</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>    stg <span class="op">%</span>r1<span class="op">,</span><span class="dv">160</span><span class="op">(%</span><span class="kw">r15</span><span class="op">)</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>    lg <span class="op">%</span>r5<span class="op">,</span><span class="dv">0</span><span class="op">(%</span>r1<span class="op">)</span></span></code></pre></div>
+<p>The target passes first <code>5</code> arguments in registers.</p></li>
+<li><p><code>powerpc64</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    li r7<span class="op">,</span><span class="dv">8</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">std</span> r7<span class="op">,</span><span class="dv">112</span><span class="op">(</span>r1<span class="op">)</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb33"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>    ldu r6<span class="op">,</span><span class="dv">8</span><span class="op">(</span>r29<span class="op">)</span></span></code></pre></div>
+<p>The target passes first <code>8</code> arguments in registers.</p></li>
+<li><p><code>sparc64</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb34"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">mov</span>  <span class="dv">6</span><span class="op">,</span> <span class="op">%</span>g1</span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>    stx  <span class="op">%</span>g1<span class="op">,</span> <span class="op">[</span> <span class="op">%</span><span class="kw">sp</span> <span class="op">+</span> <span class="bn">0x8af</span> <span class="op">]</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb35"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>    ldx  <span class="op">[</span> <span class="op">%</span>i5 <span class="op">],</span> <span class="op">%</span>o3</span></code></pre></div>
+<p>The target passes first <code>6</code> arguments in registers.</p></li>
+<li><p><code>riscv64</code>: no corruption. Stores 64-bit values on stack:</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>    li a5</span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>    sd a5<span class="op">,</span><span class="dv">0</span><span class="op">(</span><span class="kw">sp</span><span class="op">)</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb37"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>    ld a3<span class="op">,-</span><span class="dv">8</span><span class="op">(</span>s1<span class="op">)</span></span></code></pre></div>
+<p>The target passes first <code>8</code> arguments in registers.</p></li>
+<li><p><code>ia64</code>: has corruption:</p>
+<pre><code>$ ./a
+[0]: 1
+[1]: 2
+[2]: 3
+[3]: 4
+[4]: 5
+[5]: 6
+[6]: 7
+[7]: 8
+[8]: 2305843009213693961
+[9]: 2305843009213693962
+[10]: 11
+[11]: 12
+[12]: 13
+[13]: 14
+[14]: 15
+[15]: 16</code></pre>
+<p><code>ia64</code> stores only 32-bit value on stack (just like <code>aarch64</code>):</p>
+<div class="sourceCode" id="cb39"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="fu">main:</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">mov</span> <span class="kw">r15</span><span class="op">=</span><span class="dv">8</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>    st4 <span class="op">[</span><span class="kw">r14</span><span class="op">]=</span><span class="kw">r15</span></span></code></pre></div>
+<p>and loads it as 64-bit value:</p>
+<div class="sourceCode" id="cb40"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="fu">foo:</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; ...</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>    ld8 r47<span class="op">=[</span><span class="kw">r14</span><span class="op">]</span></span></code></pre></div>
+<p>The target passes first <code>8</code> arguments in registers.</p></li>
+</ul>
+<p>Final table:</p>
+<table>
+<thead>
+<tr class="header">
+<th style="text-align: center;">target</th>
+<th style="text-align: center;">Is affected</th>
+<th style="text-align: center;">In registers</th>
+<th style="text-align: center;">First on stack</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: center;"><code>alpha</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">6</td>
+<td style="text-align: center;">7</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><code>mips64</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><code>loongarch64</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><code>s390x</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">5</td>
+<td style="text-align: center;">6</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><code>powerpc64</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><code>sparc64</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">6</td>
+<td style="text-align: center;">7</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><code>riscv64</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong><code>ia64</code></strong></td>
+<td style="text-align: center;"><strong>yes</strong></td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+</tr>
+<tr class="odd">
+<td style="text-align: center;"><code>x86_64</code></td>
+<td style="text-align: center;">no</td>
+<td style="text-align: center;">6</td>
+<td style="text-align: center;">7</td>
+</tr>
+<tr class="even">
+<td style="text-align: center;"><strong><code>aarch64</code></strong></td>
+<td style="text-align: center;"><strong>yes</strong></td>
+<td style="text-align: center;">8</td>
+<td style="text-align: center;">9</td>
+</tr>
+</tbody>
+</table>
+<p>Thus <code>aarch64</code> is not unique, but very close to it :)</p>
+<h2 id="parting-words">Parting words</h2>
+<p>One has to be careful at specifying exact types expected by variadic
+functions. Integral type conversion rules do not apply the same way you
+would expect for a non-variadic function call.</p>
+<p>If you are writing your function with variadic parameters and it’s not
+a <code>printf()</code>-style function then compiler will not be able to help you
+with warnings. Make sure you have a way to validate passed types via
+other means.</p>
+<p>Sometimes breakages are very subtle: first <code>8</code> parameters would work
+just fine and <code>9</code>-th one will eat all your data. And it will happen only
+on small set of architectures: <code>aarch64</code> and <code>ia64</code> :)</p>
+<p><code>iwd</code> fix went upstream as
+<a href="https://git.kernel.org/pub/scm/network/wireless/iwd.git/commit/?id=688d27700833258a139a6fbd5661334bd2c9fa98">this patch</a>.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
