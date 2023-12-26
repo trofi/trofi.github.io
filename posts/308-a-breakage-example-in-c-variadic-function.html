@@ -850,6 +850,35 @@ on small set of architectures: <code>aarch64</code> and <code>ia64</code> :)</p>
 <p><code>iwd</code> fix went upstream as
 <a href="https://git.kernel.org/pub/scm/network/wireless/iwd.git/commit/?id=688d27700833258a139a6fbd5661334bd2c9fa98">this patch</a>.</p>
 <p>Have fun!</p>
+<h2 id="is-amd64-actually-immune-to-this">Is AMD64 actually immune to this?</h2>
+<p><a href="https://en.wikipedia.org/wiki/Betteridge%27s_law_of_headlines">No</a>.
+GCC’s use of <code>push</code> instructions is controlled by two options,
+<code>-mpush-args</code> and <code>-mno-accumulate-outgoing-args</code>:</p>
+<div class="sourceCode" id="cb41"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">bool</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>ix86_push_argument <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">int</span> npush<span class="op">)</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* If SSE2 is available, use vector move to put large argument onto</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a><span class="co">     stack.  NB:  In 32-bit mode, use 8-byte vector move.  */</span></span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="op">((!</span>TARGET_SSE2 <span class="op">||</span> npush <span class="op">&lt;</span> <span class="op">(</span>TARGET_64BIT <span class="op">?</span> <span class="dv">16</span> <span class="op">:</span> <span class="dv">8</span><span class="op">))</span></span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>          <span class="op">&amp;&amp;</span> TARGET_PUSH_ARGS</span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>          <span class="op">&amp;&amp;</span> <span class="op">!</span>ACCUMULATE_OUTGOING_ARGS<span class="op">);</span></span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The latter option is automatically adjusted depending on which CPU
+family GCC should tune for:</p>
+<div class="sourceCode" id="cb42"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* X86_TUNE_ACCUMULATE_OUTGOING_ARGS: Allocate stack space for outgoing</span></span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="co">   arguments in prologue/epilogue instead of separately for each call</span></span>
+<span id="cb42-3"><a href="#cb42-3" aria-hidden="true" tabindex="-1"></a><span class="co">   by push/pop instructions.</span></span>
+<span id="cb42-4"><a href="#cb42-4" aria-hidden="true" tabindex="-1"></a><span class="co">   This increase code size by about 5% in 32bit mode, less so in 64bit mode</span></span>
+<span id="cb42-5"><a href="#cb42-5" aria-hidden="true" tabindex="-1"></a><span class="co">   because parameters are passed in registers.  It is considerable</span></span>
+<span id="cb42-6"><a href="#cb42-6" aria-hidden="true" tabindex="-1"></a><span class="co">   win for targets without stack engine that prevents multple push operations</span></span>
+<span id="cb42-7"><a href="#cb42-7" aria-hidden="true" tabindex="-1"></a><span class="co">   to happen in parallel.  */</span></span>
+<span id="cb42-8"><a href="#cb42-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb42-9"><a href="#cb42-9" aria-hidden="true" tabindex="-1"></a>DEF_TUNE <span class="op">(</span>X86_TUNE_ACCUMULATE_OUTGOING_ARGS<span class="op">,</span> <span class="st">&quot;accumulate_outgoing_args&quot;</span><span class="op">,</span></span>
+<span id="cb42-10"><a href="#cb42-10" aria-hidden="true" tabindex="-1"></a>          m_PPRO <span class="op">|</span> m_P4_NOCONA <span class="op">|</span> m_BONNELL <span class="op">|</span> m_SILVERMONT <span class="op">|</span> m_KNL <span class="op">|</span> m_KNM <span class="op">|</span> m_INTEL</span>
+<span id="cb42-11"><a href="#cb42-11" aria-hidden="true" tabindex="-1"></a>          <span class="op">|</span> m_GOLDMONT <span class="op">|</span> m_GOLDMONT_PLUS <span class="op">|</span> m_ATHLON_K8 <span class="op">|</span> m_LUJIAZUI<span class="op">)</span></span></code></pre></div>
+<p>So the use of <code>push</code> vs. <code>mov</code> is a tuning choice, which makes this bug
+even more subtle: it can surface depending on which CPU is specified via
+the <code>-march=</code> or <code>-mtune</code> option.</p>
         </div>
     </body>
 </html>
