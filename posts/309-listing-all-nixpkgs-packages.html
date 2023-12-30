@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>listing all nixpkgs packages</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>listing all nixpkgs packages</h1>
+            
+                <div class="info">December 30, 2023</div>
+            
+
+            <h2 id="intro">Intro</h2>
+<p><code>nixpkgs</code> provides <a href="https://repology.org/repository/nix_unstable">a lot of packages</a>.
+Today <code>repology.org</code> says it’s <code>106937</code> packages for <code>89083</code> projects.</p>
+<p>As I understand it <code>repology</code>’s <code>project</code> means upstream project name.
+If we pick <code>python:networkx</code> <code>repology</code> name then <code>nixpkgs</code> provides a
+few versions of <code>networkx</code> for each python version:</p>
+<pre><code>$ nix-env -qa | grep networkx
+python3.10-networkx-3.1
+python3.11-networkx-3.1</code></pre>
+<p>But what if I tell you the above number is only a minor subset of package
+definitions hiding in <code>nixpkgs</code>? You could easily access packages like
+<code>python3.12-networkx-3.1</code>, <code>python3.10-networkx-3.1</code> or even
+<code>python3.11-networkx-3.1-riscv64-unknown-linux-gnu</code>. None of them are
+listed on <code>repology</code>.</p>
+<p>Abundance of various package flavours like this one is a well-known fact
+or a seasoned user of <code>nixpkgs</code>.</p>
+<p>A few days ago I attempted to update <code>autoconf</code> from <code>2.71</code> to <code>2.72</code>
+version. It’s supposed to be a minor maintenance release without
+many breaking changes. To make sure I don’t break too much I attempted
+to validate that all the packages that somehow use <code>autoconf</code> are still
+building correctly.</p>
+<h2 id="on-attributes-and-package-names">On attributes and package names</h2>
+<p><code>NixOS</code> and <code>nixpkgs</code> users almost never deal with exact package names:
+resolving a package name to package definition is slow and ambiguous.</p>
+<p>Instead <code>nixpkgs</code> encourages users to use “attribute names” using
+<code>nix</code>-language level constructs.</p>
+<p>For example <code>python3.11-networkx-3.1</code> would have a name of
+<code>python3Packages.networkx</code> on my system. The same package also has quite
+a few aliases:</p>
+<ul>
+<li><code>python311Packages.networkx</code></li>
+<li><code>python3.pkgs.networkx</code></li>
+<li><code>python311.pkgs.networkx</code></li>
+</ul>
+<p>Each of them evaluates to the same package definition. An example
+<code>nix repl</code> session to make sure it’s still true:</p>
+<pre><code>$ nix repl -f '&lt;nixpkgs&gt;'
+
+nix-repl&gt; python3Packages.networkx
+«derivation /nix/store/659allxmdwqxr4zmg03z8wqyizlsdmgh-python3.11-networkx-3.1.drv»
+
+nix-repl&gt; python311Packages.networkx
+«derivation /nix/store/659allxmdwqxr4zmg03z8wqyizlsdmgh-python3.11-networkx-3.1.drv»
+
+nix-repl&gt; python311.pkgs.networkx
+«derivation /nix/store/659allxmdwqxr4zmg03z8wqyizlsdmgh-python3.11-networkx-3.1.drv</code></pre>
+<p>The <code>.drv</code> files have identical hash part which means all the names are
+equivalent when used as is.</p>
+<p>Simpler examples of attributes are <code>re2c</code> and <code>gnugrep</code>. More complex
+ones are <code>python3Packages.ninja</code>, <code>linuxPackages_latest.kernel.configfile</code> and
+<code>pkgsCross.riscv64.re2c</code>.</p>
+<p>Thus to answer a question of what packages should I test after
+<code>autoconf</code> upgrade I would prefer to get attribute names instead of
+package names.</p>
+<h2 id="poor-mans-reverse-dependency-lookup">Poor man’s reverse dependency lookup</h2>
+<p>I routinely do package updates that touch many packages indirectly.
+To get a list of impacted packages <code>nixpkgs</code> provides a
+<a href="https://github.com/NixOS/nixpkgs/blob/master/maintainers/scripts/rebuild-amount.sh"><code>maintainers/scripts/rebuild-amount.sh</code> script</a>.</p>
+<p>It instantiates all the known to hydra attributes into <code>.drv</code> files and
+checks changed hashes before and after the change. This diff is our
+impact. Script’s typical output looks like that:</p>
+<pre><code>$ time ./maintainers/scripts/rebuild-amount.sh --print HEAD^
+Estimating rebuild amount by counting changed Hydra jobs (parallel=unset).
+     32 x86_64-darwin
+     63 x86_64-linux
+
+          asciidoc-full-with-plugins.x86_64-darwin  dist=/nix/store/...-asciidoc-full-with-plugins-10.2.0-dist;/nix/store/...-asciidoc-full-with-plugins-10.2.0
+          asciidoc-full-with-plugins.x86_64-linux   dist=/nix/store/...-asciidoc-full-with-plugins-10.2.0-dist;/nix/store/...-asciidoc-full-with-plugins-10.2.0
+          asciidoc-full.x86_64-darwin               dist=/nix/store/...-asciidoc-full-10.2.0-dist;/nix/store/...-asciidoc-full-10.2.0
+          asciidoc-full.x86_64-linux                dist=/nix/store/...-asciidoc-full-10.2.0-dist;/nix/store/...-asciidoc-full-10.2.0
+          auto-multiple-choice.x86_64-darwin        /nix/store/...-auto-multiple-choice-1.6.0
+          auto-multiple-choice.x86_64-linux         /nix/store/...-auto-multiple-choice-1.6.0
+          bicgl.x86_64-darwin                       /nix/store/...-bicgl-unstable-2018-04-06
+          bicgl.x86_64-linux                        /nix/store/...-bicgl-unstable-2018-04-06
+          bicpl.x86_64-darwin                       /nix/store/...-bicpl-unstable-2020-10-15
+          bicpl.x86_64-linux                        /nix/store/...-bicpl-unstable-2020-10-15
+          cantor.x86_64-linux                       /nix/store/...-cantor-23.08.4
+          clevis.x86_64-linux                       man=/nix/store/...-clevis-19-man;/nix/store/...-clevis-19
+          conglomerate.x86_64-darwin                /nix/store/...-conglomerate-unstable-2017-09-10
+          ...
+          netpbm.x86_64-darwin                                                                     bin=/nix/store/...-netpbm-11.4.4-bin;dev=/nix/store/...-netpbm-11.4.4-dev;/nix/store/...-netpbm-11.4.4
+          netpbm.x86_64-linux                                                                      bin=/nix/store/...-netpbm-11.4.4-bin;dev=/nix/store/...-netpbm-11.4.4-dev;/nix/store/...-netpbm-11.4.4
+
+          ...
+...
+real    6m38,854s
+user    6m19,604s
+sys     0m17,102s</code></pre>
+<p>Here I changed <code>netpbm</code> package in <code>HEAD</code> commit and that caused the
+rebuild of <code>63</code> <code>x86_64-linux</code> packages (and <code>32</code> <code>x86_64-darwin</code> ones).
+In this case rebuilding all <code>63</code> of them is not a big deal.</p>
+<p>But even here some of the packages are probably not worth testing.
+<code>netpbm</code> has something to do with image formats and <code>cleavis</code> is about
+the encryption. I would guess <code>cleavis</code> would not be impacted by the
+update at all.</p>
+<p>It would be nice to find all <strong>direct</strong> users of <code>netpbm</code> instead and
+rebuild those.</p>
+<p>The very first topic I created on <code>NixOS discourse</code> was about
+<a href="https://discourse.nixos.org/t/how-do-you-find-reverse-dependencies/15057">reverse dependencies lookup</a>.</p>
+<p>I was a bit surprised there was no standard tool like that and wrote a
+hack to do it:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># use as:</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">#    import ./arevdeps.nix linuxHeaders pkgs lib</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="va">revdepAttr</span><span class="op">:</span> <span class="va">pkgs</span><span class="op">:</span> <span class="va">lib</span><span class="op">:</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> <span class="va">isDrv</span> <span class="op">=</span> <span class="va">v</span><span class="op">:</span> <span class="op">(</span><span class="bu">builtins</span>.tryEval v<span class="op">)</span>.success <span class="op">&amp;&amp;</span> lib.isDerivation v<span class="op">;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="co"># skip broken and unsupported packages on this system in a very crude way:</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">safeReadFile</span> <span class="op">=</span> <span class="va">df</span><span class="op">:</span> <span class="kw">let</span> <span class="va">c</span> <span class="op">=</span> <span class="bu">builtins</span>.tryEval <span class="op">(</span><span class="bu">builtins</span>.readFile df<span class="op">);</span> <span class="kw">in</span> <span class="kw">if</span> c.success <span class="kw">then</span> c.value <span class="kw">else</span> <span class="st">&quot;&quot;</span><span class="op">;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="va">fastHasEntry</span> <span class="op">=</span> <span class="va">i</span><span class="op">:</span> <span class="va">s</span><span class="op">:</span> s <span class="op">!</span>= <span class="bu">builtins</span>.replaceStrings <span class="op">[</span>i<span class="op">]</span> <span class="op">[</span><span class="st">&quot;&lt;FOUND-HERE&gt;&quot;</span><span class="op">]</span> s<span class="op">;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="va">sInDrv</span> <span class="op">=</span> <span class="va">s</span><span class="op">:</span> <span class="va">d</span><span class="op">:</span> fastHasEntry s <span class="op">(</span>safeReadFile d.drvPath<span class="op">);</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="va">rdepInDrv</span> <span class="op">=</span> <span class="va">rdep</span><span class="op">:</span> <span class="va">d</span><span class="op">:</span> <span class="bu">builtins</span>.any <span class="op">(</span><span class="va">s</span><span class="op">:</span> sInDrv s d<span class="op">)</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>                                      <span class="op">(</span><span class="bu">builtins</span>.<span class="bu">map</span> <span class="op">(</span><span class="va">o</span><span class="op">:</span> rdep.$<span class="op">{</span><span class="va">o</span><span class="op">}</span>.outPath<span class="op">)</span> rdep.outputs<span class="op">);</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="va">matchedPackages</span> <span class="op">=</span> lib.filterAttrs <span class="op">(</span><span class="va">n</span><span class="op">:</span> <span class="va">d</span><span class="op">:</span> isDrv d <span class="op">&amp;&amp;</span> rdepInDrv revdepAttr d<span class="op">)</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>                                      pkgs<span class="op">;</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span> <span class="bu">builtins</span>.attrNames matchedPackages</span></code></pre></div>
+<p>It’s a bit wordy (not much <code>nix</code> experience by then) but it’s idea is
+simple: find references to a searched package via it’s <code>.drv</code> path by
+looking at <code>.drv</code> files created from attributes in <code>&lt;nixpkgs&gt;</code> object.
+Let’s try to look up <code>netpbm</code> against it:</p>
+<pre><code>nix-repl&gt; import ./arevdeps.nix netpbm pkgs lib
+[ &quot;auto-multiple-choice&quot; &quot;bicpl&quot; &quot;fbcat&quot; &quot;foomatic-db-ppds&quot; &quot;fped&quot;
+  &quot;img2pdf&quot; &quot;latex2html&quot; &quot;lilypond&quot; &quot;lilypond-unstable&quot; &quot;mup&quot; &quot;netpbm&quot;
+  &quot;pcb&quot; &quot;pnglatex&quot; &quot;sng&quot; &quot;xplanet&quot; &quot;yad&quot; ]</code></pre>
+<p>Only 16 packages!</p>
+<p>The major caveat is that the hack does not try to descend from the top
+level down to other attributes like <code>python3Packages.*</code> or
+<code>haskellPackages.*</code>.</p>
+<p>In theory you could direct the hack to specific attributes and expand
+the output:</p>
+<pre><code>nix-repl&gt; import ./arevdeps.nix netpbm pkgs.python3Packages lib
+[ &quot;img2pdf&quot; &quot;pnglatex&quot; ]</code></pre>
+<p>In practice it’s not very convenient and I never did it. The command
+already takes a while to run and running it multiple times is no fun.</p>
+<p>I decided to extend initial script to handle nested attributes.</p>
+<h2 id="naive-attempt-to-extend-the-hack">Naive attempt to extend the hack</h2>
+<p>In theory it’s one small extension: add a tiny amount of code to descend
+into child attributes and you are done.</p>
+<p>Sounds good, did not work.</p>
+<p>The result started crashing on various syntax errors in various
+<code>nixpkgs</code> files. When I worked error around <code>nix</code> ate <code>100GB</code> of <code>RAM</code>
+and crashed without producing the result.</p>
+<p>I’ll spare you the implementation details of a modified script.</p>
+<p>Unbounded <code>RAM</code> usage is very unfortunate as the script in theory could
+run in constant space. It’s not very simple in practice as <code>nix</code> uses
+<a href="https://en.wikipedia.org/wiki/Boehm_garbage_collector"><code>boehm-gc</code></a> to
+control it’s heap usage. I’m not sure a single loaded <code>&lt;nixpkgs&gt;</code> tree
+allows for any garbage collection of <code>.drv</code> files.</p>
+<p>I filed <a href="https://github.com/NixOS/nix/issues/9671" class="uri">https://github.com/NixOS/nix/issues/9671</a> issue to see if there
+are any obvious references <code>nix</code> could remove to make garbage collection
+more efficient.</p>
+<p>But in the shorter term I had to try something else.</p>
+<h2 id="a-step-back-just-list-all-the-attributes">A step back: just list all the attributes</h2>
+<p>I realized there are multiple problems with my hack and I attempted to
+solve a simple problem. I wanted to just list all the available
+attributes in <code>&lt;nixpkgs&gt;</code>. Ideally not just those known to <code>hydra</code> CI
+builder but the ones hiding in <code>pkgsCross</code> in other places.</p>
+<p>Quiz question: how hard is it to get a list of such attributes to
+explore?</p>
+<p>Getting an attribute list of a single set is trivial via single call of
+<code>lib.attrNames</code>:</p>
+<pre><code>$ nix repl -f '&lt;nixpkgs&gt;'
+
+nix-repl&gt; lib.take 4 (lib.attrNames pkgs)
+[ &quot;AAAAAASomeThingsFailToEvaluate&quot; &quot;AMB-plugins&quot; &quot;ArchiSteamFarm&quot; &quot;AusweisApp2&quot; ]
+
+nix-repl&gt; lib.length (lib.attrNames pkgs)
+20059</code></pre>
+<p>The problem is that some of the attributes are neither derivations not
+attribute sets:</p>
+<pre><code>nix-repl&gt; pathsFromGraph
+/nix/store/jp811zl7njhg1g59x95dgqs4rddgr7xz-source/pkgs/build-support/kernel/paths-from-graph.pl</code></pre>
+<p>Luckily it’s easy to introspect value type via predefined predicates:</p>
+<pre><code>nix-repl&gt; lib.isPath pkgs.pathsFromGraph
+true
+
+nix-repl&gt; lib.isDerivation re2c
+true
+
+nix-repl&gt; lib.isAttrs pkgsCross
+true</code></pre>
+<p>Another problem is that some of attribute values don’t evaluate
+successfully. Sometimes intentionally:</p>
+<pre><code>nix-repl&gt; pkgs.AAAAAASomeThingsFailToEvaluate
+error:
+       … while calling the 'throw' builtin
+
+         at /nix/store/jp811zl7njhg1g59x95dgqs4rddgr7xz-source/pkgs/top-level/all-packages.nix:106:36:
+
+          105|   ### Evaluating the entire Nixpkgs naively will fail, make failure fast
+          106|   AAAAAASomeThingsFailToEvaluate = throw ''
+             |                                    ^
+          107|     Please be informed that this pseudo-package is not the only part
+
+       error: Please be informed that this pseudo-package is not the only part
+       of Nixpkgs that fails to evaluate. You should not evaluate
+       entire Nixpkgs without some special measures to handle failing
+       packages, like using pkgs/top-level/release-attrpaths.nix.
+
+nix-repl&gt; pkgs.gccWithoutTargetLibc
+error:
+       … while evaluating the attribute 'gccWithoutTargetLibc'
+        15967|   gccWithoutTargetLibc = assert stdenv.targetPlatform != stdenv.hostPlatform; let
+       error: assertion '((stdenv).targetPlatform != (stdenv).hostPlatform)' failed</code></pre>
+<p>And sometimes entirely by accident:</p>
+<pre><code>nix-repl&gt; pkgsLLVM.clang_6
+error:
+       … while evaluating the attribute 'clang_6'
+       error: attribute 'clangUseLLVM' missing</code></pre>
+<p>I just need to filter out all the problematic attributes and leave only
+evaluatable ones. <code>nix</code> even provides a <code>builtins.tryEval</code> just for
+this case:</p>
+<pre><code>nix-repl&gt; builtins.tryEval pkgs.AAAAAASomeThingsFailToEvaluate
+{ success = false; value = false; }
+
+nix-repl&gt; builtins.tryEval pkgs.gccWithoutTargetLibc
+{ success = false; value = false; }
+
+nix-repl&gt; builtins.tryEval pkgs.gcc
+{ success = true; value = «derivation /nix/store/y5vq20420rg2g6h03c8x7sxzjcxphg9w-gcc-wrapper-12.3.0.drv»; }</code></pre>
+<p>Sounds easy, right? As always there is a catch:</p>
+<pre><code>nix-repl&gt; builtins.tryEval pkgsLLVM.clang_6
+error:
+       error: attribute 'clangUseLLVM' missing
+
+nix-repl&gt; builtins.tryEval pkgsMusl.adobe-reader
+       error: evaluation aborted with the following error message: 'unsupported platform for the pure Linux stdenv'</code></pre>
+<p>Not all error types can be caught by <code>builtins.tryEval</code>: only <code>throw</code>
+and <code>aasert</code> calls (these are explicitly present in the call) are
+catchable. The rest is considered a bug in <code>nix</code> expression and can’t be
+caught. I guess it’s the way to signal invalid <code>.nix</code> programs.</p>
+<p>Lack of error recovery means that I can’t do attribute filtering like
+in a single <code>nix</code> expression! I had 2 options:</p>
+<ol type="1">
+<li><p>Write an external script that probes for problematic attributes and
+somehow skips them.</p></li>
+<li><p>Fix all the evaluation errors in <code>nixpkgs</code> to make the naive
+filtering work.</p></li>
+</ol>
+<p><code>[1.]</code> would require use of <code>nix</code> as a library in one form or another.
+I was lazy and tried <code>[2.]</code> first. My assumption that it was a small
+list of easy to fix errors.</p>
+<p>Here is my first version of a simple attribute lister:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Usage example:</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="co"># $ nix-instantiate --eval --strict ~/.config/nixpkgs/lib/all-attrs.nix -I nixpkgs=$PWD</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">nixpkgs</span> <span class="op">?</span> <span class="bu">import</span> &lt;nixpkgs&gt; <span class="op">{</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">config</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">rootAttr</span> <span class="op">?</span> <span class="st">&quot;pkgs&quot;</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">verbose</span> <span class="op">?</span> <span class="dv">1</span> <span class="co"># warn</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="co"># How to pick, resource usage for me as of 2023-12-28:</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="co"># 1 - 10 seconds, ~2GB of RAM</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="co"># 2 - 2 minutes, ~25GB of RAM (unfiltered attrs)</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a><span class="co"># 3 - 5+ minutes, ~70GB+ or RAM Fails on attributes like `pkgsCross.iphone32.ammonite`</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="co"># anything else: at your risk</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a><span class="op">,</span> <span class="va">maxDepth</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>:</span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>  <span class="co"># simple variables:</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">lib</span> <span class="op">=</span> nixpkgs.lib<span class="op">;</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>  <span class="co"># logging:</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>  <span class="va">err</span>   <span class="op">=</span> <span class="va">s</span><span class="op">:</span> <span class="va">e</span><span class="op">:</span> lib.trace <span class="st">&quot;ERROR: </span><span class="sc">${</span>s<span class="sc">}</span><span class="st">&quot;</span> e<span class="op">;</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>  <span class="va">warn</span>  <span class="op">=</span> <span class="va">s</span><span class="op">:</span> <span class="va">e</span><span class="op">:</span> <span class="kw">if</span> verbose &gt;= <span class="dv">1</span> <span class="kw">then</span> lib.trace <span class="st">&quot;WARN: </span><span class="sc">${</span>s<span class="sc">}</span><span class="st">&quot;</span> e <span class="kw">else</span> e<span class="op">;</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>  <span class="va">info</span>  <span class="op">=</span> <span class="va">s</span><span class="op">:</span> <span class="va">e</span><span class="op">:</span> <span class="kw">if</span> verbose &gt;= <span class="dv">2</span> <span class="kw">then</span> lib.trace <span class="st">&quot;INFO: </span><span class="sc">${</span>s<span class="sc">}</span><span class="st">&quot;</span> e <span class="kw">else</span> e<span class="op">;</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a>  <span class="va">debug</span> <span class="op">=</span> <span class="va">s</span><span class="op">:</span> <span class="va">e</span><span class="op">:</span> <span class="kw">if</span> verbose &gt;= <span class="dv">3</span> <span class="kw">then</span> lib.trace <span class="st">&quot;DEBUG: </span><span class="sc">${</span>s<span class="sc">}</span><span class="st">&quot;</span> e <span class="kw">else</span> e<span class="op">;</span></span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a>  <span class="co"># root to start at</span></span>
+<span id="cb14-30"><a href="#cb14-30" aria-hidden="true" tabindex="-1"></a>  <span class="va">root</span> <span class="op">=</span> lib.attrByPath <span class="op">(</span>lib.splitString <span class="st">&quot;.&quot;</span> rootAttr<span class="op">)</span></span>
+<span id="cb14-31"><a href="#cb14-31" aria-hidden="true" tabindex="-1"></a>                        <span class="op">(</span>warn <span class="st">&quot;did not find </span><span class="sc">${</span>rootAttr<span class="sc">}</span><span class="st">&quot;</span> <span class="op">{})</span></span>
+<span id="cb14-32"><a href="#cb14-32" aria-hidden="true" tabindex="-1"></a>                        nixpkgs<span class="op">;</span></span>
+<span id="cb14-33"><a href="#cb14-33" aria-hidden="true" tabindex="-1"></a>  <span class="co"># other helpers:</span></span>
+<span id="cb14-34"><a href="#cb14-34" aria-hidden="true" tabindex="-1"></a>  <span class="va">isPrimitive</span> <span class="op">=</span> <span class="va">v</span><span class="op">:</span> lib.isFunction v</span>
+<span id="cb14-35"><a href="#cb14-35" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> lib.isString v</span>
+<span id="cb14-36"><a href="#cb14-36" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> lib.isBool v</span>
+<span id="cb14-37"><a href="#cb14-37" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> lib.isList v</span>
+<span id="cb14-38"><a href="#cb14-38" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> lib.isInt v</span>
+<span id="cb14-39"><a href="#cb14-39" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> lib.isPath v</span>
+<span id="cb14-40"><a href="#cb14-40" aria-hidden="true" tabindex="-1"></a>                <span class="op">||</span> v == <span class="cn">null</span><span class="op">;</span></span>
+<span id="cb14-41"><a href="#cb14-41" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-42"><a href="#cb14-42" aria-hidden="true" tabindex="-1"></a>  <span class="va">go</span> <span class="op">=</span> <span class="va">depth</span><span class="op">:</span> <span class="va">ap</span><span class="op">:</span> <span class="va">v</span><span class="op">:</span></span>
+<span id="cb14-43"><a href="#cb14-43" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span></span>
+<span id="cb14-44"><a href="#cb14-44" aria-hidden="true" tabindex="-1"></a>      <span class="va">a</span> <span class="op">=</span> lib.showAttrPath ap<span class="op">;</span></span>
+<span id="cb14-45"><a href="#cb14-45" aria-hidden="true" tabindex="-1"></a>      <span class="va">e</span> <span class="op">=</span> <span class="bu">builtins</span>.tryEval v<span class="op">;</span></span>
+<span id="cb14-46"><a href="#cb14-46" aria-hidden="true" tabindex="-1"></a>      <span class="va">maybe_go_deeper</span> <span class="op">=</span></span>
+<span id="cb14-47"><a href="#cb14-47" aria-hidden="true" tabindex="-1"></a>        <span class="kw">if</span> depth &gt;= maxDepth</span>
+<span id="cb14-48"><a href="#cb14-48" aria-hidden="true" tabindex="-1"></a>        <span class="kw">then</span> info <span class="st">&quot;too deep (depth=</span><span class="sc">${</span><span class="bu">toString</span> depth<span class="sc">}</span><span class="st">) nesting of a=</span><span class="sc">${</span>a<span class="sc">}</span><span class="st">, stop&quot;</span> <span class="op">[]</span></span>
+<span id="cb14-49"><a href="#cb14-49" aria-hidden="true" tabindex="-1"></a>        <span class="kw">else</span> <span class="bu">map</span> <span class="op">(</span><span class="va">nv</span><span class="op">:</span> go <span class="op">(</span>depth <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">(</span>ap <span class="op">++</span> <span class="op">[</span>nv.name<span class="op">])</span> nv.value<span class="op">)</span></span>
+<span id="cb14-50"><a href="#cb14-50" aria-hidden="true" tabindex="-1"></a>                 <span class="op">(</span>lib.attrsToList v<span class="op">);</span></span>
+<span id="cb14-51"><a href="#cb14-51" aria-hidden="true" tabindex="-1"></a>    <span class="kw">in</span> debug <span class="st">&quot;inspecting </span><span class="sc">${</span>a<span class="sc">}</span><span class="st">&quot;</span> <span class="op">(</span></span>
+<span id="cb14-52"><a href="#cb14-52" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> <span class="op">!</span>e.success <span class="kw">then</span> info <span class="st">&quot;</span><span class="sc">${</span>a<span class="sc">}</span><span class="st"> fails to evaluate&quot;</span> <span class="op">[]</span></span>
+<span id="cb14-53"><a href="#cb14-53" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> lib.isDerivation v</span>
+<span id="cb14-54"><a href="#cb14-54" aria-hidden="true" tabindex="-1"></a>    <span class="kw">then</span> <span class="op">[</span>a<span class="op">]</span></span>
+<span id="cb14-55"><a href="#cb14-55" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> lib.isAttrs v <span class="kw">then</span> maybe_go_deeper</span>
+<span id="cb14-56"><a href="#cb14-56" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> <span class="kw">if</span> isPrimitive v <span class="kw">then</span> <span class="op">[]</span></span>
+<span id="cb14-57"><a href="#cb14-57" aria-hidden="true" tabindex="-1"></a>    <span class="co"># should not get here</span></span>
+<span id="cb14-58"><a href="#cb14-58" aria-hidden="true" tabindex="-1"></a>    <span class="kw">else</span> warn <span class="st">&quot;unhandled type of </span><span class="sc">${</span>a<span class="sc">}</span><span class="st">&quot;</span> <span class="op">[]);</span></span>
+<span id="cb14-59"><a href="#cb14-59" aria-hidden="true" tabindex="-1"></a><span class="kw">in</span> lib.flatten <span class="op">(</span>go <span class="dv">0</span> <span class="op">[]</span> root<span class="op">)</span></span></code></pre></div>
+<p>It’s more than a page of code. It explores at most <code>maxDepth</code> attributes
+deep.</p>
+<p>Usage example:</p>
+<pre><code>$ time nix-instantiate --eval --strict ~/.config/nixpkgs/lib/all-attrs.nix -I nixpkgs=$PWD --arg maxDepth 1
+...
+[ &quot;AMB-plugins&quot; &quot;ArchiSteamFarm&quot; ... &quot;zulu8&quot; &quot;zuo&quot; &quot;zwave-js-server&quot;
+  &quot;zx&quot; &quot;zxcvbn-c&quot; &quot;zxfer&quot; &quot;zxing&quot; &quot;zxing-cpp&quot; &quot;zxpy&quot; &quot;zxtune&quot; &quot;zydis&quot;
+  &quot;zyn-fusion&quot; &quot;zynaddsubfx&quot; &quot;zynaddsubfx-fltk&quot; &quot;zynaddsubfx-ntk&quot; &quot;zz&quot;
+  &quot;zziplib&quot; &quot;zzuf&quot; ]
+
+real    0m6,587s
+user    0m5,963s
+sys     0m0,608s</code></pre>
+<p>Yay! It works! Note: this is just one depth level of attributes, like
+<code>re2c</code>. It does not contain packages like <code>python3Packages.ninja</code>. The
+run takes 2GB and 6 seconds to complete.</p>
+<p>If we want one level deeper we can specify <code>--maxDepth 2</code>:</p>
+<pre><code>$ time nix-instantiate --eval --strict ~/.config/nixpkgs/lib/all-attrs.nix -I nixpkgs=$PWD --arg maxDepth 2
+...
+[ &quot;AMB-plugins&quot; &quot;ArchiSteamFarm&quot; &quot;AusweisApp2&quot; &quot;BeatSaberModManager&quot;
+  ...
+  &quot;CuboCore.coreaction&quot; &quot;CuboCore.corearchiver&quot; &quot;CuboCore.corefm&quot;
+  &quot;CuboCore.coregarage&quot;
+  ...
+  &quot;__splicedPackages.AMB-plugins&quot; &quot;__splicedPackages.ArchiSteamFarm&quot;
+  ...
+  &quot;pkgsLLVM.aaaaxy&quot; &quot;pkgsLLVM.aacgain&quot;
+  ...
+  &quot;pkgsHostTarget.zig_0_11&quot; &quot;pkgsHostTarget.zig_0_9&quot;
+  ...
+  &quot;zyn-fusion&quot; &quot;zynaddsubfx&quot; &quot;zynaddsubfx-fltk&quot; &quot;zynaddsubfx-ntk&quot; &quot;zz&quot;
+  &quot;zziplib&quot; &quot;zzuf&quot; ]
+
+real    1m4,845s
+user    0m58,368s
+sys     0m5,910s</code></pre>
+<p>Second level also works! This time it took 25GB and a bit more than 1
+minute to print the result. There are a few issues with it: some
+attribute trees like <code>__splicedPackages</code> and <code>pkgsHostTarget</code> are
+redundant. We already get attributes like <code>python3Packages.ninja</code>.
+But are not quite at <code>pkgsCross.riscv64.re2c</code> yet.</p>
+<h2 id="running-the-naive-lister-on-larger-depths">Running the naive lister on larger depths</h2>
+<p>I ran the naive script above and derived the following fixes:</p>
+<ul>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277117">PR 277117</a>:
+<code>netbsd.libcurses</code> constructed invalid type of <code>NIX_CFLAGS_COMPILE</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/276984">PR 276984</a>:
+<code>beam.packages.erlangR23</code> referred to non-existent <code>erlang_23</code>
+attribute.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/276985">PR 276985</a>:
+<code>coq-kernel.launcher</code> used an alias instead of package name.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/276995">PR 276995</a>:
+<code>haskell.packages.ghc810.mod</code> used non-existent <code>mod_0_1_2_2</code> attribute
+in it’s definition.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/276986">PR 276986</a>:
+<code>dockerTools.tests.docker-tools</code> used an alias instead of actual name.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277211">PR 277211</a>:
+<code>nixosTests.nixops</code> had an unsatisfied function argument.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277355">PR 277355</a>:
+<code>stdenv</code> used <code>abort</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277364">PR 277364</a>:
+<code>python312Packages.array-record</code> accessed non-existent attribute.</li>
+</ul>
+<p>Getting 8 bugs just like that impressed me. I optimized lister a bit to
+be able to descend into larger attribute depths and found a few more
+bugs.</p>
+<p>If you did not notice my lister script never attempted to explore any
+attributes <strong>within</strong> derivations. If we pick a <code>re2c</code> example the
+script would never get to <code>re2c.passthru.updateScript</code>.</p>
+<p>And <code>passthru</code> are probably least tested attributes as they rarely used
+by <code>hydra</code> CI. The <code>passthry.tests</code> in particular are <strong>not</strong> used by
+<code>hydra</code> but are used by <code>ofborg</code> <code>GitHub</code> actions. And the caveat of
+<code>ofborg</code> is that it rarely shows test failures as a red cross. Usually
+it renders a failure as inconclusive gray. The assumption is that the
+reviewer look at the underlying failure and makes a decision.</p>
+<p>Thus I added a knob to descend into attributes of derivations
+<a href="https://github.com/trofi/nixpkgs-overlays/commit/50ed200dc06ee1b6ec8ad8ca879a9948cc85135e">this way</a>:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/lib/all-attrs.nix</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/lib/all-attrs.nix</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -35,6 +35,11 @@</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a> , maxDepth</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a> , ignoreCross ? true</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a><span class="va">+# Whether to validate every attribute within derivations themselves.</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a><span class="va">+# Most intereting fields are `passthru.tests`, but sometimes there are</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a><span class="va">+# very unusual bugs lurking. Risky but very fun!</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a><span class="va">+, ignoreDrvAttrs ? true</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a> }:</span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a> let</span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -76,11 +81,9 @@ let</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>     in debug &quot;inspecting ${a}&quot; (</span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>     if !e.success then info &quot;${a} fails to evaluate&quot; []</span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>     else if lib.isDerivation v</span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a><span class="st">-    # TODO: add an option to traverse into derivations as well.</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a><span class="st">-    # Mainly to test validity of `passthru.tests`, `metadata` and</span></span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a><span class="st">-    # similar.</span></span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a><span class="st">-    then [a] # TODO: &quot;++ maybe_go_deeper&quot;</span></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a><span class="va">+    then [a] ++ lib.optionals (!ignoreDrvAttrs) maybe_go_deeper</span></span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>     # Skip &quot;foo = self;&quot; attributes like `pythonPackages.pythonPackages`</span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a><span class="va">+    # TODO: might skip too much.</span></span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>     else if lib.isAttrs v &amp;&amp; depth &gt; 0 &amp;&amp; lib.hasAttr (lib.last ap) v then info &quot;${a} is a repeated attribute, skipping&quot; []</span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>     else if lib.isAttrs v then maybe_go_deeper</span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>     else if isPrimitive v then []</span></code></pre></div>
+<p>I also had to add a few ignored paths like <code>nixosTests</code> as they require
+around <code>1GB</code> of extra <code>RAM</code> per test(!) and I had to skip <code>pkgsCross</code>
+as it derives too many attributes for (still!) naive script to handle.</p>
+<p>But even with such a limited lister I managed to get to these bugs:</p>
+<ul>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277399">PR 277399</a>:
+<code>bazel-watcher.bazel.tests</code> had a <code>optionalSttrs</code> typo instead of
+<code>optionalAttrs</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277400">PR 277400</a>:
+<code>bitcoind-knots</code> referred to non-existent test.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277402">PR 277402</a>:
+<code>cargo</code> tried to pull tests for a package that does not define it.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277404">PR 277404)</a>:
+<code>corosync</code> did not specify a test input argument that it used.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277408">PR 277408</a>:
+<code>lua-wrapper</code> uses non-existent attributes to define paths.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277420">PR 277420</a>:
+<code>displaylink</code> referred to non-existent test.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277434">PR 277434</a>:
+<code>gnupg22</code> incorrectly refers to the test suite.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277435">PR 277435</a>:
+<code>pisocsope.rules</code> looked <code>writeTextDir</code> in <code>lib</code> instead of <code>pkgs</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277473">PR 277473</a>:
+<code>guacamole-client</code> was referring to deleted test.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277474">PR 277474</a>:
+<code>mutmut</code> used <code>testers</code> attribute without use.
+= <a href="https://github.com/NixOS/nixpkgs/pull/277494">PR 277494</a>:
+<code>buildFHSEnv</code> did not fully handle <code>multiPaths = null</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277512">PR 277512</a>:
+<code>owncast</code> referred to non-existent test.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277517">PR 277517</a>:
+<code>python3Packages.pypaBuildHook.tests</code> test referred non-existent <code>.nix</code>
+file.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277543">PR 277543</a>:
+<code>pythonInterpreters.pypy39_prebuilt</code> referred to deleted <code>pypy38</code>
+attribute, not <code>pypy39</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277580">PR 277580</a>:
+<code>tigervnc.tests</code> referred to non-existent test.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277581">PR 277581</a>:
+<code>wezterm.tests</code> referred to commented out tests.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277590">PR 277590</a>:
+<code>devpod.tests</code> passed incorrect parameter to a test function.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277593">PR 277593</a>:
+<code>fakeroot.tests</code> passed incorrect parameter to a test function.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277595">PR 277595</a>:
+<code>findup.tests</code> passed incorrect parameter to a test function.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277600">PR 277600</a>:
+<code>jellyfin-ffmpeg.tests</code> is missing <code>pkg-config</code> annotation.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277617">PR 277617</a>:
+<code>build-support/go</code> code constructed inaccessible <code>vendorSha256</code>
+attribute.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277715">PR 277715</a>:
+<code>octoprint</code> referred to non-existent attribute in <code>tests</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277741">PR 277741</a>:
+<code>pypy2Packages.attrs</code> refers non-existent <code>.nix</code> file.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277751">PR 277751</a>:
+<code>python3Packages.openllm</code>: fix <code>passthru</code> dependency references and
+fix variable shadowing.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277777">PR 277777</a>:
+<code>python3Packages.openllm-client</code>: fix <code>passthru</code> dependency references.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/277788">PR 277788</a>:
+<code>python3Packages.openllm-core</code>: fix <code>passthru</code> dependency references.</li>
+</ul>
+<p>Note: It’s not the full list of required fixes. For more complex cases I
+filed a few bugs to get maintainers’ help:</p>
+<ul>
+<li><a href="https://github.com/NixOS/nixpkgs/issues/277285">Issue 277285</a>:
+<code>pkgsStatic.php</code> enters infinite loop and exhausts all available
+memory.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/issues/277628">Issue 277628</a>:
+<code>godot3-mono.nugetSource.meta</code> detects infinite recursion on
+evaluation.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/issues/277698">Issue 277698</a>:
+<code>ocamlPackages.janeStreet_0_15</code> has unsatisfied attributes.</li>
+</ul>
+<h2 id="did-i-get-the-list-package-for-autoconf">Did I get the list package for <code>autoconf</code>?</h2>
+<p>Sort of: I managed to write the hack to get a list of packages using
+<code>autoconf</code> in a few layers deep below top level. It’s good enough for
+testing close to exhaustive.</p>
+<p>But I did not get exhaustive at all. There are two main problems still:</p>
+<ol type="1">
+<li><p>The attribute sets are infinite in <code>nixpkgs</code>. An example a bit silly
+but still valid attribute is:</p>
+<pre><code>nix-repl&gt; pkgs.pkgs.pkgs.pkgsCross.riscv64.pkgsMusl.pkgsCross.riscv64.pythonPackages.pythonPackages.pythonPackages.ninja
+«derivation /nix/store/4vnprl12q706s3ilb1g1c2v4bf9pjpc9-ninja-1.11.1.drv»`</code></pre>
+<p><code>nix</code> the language does not provide the mechanism to compare
+references to shortcut things like <code>pythonPackages.pythonPackages</code>
+And each scope has those self-referential package structures.</p></li>
+<li><p>Even if the attribute set was finite in <code>&lt;nixpkgs&gt;</code> the mere act of
+listing them takes 100s of GB. It looks like it’s because <code>nix</code> does
+not collect already evaluated garbage expressions that still have
+references from other parts of the tree. The packages loops in
+<code>nixpkgs</code> from <code>[1.]</code> do not help in that at all.</p></li>
+</ol>
+<p>I am still hopeful that I can get something decent soon. I can
+workaround <code>[2.]</code> <code>RAM</code> exhaustion by declaring defeat on a single
+<code>.nix</code> script and run it in incremental mode. Say, to process 100
+packages at a time to avoid infinite memory growth.</p>
+<p>Another option would be to write a separate tool using <code>nix</code> as a
+library to parse and evaluate <code>.nix</code> code that does this job
+specifically. But I’d prefer to try to fix <code>nix</code> <code>GC</code> behaviour first. I
+think it’s tractable.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>Traversing package attribute set in <code>nixpkgs</code> is surprisingly
+challenging. I think it is fixable and should be fixed (at least for
+non-<code>pkgsCross.*</code> part of the tree). Fetching metadata about the
+packages is a frequent operation for many types of tree-wide changes.</p>
+<p>I had a lot of fun writing debuggable <code>.nix</code> code to list available
+<code>nixpkgs</code> attributes. So far my result is hiding at
+<a href="https://github.com/trofi/nixpkgs-overlays/blob/main/lib/all-attrs.nix" class="uri">https://github.com/trofi/nixpkgs-overlays/blob/main/lib/all-attrs.nix</a>.</p>
+<p>So far I managed to get to 4 levels of attribute depth using <code>60GB</code> of
+<code>RAM</code>. This uncovered at least 27 bugs.</p>
+<p>Some of the bugs are very scary:</p>
+<ul>
+<li><code>cargo</code> did not have tests: <a href="https://github.com/NixOS/nixpkgs/pull/277402" class="uri">https://github.com/NixOS/nixpkgs/pull/277402</a></li>
+<li><code>lua-wrapper</code> did not expose correct paths: <a href="https://github.com/NixOS/nixpkgs/pull/277408" class="uri">https://github.com/NixOS/nixpkgs/pull/277408</a></li>
+</ul>
+<p><code>builtins.tryEval</code> does not catch all the failure types in attribute
+evaluation: <code>throw</code> / <code>assert</code> are fine, but reference to non-existent
+attribute (or <code>assert</code>) are not.</p>
+<p><code>pkgs.nixosTests</code> attribute set is very slow and RAM hungry to evaluate:
+<a href="https://github.com/NixOS/nix/issues/9671" class="uri">https://github.com/NixOS/nix/issues/9671</a></p>
+<p>You can also fix a few <code>nixpkgs</code> bugs! Just run <code>all-attrs.nix</code> as:</p>
+<pre><code>$ nix-instantiate --eval --strict ./all-attrs.nix \
+    -I nixpkgs=~/path/to/nicpkgs \
+    --arg maxDepth 2 --arg verbose 3 --arg ignoreDrvAttrs false</code></pre>
+<p>And see what you get.</p>
+<p>Next steps I’d like to take at some future point:
+- batch package listing and package instantiation in smaller batches to
+get RAM usage down to a few <code>GB</code>s.
+- explore <code>nix</code> and garbage collection mechanisms to make it friendlier
+to large evaluations like <code>all-attrs.nix</code></p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
