@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>a libpam bug</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>a libpam bug</h1>
+            
+                <div class="info">March 30, 2024</div>
+            
+
+            <p>Over a past few months I updated <code>libpam</code> <code>nixpkgs</code> package a few times.
+I broke it at least three times:</p>
+<ul>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/266828">fix clobbered patched <code>Makefile.in</code></a></li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/281182">fix deleted <code>required pam_lastlog</code> module</a></li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/298994">fix broken empty password handling</a></li>
+</ul>
+<p>It’s not great. But at least each breakage is slightly different.
+Exploring it gives me some insight into how <code>libpam</code> works.</p>
+<p>Let’s have a look at the most recent breakage related to empty passwords.</p>
+<h2 id="actual-password-handling-bug">actual password handling bug</h2>
+<p>In <a href="https://github.com/NixOS/nixpkgs/issues/297920"><code>nixpkgs</code> issue#297920</a>
+Thomas M. DuBuisson reported that users with empty passwords no longer
+work on <code>NixOS</code>.</p>
+<p>An example <code>/etc/nixos/configuration.nix</code> snippet to create such an user
+is:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="op">...</span> <span class="op">}</span>:</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">users</span>.<span class="va">users</span>.<span class="va">test</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="va">isNormalUser</span> <span class="op">=</span> <span class="cn">true</span><span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">password</span> <span class="op">=</span> <span class="st">&quot;&quot;</span><span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="va">extraGroups</span> <span class="op">=</span> <span class="op">[</span> <span class="op">];</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>After an update to <code>libpam-1.6.0</code> <code>login</code> did not work any more:</p>
+<pre><code>login: test
+Password:
+
+Login incorrect</code></pre>
+<p>Why did it break? Let’s have a look at how passwords are stored in <code>linux</code>.</p>
+<h2 id="etcshadow-structure"><code>/etc/shadow</code> structure</h2>
+<p>On <code>linux</code> desktops hashed user passwords are usually stored in
+<code>/etc/shadow</code>:</p>
+<pre><code># cat /etc/shadow
+...
+nobody:!:1::::::
+nulloktest:$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.:1::::::</code></pre>
+<p><a href="https://manpages.opensuse.org/Tumbleweed/shadow/shadow.5.en.html"><code>man 5 shadow</code></a>
+from <code>shadow</code> package has more detail on what each field means.</p>
+<p>As hashed passwords are still sensitive information <code>/etc/shadow</code> is not
+readable by most users:</p>
+<pre><code>$ ls -l /etc/shadow
+-rw-r----- 1 root shadow 3454 Mar 29 07:03 /etc/shadow</code></pre>
+<p>Programs that check passwords are usually ran as <code>root</code> or are
+<code>SUID</code>-root themselves.</p>
+<h2 id="hash-structure">hash structure</h2>
+<p><code>$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.</code>
+is not just a hash string of a well known hash algorithm. It used to be.
+But not any more.</p>
+<p><a href="https://manpages.opensuse.org/Tumbleweed/libxcrypt-devel/crypt.5.en.html"><code>man 5 crypt</code></a>
+from <code>libxcrypt</code> package explains the string format in detail. It’s 10
+pages long!</p>
+<p>The main takeaway from that page is that there are a few ways to encode
+empty (“” password) and blank (no password prompt) passwords for a user:</p>
+<pre><code>nulloktest:$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.:1::::::
+nulloktest::1::::::</code></pre>
+<p>Hashed version (first) accepts only empty(““) password while empty version
+(second) does not prompt for a password at all.</p>
+<p>This hashed version happens to use <code>SHA512</code> algorithm (<code>$6$</code> prefix). You
+can have other encodings as well: by varying used hash salt for <code>SHA512</code>
+algorithm or by switching the hashing algorithm (for example to
+<code>yescrypt</code>.)</p>
+<h2 id="libpam-overview"><code>libpam</code> overview</h2>
+<p><code>PAM</code> stands for “Pluggable Authentication Modules”. It allows programs
+to embed user authentication without having to deal with the specifics of
+accessing <code>/etc/shadow</code> contents directly. <code>libpam</code> allows you to
+completely change authentication back end via <code>/etc/pam.d/</code>
+configuration to use non-<code>shadow</code> mechanisms instead. I’ll focus on
+<code>shadow</code> here and will avoid any configuration aspects.</p>
+<p>Well known <code>libpam</code> users are <code>sudo</code> and <code>login</code> programs. Those are
+expected to be ran as <code>root</code> or gain <code>root</code> via <code>SUID</code> <code>root</code> bit on the
+binaries. <code>login</code> can authenticate any user in the system while <code>sudo</code>
+probably only needs to authenticate current user.</p>
+<p>Fun fact: normally you need <code>root</code> (or <code>shadow</code>) privileges to read
+<code>/etc/shadow</code> for password verification purposes.</p>
+<p>But <code>libpam</code> can be used for non-root programs as well! The typical
+example is the session screen locker like <code>swaylock</code> or <code>i3lock</code>: those
+lock your screen until you type current user’s password. How do they
+manage to validate current user’s password without having a <code>SUID</code>
+<code>root</code> bit? <code>libpam</code> does it by by calling external <code>unix_chkpwd</code>
+<code>SUID</code> <code>root</code> program from <code>libpam</code> package:</p>
+<pre><code>$ ls -l `which unix_chkpwd`
+-r-s--x--x 1 root root 63472 Mar 29 04:41 /run/wrappers/bin/unix_chkpwd</code></pre>
+<p>No magic unfortunately :)</p>
+<h2 id="back-to-password-handling-bug">back to password handling bug</h2>
+<p>In <a href="https://github.com/linux-pam/linux-pam/issues/758"><code>libpam</code> issue#758</a>
+Chris Severance narrowed the regression down to
+<a href="https://github.com/linux-pam/linux-pam/commit/b3020da7da384d769f27a8713257fbe1001878be">the <code>pam_unix/passverify</code> change</a>.
+Here are two diagrams to show the effect of that change.</p>
+<p>Before the change <code>libpam-1.5.3</code> password checking diagram looked this way:</p>
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 10.0.1 (0)
+ -->
+<!-- Title: G Pages: 1 -->
+<svg width="384pt" height="312pt" viewBox="0.00 0.00 384.13 311.75" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 307.75)">
+<title>G</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-307.75 380.13,-307.75 380.13,4 -4,4"></polygon>
+<!-- file /etc/shadow -->
+<g id="node1" class="node">
+<title>file /etc/shadow</title>
+<polygon fill="none" stroke="black" points="142.13,-36 27.13,-36 27.13,-40 15.13,-40 15.13,0 142.13,0 142.13,-36"></polygon>
+<polyline fill="none" stroke="black" points="15.13,-36 27.13,-36"></polyline>
+<text text-anchor="middle" x="78.63" y="-13.32" font-family="Times,serif" font-size="14.00">file /etc/shadow</text>
+</g>
+<!-- libpam&#45;1.5.3 -->
+<g id="node2" class="node">
+<title>libpam-1.5.3</title>
+<polygon fill="none" stroke="black" points="85.9,-178.55 90.72,-178.65 95.49,-178.8 100.18,-178.99 104.79,-179.24 109.3,-179.53 113.67,-179.86 117.91,-180.25 121.99,-180.68 125.9,-181.15 129.62,-181.66 133.13,-182.21 136.44,-182.81 139.53,-183.44 142.38,-184.11 145,-184.81 147.37,-185.54 149.49,-186.3 151.35,-187.09 152.96,-187.91 154.31,-188.75 155.4,-189.61 156.24,-190.49 156.83,-191.39 157.16,-192.3 157.25,-193.22 157.1,-194.15 156.72,-195.09 156.12,-196.03 155.3,-196.97 154.27,-197.91 153.05,-198.85 151.63,-199.78 150.04,-200.7 148.29,-201.61 146.38,-202.51 144.32,-203.39 142.13,-204.25 139.82,-205.09 137.39,-205.91 134.86,-206.7 132.23,-207.46 129.52,-208.19 126.73,-208.89 123.88,-209.56 120.96,-210.19 118,-210.79 114.98,-211.34 111.93,-211.85 108.85,-212.32 105.73,-212.75 102.59,-213.14 99.43,-213.47 96.26,-213.76 93.07,-214.01 89.87,-214.2 86.66,-214.35 83.45,-214.45 80.23,-214.5 77.02,-214.5 73.8,-214.45 70.59,-214.35 67.38,-214.2 64.18,-214.01 60.99,-213.76 57.82,-213.47 54.66,-213.14 51.52,-212.75 48.4,-212.32 45.32,-211.85 42.27,-211.34 39.25,-210.79 36.29,-210.19 33.37,-209.56 30.52,-208.89 27.73,-208.19 25.02,-207.46 22.39,-206.7 19.86,-205.91 17.43,-205.09 15.12,-204.25 12.93,-203.39 10.87,-202.51 8.96,-201.61 7.21,-200.7 5.62,-199.78 4.2,-198.85 2.98,-197.91 1.95,-196.97 1.13,-196.03 0.53,-195.09 0.15,-194.15 0,-193.22 0.09,-192.3 0.42,-191.39 1.01,-190.49 1.85,-189.61 2.94,-188.75 4.29,-187.91 5.9,-187.09 7.76,-186.3 9.88,-185.54 12.25,-184.81 14.87,-184.11 17.72,-183.44 20.81,-182.81 24.12,-182.21 27.63,-181.66 31.35,-181.15 35.26,-180.68 39.34,-180.25 43.58,-179.86 47.95,-179.53 52.46,-179.24 57.07,-178.99 61.77,-178.8 66.53,-178.65 71.35,-178.55 76.2,-178.5 81.05,-178.5 85.9,-178.55"></polygon>
+<text text-anchor="middle" x="78.63" y="-191.82" font-family="Times,serif" font-size="14.00">libpam-1.5.3</text>
+</g>
+<!-- libpam&#45;1.5.3&#45;&gt;file /etc/shadow -->
+<g id="edge2" class="edge">
+<title>libpam-1.5.3-&gt;file /etc/shadow</title>
+<path fill="none" stroke="black" d="M76.5,-178.21C74.86,-164.01 72.74,-143.36 71.88,-125.25 71.11,-109.27 71.11,-105.23 71.88,-89.25 72.53,-75.52 73.91,-60.34 75.25,-47.61"></path>
+<polygon fill="black" stroke="black" points="78.72,-48.12 76.33,-37.79 71.76,-47.35 78.72,-48.12"></polygon>
+<text text-anchor="middle" x="151" y="-102.58" font-family="Times,serif" font-size="14.00">root uid: read directly</text>
+</g>
+<!-- unix_chkpwd -->
+<g id="node4" class="node">
+<title>unix_chkpwd</title>
+<polygon fill="none" stroke="black" points="345.75,-125.25 237.5,-125.25 237.5,-89.25 345.75,-89.25 345.75,-125.25"></polygon>
+<text text-anchor="middle" x="291.63" y="-102.58" font-family="Times,serif" font-size="14.00">unix_chkpwd</text>
+</g>
+<!-- libpam&#45;1.5.3&#45;&gt;unix_chkpwd -->
+<g id="edge3" class="edge">
+<title>libpam-1.5.3-&gt;unix_chkpwd</title>
+<path fill="none" stroke="black" stroke-dasharray="1,5" d="M117.2,-179.7C151.17,-165.78 200.96,-145.39 238.66,-129.94"></path>
+<polygon fill="black" stroke="black" points="239.62,-133.33 247.55,-126.3 236.97,-126.86 239.62,-133.33"></polygon>
+<text text-anchor="middle" x="281.25" y="-147.2" font-family="Times,serif" font-size="14.00">non-root uid: execve()</text>
+</g>
+<!-- program -->
+<g id="node3" class="node">
+<title>program</title>
+<polygon fill="none" stroke="black" points="117.38,-303.75 39.88,-303.75 39.88,-267.75 117.38,-267.75 117.38,-303.75"></polygon>
+<text text-anchor="middle" x="78.63" y="-281.07" font-family="Times,serif" font-size="14.00">program</text>
+</g>
+<!-- program&#45;&gt;libpam&#45;1.5.3 -->
+<g id="edge1" class="edge">
+<title>program-&gt;libpam-1.5.3</title>
+<path fill="none" stroke="black" d="M78.63,-267.51C78.63,-255.68 78.63,-239.7 78.63,-226"></path>
+<polygon fill="black" stroke="black" points="82.13,-226.22 78.63,-216.22 75.13,-226.22 82.13,-226.22"></polygon>
+<text text-anchor="middle" x="162.25" y="-236.45" font-family="Times,serif" font-size="14.00">call pam_authenticate()</text>
+</g>
+<!-- unix_chkpwd&#45;&gt;file /etc/shadow -->
+<g id="edge4" class="edge">
+<title>unix_chkpwd-&gt;file /etc/shadow</title>
+<path fill="none" stroke="black" d="M249.03,-88.8C215.22,-74.95 167.77,-55.52 131.53,-40.67"></path>
+<polygon fill="black" stroke="black" points="133.12,-37.54 122.54,-36.99 130.47,-44.02 133.12,-37.54"></polygon>
+<text text-anchor="middle" x="289.88" y="-57.95" font-family="Times,serif" font-size="14.00">SUID-root: read directly</text>
+</g>
+</g>
+</svg>
+
+<p>After the change <code>libpam-1.6.0</code> password checking diagram looks this way:</p>
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 10.0.1 (0)
+ -->
+<!-- Title: G Pages: 1 -->
+<svg width="259pt" height="312pt" viewBox="0.00 0.00 259.13 311.75" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 307.75)">
+<title>G</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-307.75 255.13,-307.75 255.13,4 -4,4"></polygon>
+<!-- file /etc/shadow -->
+<g id="node1" class="node">
+<title>file /etc/shadow</title>
+<polygon fill="none" stroke="black" points="142.13,-36 27.13,-36 27.13,-40 15.13,-40 15.13,0 142.13,0 142.13,-36"></polygon>
+<polyline fill="none" stroke="black" points="15.13,-36 27.13,-36"></polyline>
+<text text-anchor="middle" x="78.63" y="-13.32" font-family="Times,serif" font-size="14.00">file /etc/shadow</text>
+</g>
+<!-- libpam&#45;1.6.0 -->
+<g id="node2" class="node">
+<title>libpam-1.6.0</title>
+<polygon fill="none" stroke="black" points="85.9,-178.55 90.72,-178.65 95.49,-178.8 100.18,-178.99 104.79,-179.24 109.3,-179.53 113.67,-179.86 117.91,-180.25 121.99,-180.68 125.9,-181.15 129.62,-181.66 133.13,-182.21 136.44,-182.81 139.53,-183.44 142.38,-184.11 145,-184.81 147.37,-185.54 149.49,-186.3 151.35,-187.09 152.96,-187.91 154.31,-188.75 155.4,-189.61 156.24,-190.49 156.83,-191.39 157.16,-192.3 157.25,-193.22 157.1,-194.15 156.72,-195.09 156.12,-196.03 155.3,-196.97 154.27,-197.91 153.05,-198.85 151.63,-199.78 150.04,-200.7 148.29,-201.61 146.38,-202.51 144.32,-203.39 142.13,-204.25 139.82,-205.09 137.39,-205.91 134.86,-206.7 132.23,-207.46 129.52,-208.19 126.73,-208.89 123.88,-209.56 120.96,-210.19 118,-210.79 114.98,-211.34 111.93,-211.85 108.85,-212.32 105.73,-212.75 102.59,-213.14 99.43,-213.47 96.26,-213.76 93.07,-214.01 89.87,-214.2 86.66,-214.35 83.45,-214.45 80.23,-214.5 77.02,-214.5 73.8,-214.45 70.59,-214.35 67.38,-214.2 64.18,-214.01 60.99,-213.76 57.82,-213.47 54.66,-213.14 51.52,-212.75 48.4,-212.32 45.32,-211.85 42.27,-211.34 39.25,-210.79 36.29,-210.19 33.37,-209.56 30.52,-208.89 27.73,-208.19 25.02,-207.46 22.39,-206.7 19.86,-205.91 17.43,-205.09 15.12,-204.25 12.93,-203.39 10.87,-202.51 8.96,-201.61 7.21,-200.7 5.62,-199.78 4.2,-198.85 2.98,-197.91 1.95,-196.97 1.13,-196.03 0.53,-195.09 0.15,-194.15 0,-193.22 0.09,-192.3 0.42,-191.39 1.01,-190.49 1.85,-189.61 2.94,-188.75 4.29,-187.91 5.9,-187.09 7.76,-186.3 9.88,-185.54 12.25,-184.81 14.87,-184.11 17.72,-183.44 20.81,-182.81 24.12,-182.21 27.63,-181.66 31.35,-181.15 35.26,-180.68 39.34,-180.25 43.58,-179.86 47.95,-179.53 52.46,-179.24 57.07,-178.99 61.77,-178.8 66.53,-178.65 71.35,-178.55 76.2,-178.5 81.05,-178.5 85.9,-178.55"></polygon>
+<text text-anchor="middle" x="78.63" y="-191.82" font-family="Times,serif" font-size="14.00">libpam-1.6.0</text>
+</g>
+<!-- unix_chkpwd -->
+<g id="node4" class="node">
+<title>unix_chkpwd</title>
+<polygon fill="none" stroke="black" points="132.75,-125.25 24.5,-125.25 24.5,-89.25 132.75,-89.25 132.75,-125.25"></polygon>
+<text text-anchor="middle" x="78.63" y="-102.58" font-family="Times,serif" font-size="14.00">unix_chkpwd</text>
+</g>
+<!-- libpam&#45;1.6.0&#45;&gt;unix_chkpwd -->
+<g id="edge2" class="edge">
+<title>libpam-1.6.0-&gt;unix_chkpwd</title>
+<path fill="none" stroke="black" stroke-dasharray="1,5" d="M78.63,-178.26C78.63,-166.43 78.63,-150.45 78.63,-136.75"></path>
+<polygon fill="black" stroke="black" points="82.13,-136.97 78.63,-126.97 75.13,-136.97 82.13,-136.97"></polygon>
+<text text-anchor="middle" x="134.88" y="-147.2" font-family="Times,serif" font-size="14.00">always execve()</text>
+</g>
+<!-- program -->
+<g id="node3" class="node">
+<title>program</title>
+<polygon fill="none" stroke="black" points="117.38,-303.75 39.88,-303.75 39.88,-267.75 117.38,-267.75 117.38,-303.75"></polygon>
+<text text-anchor="middle" x="78.63" y="-281.07" font-family="Times,serif" font-size="14.00">program</text>
+</g>
+<!-- program&#45;&gt;libpam&#45;1.6.0 -->
+<g id="edge1" class="edge">
+<title>program-&gt;libpam-1.6.0</title>
+<path fill="none" stroke="black" d="M78.63,-267.51C78.63,-255.68 78.63,-239.7 78.63,-226"></path>
+<polygon fill="black" stroke="black" points="82.13,-226.22 78.63,-216.22 75.13,-226.22 82.13,-226.22"></polygon>
+<text text-anchor="middle" x="162.25" y="-236.45" font-family="Times,serif" font-size="14.00">call pam_authenticate()</text>
+</g>
+<!-- unix_chkpwd&#45;&gt;file /etc/shadow -->
+<g id="edge3" class="edge">
+<title>unix_chkpwd-&gt;file /etc/shadow</title>
+<path fill="none" stroke="black" d="M78.63,-89.01C78.63,-77.18 78.63,-61.2 78.63,-47.5"></path>
+<polygon fill="black" stroke="black" points="82.13,-47.72 78.63,-37.72 75.13,-47.72 82.13,-47.72"></polygon>
+<text text-anchor="middle" x="164.88" y="-57.95" font-family="Times,serif" font-size="14.00">SUID-root: read directly</text>
+</g>
+</g>
+</svg>
+
+<p>To phrase it in words: <code>libpam-1.5.3</code> used <code>unix_chkpwd</code> external helper
+program only if <code>program</code> was not already ran as <code>root</code>. <code>libpam-1.6.0</code>
+in contrast always uses <code>unix_chkpwd</code>.</p>
+<p>In theory both versions should work the same.</p>
+<p>In practice <code>unix_chkpwd</code> disallows empty passwords (bug) but allows the
+blank ones (feature).</p>
+<p>Mechanically the bug happens as <code>unix_chkpwd</code> adds
+<a href="https://github.com/linux-pam/linux-pam/commit/9e74e90147c530801e3ea3428d64371722c90e01">this extra bit of code</a>:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/modules/pam_unix/passverify.c</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/modules/pam_unix/passverify.c</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1096,6 +1096,12 @@ helper_verify_password(const char *name, const char *p, int nullok)</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a> 	if (pwd == NULL || hash == NULL) {</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a> 		helper_log_err(LOG_NOTICE, &quot;check pass; user unknown&quot;);</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a> 		retval = PAM_USER_UNKNOWN;</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="va">+	} else if (p[0] == '\0' &amp;&amp; nullok) {</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="va">+		if (hash[0] == '\0') {</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="va">+			retval = PAM_SUCCESS;</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="va">+		} else {</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="va">+			retval = PAM_AUTH_ERR;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="va">+		}</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a> 	} else {</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a> 		retval = verify_pwd_hash(p, hash, nullok);</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a> 	}</span></code></pre></div>
+<p>Here <code>helper_verify_password()</code> started rejecting empty passwords with
+non-empty hashes present in <code>/etc/shadow</code>. Oops. This change is what
+distinguishes theses hashes:</p>
+<ul>
+<li><code>nulloktest::1::::::</code>: <code>hash[0] == '\0'</code> (hash of length <code>0</code>): accepted</li>
+<li><code>nulloktest:$6$D0...</code>: <code>hash[0] != '\0'</code> (hash of length <code>&gt;0</code>): rejected</li>
+</ul>
+<p>Such an early rejection is a bug. The hash needs to have a chance to be
+verified instead.</p>
+<p><code>helper_verify_password()</code> function is only used by external helpers like
+<code>unix_chkpwd</code> and was never used by <code>libpam.so</code> itself. That’s why
+<code>libpam-1.5.3</code> just worked for <code>login</code>.</p>
+<p>The fix is <a href="https://github.com/linux-pam/linux-pam/pull/784">simple</a>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/modules/pam_unix/passverify.c</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/modules/pam_unix/passverify.c</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -76,9 +76,13 @@ PAMH_ARG_DECL(int verify_pwd_hash,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a> </span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a> 	strip_hpux_aging(hash);</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a> 	hash_len = strlen(hash);</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="st">-	if (!hash_len) {</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="va">+	if (p &amp;&amp; p[0] == '\0' &amp;&amp; !nullok) {</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="va">+		/* The passed password is empty */</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="va">+		retval = PAM_AUTH_ERR;</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="va">+	} else if (!hash_len) {</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a> 		/* the stored password is NULL */</span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="st">-		if (nullok) { /* this means we've succeeded */</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="va">+		if (p &amp;&amp; p[0] == '\0' &amp;&amp; nullok) { /* this means we've succeeded */</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a> 			D((&quot;user has empty password - access granted&quot;));</span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a> 			retval = PAM_SUCCESS;</span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a> 		} else {</span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1109,12 +1113,6 @@ helper_verify_password(const char *name, const char *p, int nullok)</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a> 	if (pwd == NULL || hash == NULL) {</span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a> 		helper_log_err(LOG_NOTICE, &quot;check pass; user unknown&quot;);</span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a> 		retval = PAM_USER_UNKNOWN;</span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a><span class="st">-	} else if (p[0] == '\0' &amp;&amp; nullok) {</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a><span class="st">-		if (hash[0] == '\0') {</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a><span class="st">-			retval = PAM_SUCCESS;</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a><span class="st">-		} else {</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a><span class="st">-			retval = PAM_AUTH_ERR;</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a><span class="st">-		}</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a> 	} else {</span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a> 		retval = verify_pwd_hash(p, hash, nullok);</span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a> 	}</span></code></pre></div>
+<p>Here we move all the null password checking to a common <code>verify_pwd_hash</code>
+code and check for password length and not for hash length to handle
+<code>nullok</code> <code>libpam</code> configuration.</p>
+<h2 id="debugging-tips">debugging tips</h2>
+<p><code>unix_chkpwd</code> is a <code>SUID</code> <code>root</code> binary. Moreover it changes it’s
+behaviour based on actual user calling it. I wanted to find a way to
+probe directly it’s ability to validate <code>/etc/shadow</code> contents without
+involving external <code>login</code> binary.</p>
+<p>On a system with <code>libpam</code> installed password checking session for an
+arbitrary user could be done this way:</p>
+<pre><code>$ printf &quot;correct-password\0&quot; | sudo unix_chkpwd testuser nullok; echo $?
+0
+$ printf &quot;incorrect-password\0&quot; | sudo unix_chkpwd testuser nullok; echo $?
+7</code></pre>
+<p>You need to pass null-terminated password into <code>unix_chkpwd</code>’s <code>stdin</code>
+descriptor. The error code will tell you back if the check succeeded or
+why it failed.</p>
+<p>I needed an equivalent check for a locally built <code>unix_chkpwd</code> from
+<code>linux-pam</code> <code>git</code> repository. I came up with this hack:</p>
+<pre><code># build unix_chkpwd
+$ cd linux-pam
+$ ./configure --disable-doc
+$ make
+
+# mark unix_chkpwd SUID-root
+$ sudo chown root modules/pam_unix/unix_chkpwd
+$ sudo chmod 4755 modules/pam_unix/unix_chkpwd
+
+# check if it can authenticate the suer
+$ printf &quot;\0&quot; | sudo modules/pam_unix/unix_chkpwd nulloktest nullok; echo $?</code></pre>
+<p>This setup allowed me to quickly find the problematic bit using
+<code>printf()</code> debugging.</p>
+<h2 id="hashed-empty-passwords">hashed empty passwords</h2>
+<p>Is it typical to have empty hashed passwords? At least <code>passwd</code> does not
+allow you to specify an empty password explicitly:</p>
+<pre><code># passwd nulloktest
+New password:
+Retype new password:
+No password has been supplied.
+...
+passwd: Permission denied
+passwd: password unchanged</code></pre>
+<p>But we can set a blank password with a <code>-d</code> option:</p>
+<pre><code># passwd -d nulloktest
+passwd: password changed.
+
+# grep nulloktest /etc/shadow
+nulloktest::1::::::</code></pre>
+<p>This subtlety was one of the reasons why upstream <code>linux-pam</code> had a hard
+time verifying a problem of empty hashed password. So how does <code>NixOS</code>
+manage to create empty hashed passwords in the first place?</p>
+<p>It uses <code>perl</code> code to call <code>crypt()</code> function from <code>libxcrypt</code> to
+generate one. <a href="https://github.com/NixOS/nixpkgs/blob/8f72bd17eae0d1a7fcb63e3f1a3baa7dadebef68/nixos/modules/config/update-users-groups.pl#L37">Actual code</a>:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode perl"><code class="sourceCode perl"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">sub </span><span class="fu">hashPassword</span> {</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">my</span> (<span class="dt">$password</span>) = <span class="dt">@_</span>;</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">my</span> <span class="dt">$salt</span> = <span class="ot">&quot;&quot;</span>;</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">my</span> <span class="dt">@chars</span> = (<span class="ot">'</span><span class="ss">.</span><span class="ot">'</span>, <span class="ot">'</span><span class="ss">/</span><span class="ot">'</span>, <span class="dv">0</span>..<span class="dv">9</span>, <span class="ot">'</span><span class="ss">A</span><span class="ot">'</span>..<span class="ot">'</span><span class="ss">Z</span><span class="ot">'</span>, <span class="ot">'</span><span class="ss">a</span><span class="ot">'</span>..<span class="ot">'</span><span class="ss">z</span><span class="ot">'</span>);</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">$salt</span> .= <span class="dt">$chars</span>[<span class="fu">rand</span> <span class="dv">64</span>] <span class="kw">for</span> (<span class="dv">1</span>..<span class="dv">8</span>);</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">return</span> <span class="fu">crypt</span>(<span class="dt">$password</span>, <span class="ot">'</span><span class="ss">$6$</span><span class="ot">'</span> . <span class="dt">$salt</span> . <span class="ot">'</span><span class="ss">$</span><span class="ot">'</span>);</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>Here the <code>$password</code> passed is an empty string. We can generate a few of
+them just for fun:</p>
+<pre><code>$ perl -e 'my $salt = &quot;&quot;; my @chars = (&quot;.&quot;, &quot;/&quot;, 0..9, &quot;A&quot;..&quot;Z&quot;, &quot;a&quot;..&quot;z&quot;); $salt .= $chars[rand 64] for (1..8); print(crypt(&quot;&quot;, &quot;\$6\$&quot; . $salt . &quot;\$&quot;) . &quot;\n&quot;);'
+$6$AgpQ6azd$0YmJW0VFg0FwyPgSW1KSiF8cy5qB8NB/.IcMbjMa1OCbGH3ki9a4bkuhtMxQupeMeiagB86tpW7F/7yOl3Hhc0</code></pre>
+<h2 id="parting-words">parting words</h2>
+<p><code>libpam</code> updates are tricky. Every time I update <code>libpam</code> I break
+something. This time it was a somewhat benign case of empty password
+handling. We need more tests. The empty password fix fix was merged to
+<code>libpam</code> as <a href="https://github.com/linux-pam/linux-pam/pull/784">PR#784</a>
+and to <code>nixpkgs</code> as <a href="https://github.com/NixOS/nixpkgs/pull/298994">PR#298994</a>.</p>
+<p>If you are affected by an empty password bug you can set the password to
+a blank hash with <code>hashedPassword = ""</code>. Or set it to blank with
+<code>passwd -d $user</code>. Both are equivalent.</p>
+<p><code>libpam-1.6.0</code> executes an external<code>unix_chkpwd</code> binary with <code>SUID</code>
+<code>root</code> set to validate passwords.</p>
+<p>Blank passwords (empty hash) are subtly different from empty passwords
+(present hash of empty string): blank passwords don’t get prompted by
+<code>login</code> and friends while empty passwords do. Sometimes this causes the
+confusion.</p>
+<p><code>NixOS</code> uses direct <code>crypt()</code> call to <code>libxcrypt</code> to generate
+<code>/etc/shadow</code> entries.</p>
+<p><code>libxcrypt</code> supports quite a few hashing algorithms and tweaks on top of
+them that control hashing rounds and so on.</p>
+<p><code>linux-pam</code> upstream is very responsive! It’s always a pleasure to send
+fixes there.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
