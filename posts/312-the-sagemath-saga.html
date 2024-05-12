@@ -1324,6 +1324,29 @@ return.</p>
 <p>The <code>longjmp()</code> recovery is a mirror-image of <code>setjmp()</code>
 in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/x86_64/__longjmp.S;h=22fedc49970eba0ab86cb8dec8411197bec95d37;hb=HEAD"><code>sysdeps/x86_64/__longjmp.S</code></a>. I’ll skip
 pasting <code>longjmp()</code> implementation here.</p>
+<h2 id="bonus-2--wclobbered-is-able-to-detect-some-of-the-clobber-cases">Bonus 2: <code>-Wclobbered</code> is able to detect some of the clobber cases</h2>
+<p>Alexander Monakov <a href="https://fosstodon.org/@amonakov@mastodon.gamedev.place/112429019564307874">pointed out</a>
+that <code>gcc</code> actually has an option to detect some of the clobbering cases
+with <code>-Wclobbered</code>.</p>
+<p>On a contrived example it reports nothing:</p>
+<pre><code>$ gcc -O2 -c example.c -Wclobbered -Wall -Wextra -W</code></pre>
+<p>It’s unfortunate as we can clearly see the different output.</p>
+<p>But on the real <code>element.c</code> it complains as:</p>
+<pre><code>$ gcc -O2 -Wclobbered -c element.i
+...
+element.c: In function '__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__':
+element.c:26122:13: warning: variable '__pyx_v_libgap' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26123:13: warning: variable '__pyx_v_a' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26125:13: warning: variable '__pyx_r' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26130:13: warning: variable '__pyx_t_4' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26131:13: warning: variable '__pyx_t_5' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26132:13: warning: variable '__pyx_t_6' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26134:13: warning: variable '__pyx_t_8' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26135:13: warning: variable '__pyx_t_9' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:26136:13: warning: variable '__pyx_t_10' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:38074:19: warning: variable 'r' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
+element.c:38074:19: warning: variable 'r' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]</code></pre>
+<p>And that includes our <code>__pyx_t_6</code> variable!</p>
 <h2 id="parting-words">Parting words</h2>
 <p>Python ecosystem did not fully update to latest <code>python</code> release:
 <code>python-3.12</code> was out in October 2023 and many packages did not yet
@@ -1362,6 +1385,7 @@ along the way without the <code>volatile</code> annotations</li>
 <li>use of <code>cysignals</code>’ <code>sig_GAP_Enter()</code> (aka <code>setjmp()</code>) error recovery
 in the same function</li>
 </ul>
+<p><code>gcc</code> can detect some of the clobber cases with <code>-Wclobbered</code> flag.</p>
 <p>Have fun!</p>
         </div>
     </body>
