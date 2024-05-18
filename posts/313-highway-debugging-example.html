@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>highway debugging example</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>highway debugging example</h1>
+            
+                <div class="info">May 18, 2024</div>
+            
+
+            <p><a href="https://github.com/google/highway">highway</a> test suite is a great
+stress test for <code>gcc</code>’s vectorization and SIMD intrinsics code
+generators:</p>
+<ul>
+<li>at compile time <code>highway</code> instantiates all the vector extensions your CPU could support</li>
+<li>at runtime it runs the tests on all of the supported extensions against
+various vector sizes</li>
+</ul>
+<p>It cover many corner cases of what could possibly go wrong with vectored
+forms of various operations. A few past examples are:
+<a href="https://gcc.gnu.org/PR110274"><code>PR110274</code></a>,
+<a href="https://gcc.gnu.org/PR110880"><code>PR110880</code></a>,
+<a href="https://gcc.gnu.org/PR111048"><code>PR111048</code></a>,
+<a href="https://gcc.gnu.org/PR111051"><code>PR111051</code></a>,
+<a href="https://gcc.gnu.org/PR115115"><code>PR115115</code></a>.</p>
+<p>While <code>highway</code> tests are quite small they are somewhat tricky to
+extract into self-contained examples. In this post I’ll write down a few
+hacks I usually use to simplify this task.</p>
+<h2 id="an-example">An example</h2>
+<p>Today test suite failed at me on today’s <code>gcc-15</code> build against
+<code>nixpkgs</code> as:</p>
+<pre><code> 1146 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseLaneBytes/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
+ 1151 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseBits/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
+ 1186 - HwyShuffle4TestGroup/HwyShuffle4Test.TestAllPer4LaneBlockShuffle/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)</code></pre>
+<p><code>TestAllReverseLaneBytes</code> is the test function. <code>EMU128</code> is an
+(emulated) CPU target: the code does not use compiler intrinsics and
+uses loops over scalar operations to emulate <code>SIMD</code>.</p>
+<h2 id="check-latest-git">Check latest <code>git</code></h2>
+<p><code>highway</code> is actively maintained. In case the failure is caused by a
+<code>highway</code> bug (and not by a faulty compiler) chances are that it’s
+already fixed in latest version. Worth trying it first:</p>
+<pre><code># get the build time depends into the development shell
+$ nix develop -f ~/n libhwy
+
+$$ git clone https://github.com/google/highway.git
+$$ cd highway
+
+$$ mkdir build
+$$ cd build
+$$ cmake ..
+$$ make -j $(nproc) &amp;&amp; make test
+...
+1146 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseLaneBytes/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
+1151 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseBits/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
+1186 - HwyShuffle4TestGroup/HwyShuffle4Test.TestAllPer4LaneBlockShuffle/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
+</code></pre>
+<p>The bug was still there!</p>
+<h2 id="enable-single-simplest-target">Enable single (simplest) target</h2>
+<p><code>highway</code> uses heavy <code>C++</code> template code and various iterator macros to
+compile the library for each supported CPU extension <code>highway</code> knows
+about. This increases build times and complicated debugging via code
+tweaking as code has to compile for all active targets, not just one.</p>
+<p>I disabled all targets except the problematic one. In our case the
+problematic target is <code>EMU128</code>. Thus the local change to leave <code>EMU128</code>
+as the only available option is:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/hwy/detect_targets.h</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/hwy/detect_targets.h</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -29,7 +29,7 @@</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a> // #define HWY_BASELINE_TARGETS (HWY_SSE4 | HWY_SCALAR)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a> // Uncomment to override the default blocklist:</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="st">-// #define HWY_BROKEN_TARGETS HWY_AVX3</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="va">+#define HWY_BROKEN_TARGETS (HWY_AVX2 | HWY_SSE4 | HWY_SSE2 | HWY_SSSE3 | HWY_SSE4 | HWY_AVX3_SPR | HWY_AVX3_ZEN4 | HWY_AVX3)</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a> // Uncomment to definitely avoid generating those target(s):</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a> // #define HWY_DISABLED_TARGETS HWY_SSE4</span></code></pre></div>
+<p>Here I disabled anything that build system reports as supported.</p>
+<p>Before the change I had <code>Compiled HWY_TARGETS:   AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2</code>
+in this output:</p>
+<pre><code>Config: emu128:0 scalar:0 static:0 all_attain:0 is_test:0
+Compiled HWY_TARGETS:   AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2
+HWY_ATTAINABLE_TARGETS: AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2 EMU128
+HWY_BASELINE_TARGETS:   SSE2 EMU128
+HWY_STATIC_TARGET:      SSE2
+HWY_BROKEN_TARGETS:     Unknown
+HWY_DISABLED_TARGETS:
+Current CPU supports:   AVX2 SSE4 SSSE3 SSE2 EMU128 SCALAR</code></pre>
+<p>After the change I get <code>Compiled HWY_TARGETS:   EMU128</code> in this output:</p>
+<pre><code>Config: emu128:0 scalar:0 static:0 all_attain:0 is_test:0
+Compiled HWY_TARGETS:   EMU128
+HWY_ATTAINABLE_TARGETS: EMU128
+HWY_BASELINE_TARGETS:   SSE2 EMU128
+HWY_STATIC_TARGET:      EMU128
+HWY_BROKEN_TARGETS:     AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2
+HWY_DISABLED_TARGETS:
+Current CPU supports:   AVX2 SSE4 SSSE3 SSE2 EMU128 SCALAR</code></pre>
+<p>Leaving a single compiled target speeds the builds a few times up.</p>
+<p>Then I picked the specific binary that implements failing test. In this
+case it was <code>tests/reverse_test</code>:</p>
+<pre><code>$ make -j$(nproc) &amp;&amp; ./tests/reverse_test
+...
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from HwyReverseTestGroup/HwyReverseTest
+[ RUN      ] HwyReverseTestGroup/HwyReverseTest.TestAllReverseLaneBytes/EMU128
+
+
+u16x4 expect [0+ -&gt;]:
+  0xD49E,0x049E,0x0137,0x69D3,
+u16x4 actual [0+ -&gt;]:
+  0xFF9E,0xFF9E,0x0137,0xFFD3,
+Abort at reverse_test.cc:162: EMU128, u16x4 lane 0 mismatch:
+  expected '0xD49E', got '0xFF9E'.
+
+Aborted (core dumped)</code></pre>
+<p>Here we can see that instead of expected <code>0xD49E,0x049E,0x0137,0x69D3</code>
+output our library did <code>0xFF9E,0xFF9E,0x0137,0xFFD3</code>.</p>
+<h2 id="shrink-the-test">Shrink the test</h2>
+<p>The rest reduction is usually test-specific, but some of the hacks can
+be applied to many tests. In this case I kept only one failing test:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/hwy/tests/reverse_test.cc</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/hwy/tests/reverse_test.cc</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -293,13 +295,7 @@ HWY_AFTER_NAMESPACE();</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a> namespace hwy {</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a> HWY_BEFORE_TEST(HwyReverseTest);</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="st">-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse);</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="st">-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse2);</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="st">-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse4);</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="st">-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse8);</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a> HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseLaneBytes);</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="st">-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseBits);</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="st">-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseBlocks);</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a> HWY_AFTER_TEST();</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a> }  // namespace hwy</span></code></pre></div>
+<p>The test was still failing (sometimes it’s not the case when mere
+presence of unrelated code changes the inlining and vectorization
+decisions).</p>
+<p>Then I shrunk the cases down to 16-bit element sizes by inlining a
+<code>ForUI163264</code> definition:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/hwy/tests/reverse_test.cc</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/hwy/tests/reverse_test.cc</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -248,7 +249,7 @@ HWY_NOINLINE void TestAllReverse8() {</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a> }</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a> HWY_NOINLINE void TestAllReverseLaneBytes() {</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  ForUI163264(ForPartialVectors&lt;TestReverseLaneBytes&gt;());</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  ForPartialVectors&lt;TestReverseLaneBytes&gt;()(uint16_t());</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>Then I removed all the other unrelated test asserts from the
+<code>hwy/tests/reverse_test.cc</code> file.</p>
+<p>Then I inlined obvious template parameters right into local test class.</p>
+<p>Then I extracted random generated data used in the failing vectors (using
+<code>printf()</code> statements) and inlined values into <code>.cc</code> file. Sometimes
+I had to sprinkle <code>__attribute__((noipa))</code> attributes on local functions
+to inhibit too eager constant folding.</p>
+<h2 id="gdb-hints"><code>gdb</code> hints</h2>
+<p>To explore generated code in <code>gdb</code> I explored <code>hwy::N_&lt;target&gt;::</code>
+namespace as:</p>
+<pre><code>$ gdb tests/reverse_test
+(gdb) disassemble hwy::N_EMU128::TestAllReverseLaneBytes
+...
+   &lt;+113&gt;:   mov    0x3d190(%rip),%rax        # 0x4dc68
+   &lt;+120&gt;:   mov    $0xffffd49e,%esi
+   &lt;+125&gt;:   xor    %edx,%edx
+   &lt;+127&gt;:   mov    $0x8,%edi
+   &lt;+132&gt;:   mov    %rax,0x0(%rbp)
+   &lt;+136&gt;:   mov    %si,(%r12)
+
+   &lt;+141&gt;:   movzwl 0x2(%rbp),%eax
+   &lt;+145&gt;:   xor    %esi,%esi
+   &lt;+147&gt;:   rol    $0x8,%ax
+   &lt;+151&gt;:   mov    %ax,0x2(%r12)
+
+   &lt;+157&gt;:   movzwl 0x4(%rbp),%eax
+   &lt;+161&gt;:   rol    $0x8,%ax
+   &lt;+165&gt;:   mov    %ax,0x4(%r12)
+
+   &lt;+171&gt;:   movzwl 0x6(%rbp),%eax
+   &lt;+175&gt;:   rol    $0x8,%ax
+   &lt;+179&gt;:   mov    %ax,0x6(%r12)
+
+   &lt;+185&gt;:   mov    0x0(%rbp),%rax
+   &lt;+189&gt;:   movq   %rax,%xmm0
+   &lt;+194&gt;:   movdqa %xmm0,%xmm1
+   &lt;+198&gt;:   psllw  $0x8,%xmm0
+   &lt;+203&gt;:   psraw  $0x8,%xmm1
+   &lt;+208&gt;:   por    %xmm0,%xmm1
+   &lt;+212&gt;:   movq   %xmm1,0x8(%rsp)</code></pre>
+<p>Here I was lucky! I immediately spotted the bug. We see both:</p>
+<ul>
+<li>16-bit wide move/rotate/move: <code>movzwl / rol / mov</code> (looks correct)</li>
+<li>and 128-bit wide move/rotate/move: <code>movq / psllw / psraw / por / movq</code></li>
+</ul>
+<p>The rotate part is broken here: it should have been logical <code>psrlw</code>
+shift, not arithmetic (sign-preserving) <code>psraw</code> shift.</p>
+<p>At this point my test looked this way:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>HWY_NOINLINE <span class="dt">void</span> TestAllReverseLaneBytes<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> CappedTag<span class="op">&lt;</span><span class="dt">uint16_t</span><span class="op">,</span> <span class="dv">4</span><span class="op">,</span> <span class="dv">0</span><span class="op">&gt;</span> d<span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="dt">size_t</span> N <span class="op">=</span> Lanes<span class="op">(</span>d<span class="op">);</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;N = </span><span class="sc">%zu\n</span><span class="st">&quot;</span><span class="op">,</span> N<span class="op">);</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">auto</span> in <span class="op">=</span> AllocateAligned<span class="op">&lt;</span><span class="dt">uint16_t</span><span class="op">&gt;(</span>N<span class="op">);</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">auto</span> expected <span class="op">=</span> AllocateAligned<span class="op">&lt;</span><span class="dt">uint16_t</span><span class="op">&gt;(</span>N<span class="op">);</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;iter</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>        in<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x9ed4</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>        in<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x049e</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>        in<span class="op">[</span><span class="dv">2</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x0137</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>        in<span class="op">[</span><span class="dv">3</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x69d3</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>        expected<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">=</span> ReverseBytesOfValue<span class="op">(</span>in<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>        expected<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">=</span> ReverseBytesOfValue<span class="op">(</span>in<span class="op">[</span><span class="dv">1</span><span class="op">]);</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>        expected<span class="op">[</span><span class="dv">2</span><span class="op">]</span> <span class="op">=</span> ReverseBytesOfValue<span class="op">(</span>in<span class="op">[</span><span class="dv">2</span><span class="op">]);</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>        expected<span class="op">[</span><span class="dv">3</span><span class="op">]</span> <span class="op">=</span> ReverseBytesOfValue<span class="op">(</span>in<span class="op">[</span><span class="dv">3</span><span class="op">]);</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="kw">auto</span> v <span class="op">=</span> Load<span class="op">(</span>d<span class="op">,</span> in<span class="op">.</span>get<span class="op">());</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>    HWY_ASSERT_VEC_EQ<span class="op">(</span>d<span class="op">,</span> expected<span class="op">.</span>get<span class="op">(),</span> ReverseLaneBytes<span class="op">(</span>v<span class="op">));</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I looked at the <code>ReverseLaneBytes()</code> implementation. It had two parts.</p>
+<p>The first part was generic for all targets:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// from hwy/ops/generic_ops-inl.h</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> V<span class="op">,</span> HWY_IF_T_SIZE_V<span class="op">(</span>V<span class="op">,</span> <span class="dv">2</span><span class="op">)&gt;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>HWY_API V ReverseLaneBytes<span class="op">(</span>V v<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">const</span> DFromV<span class="op">&lt;</span>V<span class="op">&gt;</span> d<span class="op">;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">const</span> Repartition<span class="op">&lt;</span><span class="dt">uint8_t</span><span class="op">,</span> <span class="kw">decltype</span><span class="op">(</span>d<span class="op">)&gt;</span> du8<span class="op">;</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> BitCast<span class="op">(</span>d<span class="op">,</span> Reverse2<span class="op">(</span>du8<span class="op">,</span> BitCast<span class="op">(</span>du8<span class="op">,</span> v<span class="op">)));</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>And the second part was <code>EMU128</code>-specific:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// from hwy/ops/emu128-inl.h</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> D<span class="op">&gt;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>HWY_API VFromD<span class="op">&lt;</span>D<span class="op">&gt;</span> Reverse2<span class="op">(</span>D d<span class="op">,</span> VFromD<span class="op">&lt;</span>D<span class="op">&gt;</span> v<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  VFromD<span class="op">&lt;</span>D<span class="op">&gt;</span> ret<span class="op">;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span><span class="dt">size_t</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> MaxLanes<span class="op">(</span>d<span class="op">);</span> i <span class="op">+=</span> <span class="dv">2</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    ret<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">0</span><span class="op">]</span> <span class="op">=</span> v<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">];</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    ret<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">]</span> <span class="op">=</span> v<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">0</span><span class="op">];</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> ret<span class="op">;</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>I inlined the above definitions into the test and got this:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat hwy/tests/reverse_test.cc</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stddef.h&gt;</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#undef HWY_TARGET_INCLUDE</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define HWY_TARGET_INCLUDE </span><span class="st">&quot;tests/reverse_test.cc&quot;</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;hwy/foreach_target.h&quot;</span><span class="pp">  </span><span class="co">// IWYU pragma: keep</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;hwy/highway.h&quot;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;hwy/tests/test_util-inl.h&quot;</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>HWY_BEFORE_NAMESPACE<span class="op">();</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="kw">namespace</span> hwy <span class="op">{</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="kw">namespace</span> HWY_NAMESPACE <span class="op">{</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> D<span class="op">&gt;</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="ex">__attribute__((noipa))</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a><span class="at">static</span> VFromD<span class="op">&lt;</span>D<span class="op">&gt;</span> Reverse2_<span class="op">(</span>D d<span class="op">,</span> VFromD<span class="op">&lt;</span>D<span class="op">&gt;</span> v<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>  VFromD<span class="op">&lt;</span>D<span class="op">&gt;</span> ret<span class="op">;</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span><span class="dt">size_t</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> MaxLanes<span class="op">(</span>d<span class="op">);</span> i <span class="op">+=</span> <span class="dv">2</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>    ret<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">0</span><span class="op">]</span> <span class="op">=</span> v<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">];</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>    ret<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">]</span> <span class="op">=</span> v<span class="op">.</span>raw<span class="op">[</span>i <span class="op">+</span> <span class="dv">0</span><span class="op">];</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> ret<span class="op">;</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>HWY_NOINLINE <span class="dt">void</span> TestAllReverseLaneBytes<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> CappedTag<span class="op">&lt;</span><span class="dt">uint16_t</span><span class="op">,</span> <span class="dv">4</span><span class="op">,</span> <span class="dv">0</span><span class="op">&gt;</span> d<span class="op">;</span></span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="dt">size_t</span> N <span class="op">=</span> Lanes<span class="op">(</span>d<span class="op">);</span> <span class="co">// 4</span></span>
+<span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>    <span class="kw">auto</span> in <span class="op">=</span> AllocateAligned<span class="op">&lt;</span><span class="dt">uint16_t</span><span class="op">&gt;(</span>N<span class="op">);</span></span>
+<span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">auto</span> expected <span class="op">=</span> AllocateAligned<span class="op">&lt;</span><span class="dt">uint16_t</span><span class="op">&gt;(</span>N<span class="op">);</span></span>
+<span id="cb13-31"><a href="#cb13-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-32"><a href="#cb13-32" aria-hidden="true" tabindex="-1"></a>    in<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x9ed4</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-33"><a href="#cb13-33" aria-hidden="true" tabindex="-1"></a>    in<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x049e</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-34"><a href="#cb13-34" aria-hidden="true" tabindex="-1"></a>    in<span class="op">[</span><span class="dv">2</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x0137</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-35"><a href="#cb13-35" aria-hidden="true" tabindex="-1"></a>    in<span class="op">[</span><span class="dv">3</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x69d3</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-36"><a href="#cb13-36" aria-hidden="true" tabindex="-1"></a>    expected<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0xd49e</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-37"><a href="#cb13-37" aria-hidden="true" tabindex="-1"></a>    expected<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x9e04</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-38"><a href="#cb13-38" aria-hidden="true" tabindex="-1"></a>    expected<span class="op">[</span><span class="dv">2</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x3701</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-39"><a href="#cb13-39" aria-hidden="true" tabindex="-1"></a>    expected<span class="op">[</span><span class="dv">3</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0xd369</span><span class="bu">u</span><span class="op">;</span></span>
+<span id="cb13-40"><a href="#cb13-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-41"><a href="#cb13-41" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="kw">auto</span> v <span class="op">=</span> Load<span class="op">(</span>d<span class="op">,</span> in<span class="op">.</span>get<span class="op">());</span></span>
+<span id="cb13-42"><a href="#cb13-42" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> Repartition<span class="op">&lt;</span><span class="dt">uint8_t</span><span class="op">,</span> <span class="kw">decltype</span><span class="op">(</span>d<span class="op">)&gt;</span> du8<span class="op">;</span></span>
+<span id="cb13-43"><a href="#cb13-43" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="kw">auto</span> r <span class="op">=</span> BitCast<span class="op">(</span>d<span class="op">,</span> Reverse2_<span class="op">(</span>du8<span class="op">,</span> BitCast<span class="op">(</span>du8<span class="op">,</span> v<span class="op">)));</span></span>
+<span id="cb13-44"><a href="#cb13-44" aria-hidden="true" tabindex="-1"></a>    HWY_ASSERT_VEC_EQ<span class="op">(</span>d<span class="op">,</span> expected<span class="op">.</span>get<span class="op">(),</span> r<span class="op">);</span></span>
+<span id="cb13-45"><a href="#cb13-45" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb13-46"><a href="#cb13-46" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-47"><a href="#cb13-47" aria-hidden="true" tabindex="-1"></a><span class="co">// NOLINTNEXTLINE(google-readability-namespace-comments)</span></span>
+<span id="cb13-48"><a href="#cb13-48" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>  <span class="co">// namespace HWY_NAMESPACE</span></span>
+<span id="cb13-49"><a href="#cb13-49" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>  <span class="co">// namespace hwy</span></span>
+<span id="cb13-50"><a href="#cb13-50" aria-hidden="true" tabindex="-1"></a>HWY_AFTER_NAMESPACE<span class="op">();</span></span>
+<span id="cb13-51"><a href="#cb13-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-52"><a href="#cb13-52" aria-hidden="true" tabindex="-1"></a><span class="pp">#if HWY_ONCE</span></span>
+<span id="cb13-53"><a href="#cb13-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-54"><a href="#cb13-54" aria-hidden="true" tabindex="-1"></a><span class="kw">namespace</span> hwy <span class="op">{</span></span>
+<span id="cb13-55"><a href="#cb13-55" aria-hidden="true" tabindex="-1"></a>HWY_BEFORE_TEST<span class="op">(</span>HwyReverseTest<span class="op">);</span></span>
+<span id="cb13-56"><a href="#cb13-56" aria-hidden="true" tabindex="-1"></a>HWY_EXPORT_AND_TEST_P<span class="op">(</span>HwyReverseTest<span class="op">,</span> TestAllReverseLaneBytes<span class="op">);</span></span>
+<span id="cb13-57"><a href="#cb13-57" aria-hidden="true" tabindex="-1"></a>HWY_AFTER_TEST<span class="op">();</span></span>
+<span id="cb13-58"><a href="#cb13-58" aria-hidden="true" tabindex="-1"></a><span class="op">}</span>  <span class="co">// namespace hwy</span></span>
+<span id="cb13-59"><a href="#cb13-59" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-60"><a href="#cb13-60" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
+<h2 id="make-sure-its-an-optimizer">Make sure it’s an optimizer</h2>
+<p>Adding <code>#pragma GCC optimize(0)</code> to the beginning of the file makes the
+bug to go away. It’s a good hint that it’s a compiler bug: the test looks
+obviously correct (not much hidden code is left in the templates).</p>
+<p>But the only way to make sure is to finish the reduction down to a
+self-contained example. We will need it anyway to report upstream.</p>
+<h2 id="final-result">Final result</h2>
+<p>After a few manual extra inlines and simplifications I got this
+self-contained example:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat bug.c</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">char</span> u8<span class="op">;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> fill_src<span class="op">(</span>u8 <span class="op">*</span> src<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    src<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0x00</span><span class="op">;</span> src<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">=</span> <span class="bn">0xff</span><span class="op">;</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> assert_dst<span class="op">(</span><span class="dt">const</span> u8 <span class="op">*</span> dst<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>dst<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">!=</span> <span class="bn">0xff</span><span class="op">)</span> __builtin_trap<span class="op">();</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>dst<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">!=</span> <span class="bn">0x00</span><span class="op">)</span> __builtin_trap<span class="op">();</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>    u8 src<span class="op">[</span><span class="dv">8</span><span class="op">]</span> __attribute__<span class="op">((</span>aligned<span class="op">(</span><span class="dv">16</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">0</span> <span class="op">};</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>    u8 dst<span class="op">[</span><span class="dv">8</span><span class="op">]</span> __attribute__<span class="op">((</span>aligned<span class="op">(</span><span class="dv">16</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">0</span> <span class="op">};</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">// place 0x00 into src[0] and 0xFF into src[1]</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>    fill_src<span class="op">(</span>src<span class="op">);</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">// swap bytes:</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">// place 0xFF into dst[0], 0x00 into dst[1]</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> <span class="dv">8</span><span class="op">;</span> i <span class="op">+=</span> <span class="dv">2</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a>        dst<span class="op">[</span>i <span class="op">+</span> <span class="dv">0</span><span class="op">]</span> <span class="op">=</span> src<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">];</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a>        dst<span class="op">[</span>i <span class="op">+</span> <span class="dv">1</span><span class="op">]</span> <span class="op">=</span> src<span class="op">[</span>i <span class="op">+</span> <span class="dv">0</span><span class="op">];</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">// make sure bytes swapped</span></span>
+<span id="cb14-30"><a href="#cb14-30" aria-hidden="true" tabindex="-1"></a>    assert_dst<span class="op">(</span>dst<span class="op">);</span></span>
+<span id="cb14-31"><a href="#cb14-31" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Triggering:</p>
+<pre><code>$ gcc bug.c -o a -O1 &amp;&amp; ./a
+$ gcc bug.c -o a -O2 &amp;&amp; ./a
+Illegal instruction (core dumped)</code></pre>
+<h2 id="upstream-report">Upstream report</h2>
+<p>I reported the bug as <a href="https://gcc.gnu.org/PR115146"><code>PR115146</code></a>.
+Bisecting <code>gcc</code> pointed me to this
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=a71f90c5a7ae29">“vector shift” change</a>.</p>
+<p>This change looks very close to the culprit as the code explicitly picks
+the “arithmetic” flavour of shift instruction (should be logical
+“instead”).</p>
+<p>By now the original change author already provided a test patch in the
+report! So quick!</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
