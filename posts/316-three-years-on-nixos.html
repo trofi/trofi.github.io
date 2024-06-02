@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Three years on NixOS</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>Three years on NixOS</h1>
+            
+                <div class="info">June  2, 2024</div>
+            
+
+            <p>This year I decided to shift yearly updates on my <code>NixOS</code> endeavours
+(<a href="../posts/290-two-years-on-nixos.html">2023 instance</a>). This time
+the occasion is <a href="https://nixos.org/blog/announcements/2024/nixos-2405/"><code>NixOS 24.05 release</code></a>.</p>
+<h2 id="system-maintenance">System maintenance</h2>
+<p>Looking at the <code>git log</code> for <code>/etc/nixos</code> for the desktop system I see
+the following things happening over the past year:</p>
+<ul>
+<li>follow <code>fonts.fonts</code> to <code>fonts.packages</code> rename (added in <a href="https://github.com/NixOS/nixpkgs/pull/244332">PR#244332</a>)</li>
+<li>follow <code>pipewire</code> migration to <code>extraConfig</code> (added in
+<a href="https://github.com/NixOS/nixpkgs/pull/282377">PR#282377</a>).</li>
+<li>follow <code>programs.gnupg.agent.pinentryFlavor</code> to
+<code>programs.gnupg.agent.pinentryPackage</code> migration (added in
+<a href="https://github.com/NixOS/nixpkgs/pull/133542">PR#133542</a>).</li>
+<li>follow the rename from <code>nix.unstable</code> to <code>nix.latest</code> (added in
+<a href="https://github.com/NixOS/nixpkgs/pull/305951">PR#305951</a>).</li>
+</ul>
+<p>All four were trivial to tweak and did not cause much confusion.</p>
+<p>Similar to previous year I did not have any problems related to package
+build failures for any on <code>nixos-unstable</code>. Again, probably because I
+tested <code>staging</code> time to time.</p>
+<p>This time I had two non-trivial problems in upstream packages:</p>
+<ul>
+<li>problematic <code>firefox</code> update broke <code>meet</code> video streaming. It was
+triggered by the use of <code>--with-system-libvpx</code> option in <code>nixpkgs</code>. That
+was one of the cases where I had the luxury of bisecting the whole
+system to pinpoint the bad component:
+<a href="https://github.com/NixOS/nixpkgs/pull/283010#issuecomment-1925703583" class="uri">https://github.com/NixOS/nixpkgs/pull/283010#issuecomment-1925703583</a>.
+Local revert until the fix was shipped was trivial.</li>
+<li>problematic unstable <code>6.8</code> kernel upgrade caused kernel panic in
+<code>eevdf</code> scheduler. Was fixed upstream in
+<a href="https://lore.kernel.org/lkml/ZicOSiEWHJJcahi%2F@yujie-X299/t/" class="uri">https://lore.kernel.org/lkml/ZicOSiEWHJJcahi%2F@yujie-X299/t/</a> around
+<code>6.9</code> kernel. The crashes were nasty as scheduler crash locks up the
+machine and does not print anything when it happens. Luckily
+<code>systemd</code> recovered crash log from <code>EFI</code>s <code>nvram</code> and it was clear
+from the backtrace that it’s a bug related to scheduling kernel
+subsystem.</li>
+</ul>
+<h2 id="community-support">Community support</h2>
+<p><code>NixOS</code> community remains to be a friendly place that welcomes
+newcomers, experiments and day-to-day maintenance work. This year
+<code>NixOS Foundation</code> received some heat for how it governs some aspects of
+the community. <code>NixOS Foundation</code> proposed a
+<a href="https://discourse.nixos.org/t/nixos-foundation-board-giving-power-to-the-community/44552">few major changes</a>
+on how it will operate in future.</p>
+<p>The most important (and hardest organizationally) change I did was to
+document and exercise the procedure of updating
+<a href="../posts/315-nixpkgs-bootstrap-files-update.html">bootstrap binaries</a> in
+<code>nixpkgs</code>.</p>
+<p>My fanciest contribution was
+<a href="../posts/309-listing-all-nixpkgs-packages.html">my failed attempt</a> at
+listing “all” the package attributes available in <code>nixpkgs</code>. While I was
+not able to list all the attributes initially I managed to derive about
+60 fixes to <code>nixpkgs</code> (all linked in the article) to make future listing
+smoother. Tl:DR; of the fixes is: dynamic typing is hard.</p>
+<p>The most unusual <code>nixpkgs</code> contribution was to find
+<a href="../posts/292-nix-language-nondeterminism-example.html">the non-determinism</a>
+in <code>nix expression language</code> itself. It’s not something I expected to
+encounter in real code. Alas.</p>
+<p>The trickiest from technical standpoint was the fix for
+<a href="../posts/293-mysterious-patchelf-linkage-bug.html">parallel strip breakage</a>.
+<a href="../posts/302-Ofast-and-ffast-math-non-local-effects.html"><code>-Ofast</code></a> and
+<a href="../posts/310-a-libpam-bug.html"><code>libpam</code></a> bugs were also fun.</p>
+<p>The most satisfying was to
+<a href="../posts/298-unexpected-runtime-dependencies-in-nixpkgs.html">reduce the runtime closure</a>
+for many packages that use <code>__FILE__</code> just for for debug messages.</p>
+<p>Surprisingly I managed to get about 800 commits into <code>nixpkgs</code> this year.
+About ~90 of them is fixes to get compatibility with <code>gcc-13</code>. About 60
+are evaluation fixes mentioned above. About 400 of them are various
+package version updates.</p>
+<p>I still read some of Matrix channels but I mostly skim through
+<a href="https://discourse.nixos.org/">discourse</a> as I have even less free time
+than last year.</p>
+<h2 id="home-server-experience">Home server experience</h2>
+<p>I did not have to adapt anything for the past year. I switched from
+<code>apache</code> to <code>nginx</code> as an <code>httpd</code> without any issues. And that’s about
+it. Things Just Work.</p>
+<h2 id="local-experiments">Local experiments</h2>
+<p>As an experiment I gave <a href="https://hyprland.org/"><code>hyprland</code></a> a short try.
+I had to switch back to <code>sway</code>. I had two issues with
+<code>hyprland</code>: new applications are visibly changing layout a few times
+before they settle on final window size (I could not get used to it) and
+configuration language quirks (I frequently missed commas where empty
+arguments are required).</p>
+<p>I also did a bit of fresh <code>gcc</code> testing. This time frame also coincided
+with <code>gcc-14</code> development and release cycle. <code>nixpkgs</code> ended up being a
+reasonable vehicle to play with <code>gcc-14</code>. The
+<a href="../posts/311-gcc-14-bug-pile-4.html">last bug pile report</a> tells me that
+I found about 50 <code>gcc</code> bugs and even fixed at least
+<a href="../posts/301-another-gcc-profiling-bug.html">one non-trivial one</a>.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>NixOS</code> still works fine for me. I did not do as much as I managed to
+last year. But looking back the list looks impressive.</p>
+<p>Give it a go if you did not yet :)</p>
+        </div>
+    </body>
+</html>
