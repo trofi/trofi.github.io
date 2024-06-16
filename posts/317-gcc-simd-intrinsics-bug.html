@@ -1,0 +1,1049 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>gcc simd intrinsics bug</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc simd intrinsics bug</h1>
+            
+                <div class="info">June 16, 2024</div>
+            
+
+            <p><code>highway</code> keeps yielding very interesting <code>gcc</code> bugs. Some of them are
+so obscure that I don’t even understand <code>gcc</code> developers’ comments on
+where the bug lies: in <code>highway</code> or on <code>gcc</code>. In this post I’ll explore
+<a href="https://gcc.gnu.org/PR115161"><code>PR115161</code></a> report here as an example of
+how <code>gcc</code> handles <code>simd</code> intrinsics.</p>
+<h2 id="simplest-xmm-intrinsics-example">simplest <code>xmm</code> intrinsics example</h2>
+<p>Let’s start from an example based on another closely related bug:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;emmintrin.h&gt;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdint.h&gt;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> __m128i  iv <span class="op">=</span> _mm_set1_epi32<span class="op">(</span><span class="bn">0x4f000000</span><span class="op">);</span> <span class="co">// 1</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> __m128   fv <span class="op">=</span> _mm_castsi128_ps<span class="op">(</span>iv<span class="op">);</span>       <span class="co">// 2</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> __m128i riv <span class="op">=</span> _mm_cvttps_epi32<span class="op">(</span>fv<span class="op">);</span>       <span class="co">// 3</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span> r<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    memcpy<span class="op">(</span>r<span class="op">,</span> <span class="op">&amp;</span>riv<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>r<span class="op">));</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;</span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x\n</span><span class="st">&quot;</span><span class="op">,</span> r<span class="op">[</span><span class="dv">0</span><span class="op">],</span> r<span class="op">[</span><span class="dv">1</span><span class="op">],</span> r<span class="op">[</span><span class="dv">2</span><span class="op">],</span> r<span class="op">[</span><span class="dv">3</span><span class="op">]);</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The above example implements a vectored form of <code>(int)2147483648.0</code>
+conversion using following steps:</p>
+<ol type="1">
+<li>Place 4 identical 32-bit integer <code>0x4f000000</code> values into 128-bit
+<code>iv</code> variable (likely an <code>xmm</code> register).</li>
+<li>Bit cast <code>4 x 0x4f00000</code> into <code>4 x 2147483648.0</code> of 32-bit <code>float</code>s.</li>
+<li>Convert <code>4 x 2147483648.0</code> 32-bit <code>float</code>s into <code>4 x int32_t</code> by
+truncating the fractional part and leaving the integer one.</li>
+<li>Print the conversion result in hexadecimal form.</li>
+</ol>
+<p>Or the same in pictures:</p>
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 10.0.1 (0)
+ -->
+<!-- Title: G Pages: 1 -->
+<svg width="687pt" height="316pt" viewBox="0.00 0.00 686.75 315.75" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 311.75)">
+<title>G</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-311.75 682.75,-311.75 682.75,4 -4,4"></polygon>
+<!-- imm -->
+<g id="node1" class="node">
+<title>imm</title>
+<polygon fill="none" stroke="black" points="216,-271.25 216,-307.25 360,-307.25 360,-271.25 216,-271.25"></polygon>
+<text text-anchor="middle" x="287.75" y="-284.57" font-family="Times,serif" font-size="14.00">0x4f000000</text>
+</g>
+<!-- xmm0 -->
+<g id="node2" class="node">
+<title>xmm0</title>
+<polygon fill="none" stroke="black" points="0,-181 0,-217 576,-217 576,-181 0,-181"></polygon>
+<text text-anchor="middle" x="71.75" y="-194.32" font-family="Times,serif" font-size="14.00">0x4f000000</text>
+<polyline fill="none" stroke="black" points="143.5,-181 143.5,-217"></polyline>
+<text text-anchor="middle" x="215.75" y="-194.32" font-family="Times,serif" font-size="14.00">0x4f000000</text>
+<polyline fill="none" stroke="black" points="288,-181 288,-217"></polyline>
+<text text-anchor="middle" x="359.75" y="-194.32" font-family="Times,serif" font-size="14.00">0x4f000000</text>
+<polyline fill="none" stroke="black" points="431.5,-181 431.5,-217"></polyline>
+<text text-anchor="middle" x="503.75" y="-194.32" font-family="Times,serif" font-size="14.00">0x4f000000</text>
+</g>
+<!-- imm&#45;&gt;xmm0 -->
+<g id="edge1" class="edge">
+<title>imm-&gt;xmm0:n</title>
+<path fill="none" stroke="black" d="M215.77,-278.54C160.59,-269.28 91.35,-253.04 75.39,-228.24"></path>
+<polygon fill="black" stroke="black" points="78.8,-227.43 72.46,-218.94 72.12,-229.53 78.8,-227.43"></polygon>
+</g>
+<!-- imm&#45;&gt;xmm0 -->
+<g id="edge2" class="edge">
+<title>imm-&gt;xmm0:n</title>
+<path fill="none" stroke="black" d="M253.69,-270.81C238.26,-260.75 222.41,-246.54 217.53,-228.73"></path>
+<polygon fill="black" stroke="black" points="221.02,-228.44 216.2,-219 214.08,-229.38 221.02,-228.44"></polygon>
+</g>
+<!-- imm&#45;&gt;xmm0 -->
+<g id="edge3" class="edge">
+<title>imm-&gt;xmm0:n</title>
+<path fill="none" stroke="black" d="M322.31,-270.81C337.74,-260.75 353.59,-246.54 358.47,-228.73"></path>
+<polygon fill="black" stroke="black" points="361.92,-229.38 359.8,-219 354.98,-228.44 361.92,-229.38"></polygon>
+</g>
+<!-- imm&#45;&gt;xmm0 -->
+<g id="edge4" class="edge">
+<title>imm-&gt;xmm0:n</title>
+<path fill="none" stroke="black" d="M360.23,-278.54C415.41,-269.28 484.65,-253.04 500.61,-228.24"></path>
+<polygon fill="black" stroke="black" points="503.88,-229.53 503.54,-218.94 497.2,-227.43 503.88,-229.53"></polygon>
+<text text-anchor="middle" x="581.25" y="-239.45" font-family="Times,serif" font-size="14.00">1. broadcast 0x4f000000</text>
+</g>
+<!-- xmm1 -->
+<g id="node3" class="node">
+<title>xmm1</title>
+<polygon fill="none" stroke="black" points="0,-90.75 0,-126.75 576,-126.75 576,-90.75 0,-90.75"></polygon>
+<text text-anchor="middle" x="71.75" y="-104.08" font-family="Times,serif" font-size="14.00">2147483648.0</text>
+<polyline fill="none" stroke="black" points="143.5,-90.75 143.5,-126.75"></polyline>
+<text text-anchor="middle" x="215.75" y="-104.08" font-family="Times,serif" font-size="14.00">2147483648.0</text>
+<polyline fill="none" stroke="black" points="288,-90.75 288,-126.75"></polyline>
+<text text-anchor="middle" x="359.75" y="-104.08" font-family="Times,serif" font-size="14.00">2147483648.0</text>
+<polyline fill="none" stroke="black" points="431.5,-90.75 431.5,-126.75"></polyline>
+<text text-anchor="middle" x="503.75" y="-104.08" font-family="Times,serif" font-size="14.00">2147483648.0</text>
+</g>
+<!-- xmm0&#45;&gt;xmm1 -->
+<g id="edge5" class="edge">
+<title>xmm0:s-&gt;xmm1:n</title>
+<path fill="none" stroke="black" d="M72,-180.5C72,-161.09 72,-153.62 72,-138.49"></path>
+<polygon fill="black" stroke="black" points="75.5,-138.76 72,-128.76 68.5,-138.76 75.5,-138.76"></polygon>
+</g>
+<!-- xmm0&#45;&gt;xmm1 -->
+<g id="edge6" class="edge">
+<title>xmm0:s-&gt;xmm1:n</title>
+<path fill="none" stroke="black" d="M216,-180.5C216,-161.09 216,-153.62 216,-138.49"></path>
+<polygon fill="black" stroke="black" points="219.5,-138.76 216,-128.76 212.5,-138.76 219.5,-138.76"></polygon>
+</g>
+<!-- xmm0&#45;&gt;xmm1 -->
+<g id="edge7" class="edge">
+<title>xmm0:s-&gt;xmm1:n</title>
+<path fill="none" stroke="black" d="M360,-180.5C360,-161.09 360,-153.62 360,-138.49"></path>
+<polygon fill="black" stroke="black" points="363.5,-138.76 360,-128.76 356.5,-138.76 363.5,-138.76"></polygon>
+</g>
+<!-- xmm0&#45;&gt;xmm1 -->
+<g id="edge8" class="edge">
+<title>xmm0:s-&gt;xmm1:n</title>
+<path fill="none" stroke="black" d="M504,-180.5C504,-161.09 504,-153.62 504,-138.49"></path>
+<polygon fill="black" stroke="black" points="507.5,-138.76 504,-128.76 500.5,-138.76 507.5,-138.76"></polygon>
+<text text-anchor="middle" x="588.75" y="-149.2" font-family="Times,serif" font-size="14.00">2. bitcast int32_t-&gt;float</text>
+</g>
+<!-- xmm2 -->
+<g id="node4" class="node">
+<title>xmm2</title>
+<polygon fill="none" stroke="black" points="0,-0.5 0,-36.5 576,-36.5 576,-0.5 0,-0.5"></polygon>
+<text text-anchor="middle" x="71.75" y="-13.82" font-family="Times,serif" font-size="14.00">?</text>
+<polyline fill="none" stroke="black" points="143.5,-0.5 143.5,-36.5"></polyline>
+<text text-anchor="middle" x="215.75" y="-13.82" font-family="Times,serif" font-size="14.00">?</text>
+<polyline fill="none" stroke="black" points="288,-0.5 288,-36.5"></polyline>
+<text text-anchor="middle" x="359.75" y="-13.82" font-family="Times,serif" font-size="14.00">?</text>
+<polyline fill="none" stroke="black" points="431.5,-0.5 431.5,-36.5"></polyline>
+<text text-anchor="middle" x="503.75" y="-13.82" font-family="Times,serif" font-size="14.00">?</text>
+</g>
+<!-- xmm1&#45;&gt;xmm2 -->
+<g id="edge9" class="edge">
+<title>xmm1:s-&gt;xmm2:n</title>
+<path fill="none" stroke="black" d="M72,-90.25C72,-70.84 72,-63.37 72,-48.24"></path>
+<polygon fill="black" stroke="black" points="75.5,-48.51 72,-38.51 68.5,-48.51 75.5,-48.51"></polygon>
+</g>
+<!-- xmm1&#45;&gt;xmm2 -->
+<g id="edge10" class="edge">
+<title>xmm1:s-&gt;xmm2:n</title>
+<path fill="none" stroke="black" d="M216,-90.25C216,-70.84 216,-63.37 216,-48.24"></path>
+<polygon fill="black" stroke="black" points="219.5,-48.51 216,-38.51 212.5,-48.51 219.5,-48.51"></polygon>
+</g>
+<!-- xmm1&#45;&gt;xmm2 -->
+<g id="edge11" class="edge">
+<title>xmm1:s-&gt;xmm2:n</title>
+<path fill="none" stroke="black" d="M360,-90.25C360,-70.84 360,-63.37 360,-48.24"></path>
+<polygon fill="black" stroke="black" points="363.5,-48.51 360,-38.51 356.5,-48.51 363.5,-48.51"></polygon>
+</g>
+<!-- xmm1&#45;&gt;xmm2 -->
+<g id="edge12" class="edge">
+<title>xmm1:s-&gt;xmm2:n</title>
+<path fill="none" stroke="black" d="M504,-90.25C504,-70.84 504,-63.37 504,-48.24"></path>
+<polygon fill="black" stroke="black" points="507.5,-48.51 504,-38.51 500.5,-48.51 507.5,-48.51"></polygon>
+<text text-anchor="middle" x="591.38" y="-58.95" font-family="Times,serif" font-size="14.00">3. convert float-&gt;int32_t</text>
+</g>
+</g>
+</svg>
+
+<p>Note: <code>2147483648.0</code> is exactly 2<sup>31</sup>. Maximum <code>int32_t</code> can hold is
+2<sup>31</sup>-1, or <code>2147483647</code> (one less than our value at hand).</p>
+<p><strong>Quick quiz: What should this example return? Does it depend on the
+compiler options?</strong></p>
+<p>In theory those <code>_mm*()</code> compiler intrinsics are tiny wrappers over
+corresponding <code>x86_64</code> instructions.
+<a href="https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html">Intel guide</a>
+says that <code>_mm_cvttps_epi32()</code> is a <code>cvttps2dq</code> instruction.</p>
+<p>Running the example:</p>
+<pre><code>$ gcc -Wall a.c -o a0 -O0 &amp;&amp; ./a0
+0x80000000 0x80000000 0x80000000 0x80000000
+
+$ gcc -Wall a.c -o a1 -O1 &amp;&amp; ./a1
+0x7fffffff 0x7fffffff 0x7fffffff 0x7fffffff</code></pre>
+<p>Optimization levels do change the behaviour of the code when
+overflow happens: sometimes the result is 2<sup>31</sup> and sometimes it’s
+2<sup>31</sup>-1. Uh-oh. Let’s have a peek at the assembly of both cases.</p>
+<p><code>-O0</code> case:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">; $ rizin ./a0</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401050]&gt; aaaa</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401050]&gt; s main</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401136]&gt; pdf</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>            <span class="co">; DATA XREF from entry0 @ 0x401068</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="co">; int main(int argc, char **argv, char **envp);</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span>x4f000000<span class="op">,</span> var_8ch</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>          movl  var_8ch<span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> var_80h</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movd</span>  var_80h<span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>          <span class="bu">punpckldq</span> <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movaps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> var_48h</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>          <span class="bu">cvttps2dq</span> var_48h<span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movaps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> var_78h</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movq</span>  var_78h<span class="op">,</span> <span class="op">%</span><span class="kw">rax</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movq</span>  var_70h<span class="op">,</span> <span class="op">%</span><span class="kw">rdx</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movq</span>  <span class="op">%</span><span class="kw">rax</span><span class="op">,</span> var_28h</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>          <span class="bu">movq</span>  <span class="op">%</span><span class="kw">rdx</span><span class="op">,</span> var_20h</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>          movl  var_1ch<span class="op">,</span> <span class="op">%</span><span class="kw">esi</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>          movl  var_20h<span class="op">,</span> <span class="op">%</span><span class="kw">ecx</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>          movl  var_24h<span class="op">,</span> <span class="op">%</span><span class="kw">edx</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>          movl  var_28h<span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>          leaq  str<span class="op">.</span><span class="dv">08</span><span class="er">x___08x___08x___08x</span><span class="op">,</span> <span class="op">%</span><span class="kw">rdi</span>      <span class="co">; 0x402004 ; &quot;%#08x %#08x %#08x %#08x\n&quot; ; const char *format</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">%</span><span class="kw">esi</span><span class="op">,</span> <span class="op">%</span>r8d</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">esi</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>          callq sym<span class="op">.</span>imp<span class="op">.</span>printf                       <span class="co">; sym.imp.printf ; int printf(const char *format)</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span></code></pre></div>
+<p>While it’s a lot of superfluous code we do see there <code>cvttps2dq</code>
+instruction and <code>printf()</code> call against it’s result.</p>
+<p><code>-O1</code> case:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>$ rizin <span class="op">./</span>a1</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401040]&gt; aaaa</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401040]&gt; s main</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401126]&gt; pdf</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>            <span class="co">; DATA XREF from entry0 @ 0x401058</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="co">; int main(int argc, char **argv, char **envp);</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>          subq  <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span>x7fffffff<span class="op">,</span> <span class="op">%</span>r9d</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span>x7fffffff<span class="op">,</span> <span class="op">%</span>r8d</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span>x7fffffff<span class="op">,</span> <span class="op">%</span><span class="kw">ecx</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span>x7fffffff<span class="op">,</span> <span class="op">%</span><span class="kw">edx</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>          leaq  str<span class="op">.</span><span class="dv">08</span><span class="er">x___08x___08x___08x</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsi</span>      <span class="co">; 0x402004 ; &quot;%#08x %#08x %#08x %#08x\n&quot;</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">2</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>          callq sym<span class="op">.</span>imp<span class="op">.</span>__printf_chk                 <span class="co">; sym.imp.__printf_chk</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>          movl  <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>          addq  <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>          retq</span></code></pre></div>
+<p>Here we don’t see <code>cvttps2dq</code> at all! <code>gcc</code> just puts <code>0x7fffffff</code>
+constants into registers and calls <code>printf()</code> directly.</p>
+<p>For completeness let’s try to find out the exact optimization pass that
+performs this constant folding. Normally I would expect it to be a tree
+optimization, and thus <code>-fdump-tree-all</code> would tell me where the magic
+happens. Alas:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ gcc a.c -o a -O2 -fdump-tree-all &amp;&amp; ./a</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat a.c.265t.optimized</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="op">;;</span> Function main <span class="op">(</span>main<span class="op">,</span> funcdef_no<span class="op">=</span><span class="dv">574</span><span class="op">,</span> decl_uid<span class="op">=</span><span class="dv">6511</span><span class="op">,</span> cgraph_uid<span class="op">=</span><span class="dv">575</span><span class="op">,</span> symbol_order<span class="op">=</span><span class="dv">574</span><span class="op">)</span> <span class="op">(</span>executed once<span class="op">)</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">()</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _2<span class="op">;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  vector<span class="op">(</span><span class="dv">4</span><span class="op">)</span> <span class="dt">int</span> _3<span class="op">;</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _4<span class="op">;</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _5<span class="op">;</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _6<span class="op">;</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>  <span class="op">&lt;</span>bb <span class="dv">2</span><span class="op">&gt;</span> <span class="op">[</span>local count<span class="op">:</span> <span class="dv">1073741824</span><span class="op">]:</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>  _3 <span class="op">=</span> __builtin_ia32_cvttps2dq <span class="op">({</span> <span class="fl">2.147483648e+9</span><span class="op">,</span> <span class="fl">2.147483648e+9</span><span class="op">,</span> <span class="fl">2.147483648e+9</span><span class="op">,</span> <span class="fl">2.147483648e+9</span> <span class="op">});</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  _2 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">96</span><span class="op">&gt;;</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>  _6 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">64</span><span class="op">&gt;;</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>  _4 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">32</span><span class="op">&gt;;</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>  _5 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">0</span><span class="op">&gt;;</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>  __printf_chk <span class="op">(</span><span class="dv">2</span><span class="op">,</span> <span class="st">&quot;</span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x\n</span><span class="st">&quot;</span><span class="op">,</span> _5<span class="op">,</span> _4<span class="op">,</span> _6<span class="op">,</span> _2<span class="op">);</span></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here we see that <code>_mm_set1_epi32()</code> and <code>_mm_castsi128_ps()</code> were
+“folded” into a <code>2.147483648e+9</code> successfully, but <code>_mm_cvttps_epi32()</code>
+was not. And yet the final assembly does not contain the call. Let’s
+have a loot at the <code>RTL</code> passes that usually follow <code>tree</code> ones as part
+of the optimization:</p>
+<pre><code>$ gcc a.c -o a -O2 -fdump-rtl-all-slim &amp;&amp; ./a
+$ ls -1 *r.*
+a.c.266r.expand
+a.c.267r.vregs
+a.c.268r.into_cfglayout
+a.c.269r.jump
+a.c.270r.subreg1
+a.c.271r.dfinit
+a.c.272r.cse1
+a.c.273r.fwprop1
+a.c.274r.cprop1
+a.c.275r.pre
+a.c.277r.cprop2
+a.c.280r.ce1
+a.c.281r.reginfo
+a.c.282r.loop2
+a.c.283r.loop2_init
+a.c.284r.loop2_invariant
+a.c.285r.loop2_unroll
+a.c.287r.loop2_done
+a.c.290r.cprop3
+a.c.291r.stv1
+a.c.292r.cse2
+a.c.293r.dse1
+a.c.294r.fwprop2
+a.c.296r.init-regs
+a.c.297r.ud_dce
+a.c.298r.combine
+a.c.300r.stv2
+a.c.301r.ce2
+a.c.302r.jump_after_combine
+a.c.303r.bbpart
+a.c.304r.outof_cfglayout
+a.c.305r.split1
+a.c.306r.subreg3
+a.c.308r.mode_sw
+a.c.309r.asmcons
+a.c.314r.ira
+a.c.315r.reload
+a.c.316r.postreload
+a.c.319r.split2
+a.c.320r.ree
+a.c.321r.cmpelim
+a.c.322r.pro_and_epilogue
+a.c.323r.dse2
+a.c.324r.csa
+a.c.325r.jump2
+a.c.326r.compgotos
+a.c.328r.peephole2
+a.c.329r.ce3
+a.c.331r.fold_mem_offsets
+a.c.332r.cprop_hardreg
+a.c.333r.rtl_dce
+a.c.334r.bbro
+a.c.335r.split3
+a.c.336r.sched2
+a.c.338r.stack
+a.c.340r.zero_call_used_regs
+a.c.341r.alignments
+a.c.343r.mach
+a.c.344r.barriers
+a.c.349r.shorten
+a.c.350r.nothrow
+a.c.351r.dwarf2
+a.c.352r.final
+a.c.353r.dfinish</code></pre>
+<p>It’s a long list of passes! Let’s have a look at the first <code>266r.expand</code>:</p>
+<pre><code>$ cat a.c.266r.expand
+;;
+;; Full RTL generated for this function:
+;;
+    1: NOTE_INSN_DELETED
+    3: NOTE_INSN_BASIC_BLOCK 2
+    2: NOTE_INSN_FUNCTION_BEG
+    5: r106:V4SF=vec_duplicate([`*.LC1'])
+    6: r105:V4SF=r106:V4SF
+      REG_EQUAL const_vector
+    7: r104:V4SI=fix(r105:V4SF)
+
+    8: r99:V4SI=r104:V4SI
+    9: r108:V4SI=vec_select(r99:V4SI,parallel)
+   10: r107:SI=vec_select(r108:V4SI,parallel)
+   11: r110:V4SI=vec_select(vec_concat(r99:V4SI,r99:V4SI),parallel)
+   12: r109:SI=vec_select(r110:V4SI,parallel)
+   13: r112:V4SI=vec_select(r99:V4SI,parallel)
+   14: r111:SI=vec_select(r112:V4SI,parallel)
+   15: r113:SI=vec_select(r99:V4SI,parallel)
+   16: r114:DI=`*.LC2'
+   17: r9:SI=r107:SI
+   18: r8:SI=r109:SI
+   19: cx:SI=r111:SI
+   20: dx:SI=r113:SI
+   21: si:DI=r114:DI
+   22: di:SI=0x2
+   23: ax:QI=0
+   24: ax:SI=call [`__printf_chk'] argc:0
+      REG_CALL_DECL `__printf_chk'
+   25: r103:SI=0
+   29: ax:SI=r103:SI
+   30: use ax:SI</code></pre>
+<p>Here <code>V4SF</code> means the vector type of 4 floats, <code>V4SI</code> is a vector type
+of 4 <code>int</code>s, <code>SI</code> is an <code>int</code> type, <code>DI</code> is a <code>long</code> type. It looks like
+our <code>float-&gt;int32_t</code> conversion happens in two early <code>RTL</code> instructions:</p>
+<pre><code>    5: r106:V4SF=vec_duplicate([`*.LC1'])
+    6: r105:V4SF=r106:V4SF
+      REG_EQUAL const_vector
+    7: r104:V4SI=fix(r105:V4SF)</code></pre>
+<p>The rest of <code>RTL</code> code is extraction of that result as <code>printf()</code>
+arguments. It’s a lot of superfluous data moves. Later optimizations
+should clean it up and assign “hardware” registers like <code>r9</code> to virtual
+registers like <code>r108</code>. For completeness final <code>353r.dfinish</code> looks this
+way:</p>
+<pre><code>$ cat a.c.353r.dfinish
+
+;; Function main (main, funcdef_no=574, decl_uid=6511, cgraph_uid=575, symbol_order=574) (executed once)
+
+    1: NOTE_INSN_DELETED
+    3: NOTE_INSN_BASIC_BLOCK 2
+    2: NOTE_INSN_FUNCTION_BEG
+   34: {sp:DI=sp:DI-0x8;clobber flags:CC;clobber [scratch];}
+      REG_UNUSED flags:CC
+      REG_CFA_ADJUST_CFA sp:DI=sp:DI-0x8
+   35: NOTE_INSN_PROLOGUE_END
+   19: cx:SI=0x7fffffff
+   20: dx:SI=0x7fffffff
+   44: {ax:DI=0;clobber flags:CC;}
+      REG_UNUSED flags:CC
+   17: r9:SI=0x7fffffff
+   18: r8:SI=0x7fffffff
+   22: di:SI=0x2
+   32: si:DI=`*.LC2'
+      REG_EQUIV `*.LC2'
+   24: ax:SI=call [`__printf_chk'] argc:0
+      REG_DEAD r9:SI
+      REG_DEAD r8:SI
+      REG_DEAD di:SI
+      REG_DEAD si:DI
+      REG_DEAD cx:SI
+      REG_DEAD dx:SI
+      REG_UNUSED ax:SI
+      REG_CALL_DECL `__printf_chk'
+   45: {ax:DI=0;clobber flags:CC;}
+      REG_UNUSED flags:CC
+   46: NOTE_INSN_EPILOGUE_BEG
+   37: {sp:DI=sp:DI+0x8;clobber flags:CC;clobber [scratch];}
+      REG_UNUSED flags:CC
+      REG_CFA_ADJUST_CFA sp:DI=sp:DI+0x8
+   30: use ax:SI
+   38: simple_return
+   41: barrier
+   33: NOTE_INSN_DELETED</code></pre>
+<p>Here we don’t have <code>fix()</code> calls any more. <code>printf()</code> call already
+contains immediate <code>r8:SI=0x7fffffff</code> constants. All registers are
+resolved to real register names. Searching for <code>fix()</code> in all the pass
+files I found that <code>272r.cse1</code> was the last pass that mentioned it.
+<code>a.c.273r.fwprop1</code> already has the constants inlined. Looking at
+<code>272r.cse1</code> in <code>-fdump-rtl-all-all</code> we can see that details are inferred
+by <code>cse1</code> about the <code>fix()</code> <code>RTL</code> instruction:</p>
+<pre><code>(insn 7 6 8 2 (set (reg:V4SI 104)
+        (fix:V4SI (reg:V4SF 106))) &quot;...-gcc-15.0.0/lib/gcc/x86_64-unknown-linux-gnu/15.0.0/include/emmintrin.h&quot;:863:19 4254 {
+fix_truncv4sfv4si2}
+     (expr_list:REG_EQUAL (const_vector:V4SI [
+                (const_int 2147483647 [0x7fffffff]) repeated x4
+            ])
+        (expr_list:REG_DEAD (reg:V4SF 105)
+            (nil))))</code></pre>
+<p><code>fix_truncv4sfv4si2()</code> is the name of function that implements conversion
+from <code>fix()</code> call down to the lower level instructions. And it looks
+like <code>fix()</code> expansion also derived that the finals result is a constant:
+<code>(expr_list:REG_EQUAL (const_vector:V4SI [ (const_int 2147483647 [0x7fffffff]) repeated x4])</code>.
+Next <code>fwprop1</code> pass will use that constant value everywhere where <code>r104</code>
+is used.</p>
+<p><a href="https://gcc.gnu.org/onlinedocs/gccint/Standard-Names.html"><code>gcc</code> internals</a>
+documentation says that <code>fix_trunc</code> is a <code>float-to-int</code> conversion. Note
+that this conversion does not look specific to our intrinsic. Any
+code that casts floats would use the same helper. That explains why
+<code>_mm_cvttps_epi32()</code> semantics around the overflow are not honoured and
+generic floating conversion code it performed by <code>gcc</code> as if it was
+written as <code>(int)(2147483648.0f)</code>. Apparently both <code>0x7fffffff</code> and
+<code>0x80000000</code> values are correct under that assumption.</p>
+<p>The problem is that <code>_mm_cvttps_epi32()</code> is more specific than any valid
+<code>float-&gt;int</code> conversion. <code>intel</code> manual specifically says that at
+<a href="https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html"><code>CVTTPS2DQ</code> description</a>
+in “Intel® 64 and IA-32 Architectures Software Developer’s Manual Combined
+Volumes: 1, 2A, 2B, 2C, 2D, 3A, 3B, 3C, 3D, and 4”:</p>
+<pre><code>Description
+...
+When a conversion is inexact, a truncated (round toward zero) value is
+returned. If a converted result is larger than the maximum signed
+doubleword integer, the floating-point invalid exception is raised, and
+if this exception is masked, the indefinite integer value (80000000H) is
+returned.</code></pre>
+<p>Thus <code>0x80000000</code> would be a correct value here and not <code>0x7fffffff</code>.</p>
+<h2 id="avoiding-the-_mm_cvttps_epi32-non-determinism">avoiding the <code>_mm_cvttps_epi32()</code> non-determinism</h2>
+<p>OK, <code>gcc</code> decided to treat it as problematic when handling overflow
+condition. That should be easy to workaround by checking first if our
+value is in range first, right? Say, something like the following
+pseudocode:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">float</span> v <span class="op">=</span> <span class="fl">2147483648.0</span><span class="bu">f</span><span class="op">;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int32_t</span> result<span class="op">;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="op">(</span>v <span class="op">&gt;=</span> <span class="fl">2147483648.0</span><span class="bu">f</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    result <span class="op">=</span> <span class="bn">0x7fffffff</span><span class="op">;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    result <span class="op">=</span> fix<span class="op">(</span>v<span class="op">);</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>In a vectored code writing branching code is problematic, thus one needs
+to be creative and use masking. That is what <code>highway</code> did in
+<a href="https://github.com/google/highway/commit/9dc6e1ecb0748df78398b037d6a8a89e667702e7"><code>avoid GCC "UB" in truncating cases</code></a>
+commit. It’s a lot of code, but it’s idea is to mask away values
+calculated against overflows:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -10884,7 +10869,11 @@ HWY_API VFromD&lt;D&gt; ConvertInRangeTo(D /*di*/, VFromD&lt;RebindToFloat&lt;D&gt;&gt; v) {</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a> // F32 to I32 ConvertTo is generic for all vector lengths</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a> template &lt;class D, HWY_IF_I32_D(D)&gt;</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a> HWY_API VFromD&lt;D&gt; ConvertTo(D di, VFromD&lt;RebindToFloat&lt;D&gt;&gt; v) {</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="st">-  return detail::FixConversionOverflow(di, v, ConvertInRangeTo(di, v));</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="va">+  const RebindToFloat&lt;decltype(di)&gt; df;</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  // See comment at the first occurrence of &quot;IfThenElse(overflow,&quot;.</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  const MFromD&lt;D&gt; overflow = RebindMask(di, Ge(v, Set(df, 2147483648.0f)));</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="va">+  return IfThenElse(overflow, Set(di, LimitsMax&lt;int32_t&gt;()),</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="va">+                    ConvertInRangeTo(di, v));</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>If we amend our original example with this tweak we will get the
+following equivalent code:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat bug.cc</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdint.h&gt;</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;emmintrin.h&gt;</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> assert_eq_p<span class="op">(</span><span class="dt">void</span> <span class="op">*</span> l<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span> r<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> lb<span class="op">[</span><span class="dv">16</span><span class="op">];</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> rb<span class="op">[</span><span class="dv">16</span><span class="op">];</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    __builtin_memcpy<span class="op">(</span>lb<span class="op">,</span> l<span class="op">,</span> <span class="dv">16</span><span class="op">);</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    __builtin_memcpy<span class="op">(</span>rb<span class="op">,</span> r<span class="op">,</span> <span class="dv">16</span><span class="op">);</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>__builtin_memcmp<span class="op">(</span>lb<span class="op">,</span> rb<span class="op">,</span> <span class="dv">16</span><span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> __builtin_trap<span class="op">();</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a><span class="pp">#if 0</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a><span class="co">#include &lt;stdio.h&gt;</span></span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a><span class="co">__attribute__((noipa))</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a><span class="co">static void d_i(const char * prefix, __m128i p) {</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a><span class="co">    uint64_t v[2];</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a><span class="co">    memcpy(v, &amp;p, 16);</span></span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a><span class="co">    fprintf(stderr, </span><span class="st">&quot;</span><span class="sc">%10s</span><span class="st">(i): </span><span class="sc">%#016lx</span><span class="st"> </span><span class="sc">%#016lx\n</span><span class="st">&quot;</span><span class="co">, prefix, v[0], v[1]);</span></span>
+<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a><span class="co">}</span></span>
+<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
+<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> assert_eq<span class="op">(</span>__m128i l<span class="op">,</span> __m128i r<span class="op">)</span> <span class="op">{</span> assert_eq_p<span class="op">(&amp;</span>l<span class="op">,</span> <span class="op">&amp;</span>r<span class="op">);</span> <span class="op">}</span></span>
+<span id="cb14-30"><a href="#cb14-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-31"><a href="#cb14-31" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb14-32"><a href="#cb14-32" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i su <span class="op">=</span> _mm_set1_epi32<span class="op">(</span><span class="bn">0x4f000000</span><span class="op">);</span></span>
+<span id="cb14-33"><a href="#cb14-33" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128  sf <span class="op">=</span> _mm_castsi128_ps<span class="op">(</span>su<span class="op">);</span></span>
+<span id="cb14-34"><a href="#cb14-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-35"><a href="#cb14-35" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128  overflow_mask_f32 <span class="op">=</span> _mm_cmpge_ps<span class="op">(</span>sf<span class="op">,</span> _mm_set1_ps<span class="op">(</span><span class="fl">2147483648.0</span><span class="bu">f</span><span class="op">));</span></span>
+<span id="cb14-36"><a href="#cb14-36" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i overflow_mask <span class="op">=</span> _mm_castps_si128<span class="op">(</span>overflow_mask_f32<span class="op">);</span></span>
+<span id="cb14-37"><a href="#cb14-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-38"><a href="#cb14-38" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i conv <span class="op">=</span> _mm_cvttps_epi32<span class="op">(</span>sf<span class="op">);</span></span>
+<span id="cb14-39"><a href="#cb14-39" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i yes <span class="op">=</span> _mm_set1_epi32<span class="op">(</span>INT32_MAX<span class="op">);</span></span>
+<span id="cb14-40"><a href="#cb14-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-41"><a href="#cb14-41" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i a <span class="op">=</span> _mm_and_si128<span class="op">(</span>overflow_mask<span class="op">,</span> yes<span class="op">);</span></span>
+<span id="cb14-42"><a href="#cb14-42" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i na <span class="op">=</span> _mm_andnot_si128<span class="op">(</span>overflow_mask<span class="op">,</span> conv<span class="op">);</span></span>
+<span id="cb14-43"><a href="#cb14-43" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-44"><a href="#cb14-44" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i conv_masked <span class="op">=</span> _mm_or_si128<span class="op">(</span>a<span class="op">,</span> na<span class="op">);</span></span>
+<span id="cb14-45"><a href="#cb14-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-46"><a href="#cb14-46" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i actual <span class="op">=</span> _mm_cmpeq_epi32<span class="op">(</span>conv_masked<span class="op">,</span> _mm_set1_epi32<span class="op">(</span>INT32_MAX<span class="op">));</span></span>
+<span id="cb14-47"><a href="#cb14-47" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i expected <span class="op">=</span> _mm_set1_epi32<span class="op">(-</span><span class="dv">1</span><span class="op">);</span></span>
+<span id="cb14-48"><a href="#cb14-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-49"><a href="#cb14-49" aria-hidden="true" tabindex="-1"></a>  assert_eq<span class="op">(</span>expected<span class="op">,</span> actual<span class="op">);</span></span>
+<span id="cb14-50"><a href="#cb14-50" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>_mm_and_si128()</code> and <code>_mm_andnot_si128()</code> are used to mask away
+converted values larger than <code>2147483648.0f</code>.</p>
+<p>If we look at the diagram it looks this way (I collapsed vector values
+into <code>... x4</code> form as all of the values should be identical):</p>
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 10.0.1 (0)
+ -->
+<!-- Title: G Pages: 1 -->
+<svg width="871pt" height="439pt" viewBox="0.00 0.00 871.38 438.50" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 434.5)">
+<title>G</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-434.5 867.38,-434.5 867.38,4 -4,4"></polygon>
+<!-- sf -->
+<g id="node1" class="node">
+<title>sf</title>
+<polygon fill="none" stroke="black" points="73.38,-387.5 73.38,-430 214.62,-430 214.62,-387.5 73.38,-387.5"></polygon>
+<text text-anchor="middle" x="144" y="-412.7" font-family="Times,serif" font-size="14.00">sf:</text>
+<text text-anchor="middle" x="144" y="-395.45" font-family="Times,serif" font-size="14.00">2147483648.0 x4</text>
+</g>
+<!-- overflow_mask -->
+<g id="node2" class="node">
+<title>overflow_mask</title>
+<polygon fill="none" stroke="black" points="103.25,-290.75 103.25,-333.25 420.75,-333.25 420.75,-290.75 103.25,-290.75"></polygon>
+<text text-anchor="middle" x="262" y="-315.95" font-family="Times,serif" font-size="14.00">overflow_mask: cmpge(sf, 2147483648.0f)</text>
+<text text-anchor="middle" x="262" y="-298.7" font-family="Times,serif" font-size="14.00">0xFFFFffff x4</text>
+</g>
+<!-- sf&#45;&gt;overflow_mask -->
+<g id="edge1" class="edge">
+<title>sf-&gt;overflow_mask</title>
+<path fill="none" stroke="black" d="M203.03,-387.18C212.7,-382.18 222.12,-376.16 230,-369 237.68,-362.02 244,-352.75 248.93,-343.76"></path>
+<polygon fill="black" stroke="black" points="252.05,-345.36 253.4,-334.85 245.79,-342.22 252.05,-345.36"></polygon>
+<text text-anchor="middle" x="356.12" y="-355.7" font-family="Times,serif" font-size="14.00">1. compare for int32_t overflow</text>
+</g>
+<!-- conv -->
+<g id="node3" class="node">
+<title>conv</title>
+<polygon fill="none" stroke="black" points="0,-290.75 0,-333.25 54,-333.25 54,-290.75 0,-290.75"></polygon>
+<text text-anchor="middle" x="26.75" y="-315.95" font-family="Times,serif" font-size="14.00">conv:</text>
+<text text-anchor="middle" x="26.75" y="-298.7" font-family="Times,serif" font-size="14.00">? x4</text>
+</g>
+<!-- sf&#45;&gt;conv -->
+<g id="edge2" class="edge">
+<title>sf-&gt;conv</title>
+<path fill="none" stroke="black" d="M81.39,-387.06C71.93,-382.13 62.82,-376.16 55.25,-369 47.92,-362.06 42.19,-352.8 37.87,-343.82"></path>
+<polygon fill="black" stroke="black" points="41.21,-342.72 34.03,-334.93 34.78,-345.5 41.21,-342.72"></polygon>
+<text text-anchor="middle" x="143.38" y="-355.7" font-family="Times,serif" font-size="14.00">2. convert float-&gt;int32_t</text>
+</g>
+<!-- a -->
+<g id="node5" class="node">
+<title>a</title>
+<polygon fill="none" stroke="black" points="418,-194 418,-236.5 626,-236.5 626,-194 418,-194"></polygon>
+<text text-anchor="middle" x="522" y="-219.2" font-family="Times,serif" font-size="14.00">a: and(overflow_mask, yes)</text>
+<text text-anchor="middle" x="522" y="-201.95" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- overflow_mask&#45;&gt;a -->
+<g id="edge4" class="edge">
+<title>overflow_mask-&gt;a</title>
+<path fill="none" stroke="black" d="M421.07,-293.81C451.15,-288.28 477.21,-281.19 490,-272.25 498.8,-266.1 505.5,-256.7 510.44,-247.34"></path>
+<polygon fill="black" stroke="black" points="513.58,-248.89 514.64,-238.35 507.23,-245.93 513.58,-248.89"></polygon>
+<text text-anchor="middle" x="641" y="-258.95" font-family="Times,serif" font-size="14.00">3. leave substutes for overflow values</text>
+</g>
+<!-- na -->
+<g id="node6" class="node">
+<title>na</title>
+<polygon fill="none" stroke="black" points="77.12,-194 77.12,-236.5 336.88,-236.5 336.88,-194 77.12,-194"></polygon>
+<text text-anchor="middle" x="207" y="-219.2" font-family="Times,serif" font-size="14.00">na: and(not(overflow_mask), conv)</text>
+<text text-anchor="middle" x="207" y="-201.95" font-family="Times,serif" font-size="14.00">0x00000000 x4</text>
+</g>
+<!-- overflow_mask&#45;&gt;na -->
+<g id="edge6" class="edge">
+<title>overflow_mask-&gt;na</title>
+<path fill="none" stroke="black" d="M255.7,-290.28C251.94,-279.38 246.6,-266.02 240,-255 238.09,-251.82 235.92,-248.63 233.63,-245.54"></path>
+<polygon fill="black" stroke="black" points="236.42,-243.42 227.45,-237.78 230.94,-247.79 236.42,-243.42"></polygon>
+<text text-anchor="middle" x="367.5" y="-258.95" font-family="Times,serif" font-size="14.00">4. remove the overflowing values</text>
+</g>
+<!-- conv&#45;&gt;na -->
+<g id="edge5" class="edge">
+<title>conv-&gt;na</title>
+<path fill="none" stroke="green" d="M19.87,-290.26C17.28,-278.68 16.66,-264.68 24.5,-255 31.25,-246.66 46.73,-240.05 65.96,-234.82"></path>
+<polygon fill="green" stroke="green" points="66.68,-238.25 75.53,-232.42 64.98,-231.46 66.68,-238.25"></polygon>
+<text text-anchor="middle" x="130.75" y="-258.95" font-family="Times,serif" font-size="14.00">No values shoud survive here</text>
+</g>
+<!-- actual -->
+<g id="node9" class="node">
+<title>actual</title>
+<polygon fill="none" stroke="black" points="88.38,-0.5 88.38,-43 319.62,-43 319.62,-0.5 88.38,-0.5"></polygon>
+<text text-anchor="middle" x="204" y="-25.7" font-family="Times,serif" font-size="14.00">actual: eq(conv_masked, imm)</text>
+<text text-anchor="middle" x="204" y="-8.45" font-family="Times,serif" font-size="14.00">0xFFFFffff x4</text>
+</g>
+<!-- conv&#45;&gt;actual -->
+<!-- yes -->
+<g id="node4" class="node">
+<title>yes</title>
+<polygon fill="none" stroke="black" points="750.62,-290.75 750.62,-333.25 863.38,-333.25 863.38,-290.75 750.62,-290.75"></polygon>
+<text text-anchor="middle" x="807" y="-315.95" font-family="Times,serif" font-size="14.00">yes:</text>
+<text text-anchor="middle" x="807" y="-298.7" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- yes&#45;&gt;a -->
+<g id="edge3" class="edge">
+<title>yes-&gt;a</title>
+<path fill="none" stroke="black" d="M802.2,-290.26C798.29,-278.08 791.47,-263.45 780,-255 757.23,-238.21 695.25,-228.58 637.74,-223.12"></path>
+<polygon fill="black" stroke="black" points="638.1,-219.64 627.82,-222.22 637.46,-226.61 638.1,-219.64"></polygon>
+</g>
+<!-- conv_masked -->
+<g id="node7" class="node">
+<title>conv_masked</title>
+<polygon fill="none" stroke="black" points="117.25,-97.25 117.25,-139.75 296.75,-139.75 296.75,-97.25 117.25,-97.25"></polygon>
+<text text-anchor="middle" x="207" y="-122.45" font-family="Times,serif" font-size="14.00">conv_masked: or(a, na)</text>
+<text text-anchor="middle" x="207" y="-105.2" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- a&#45;&gt;conv_masked -->
+<g id="edge7" class="edge">
+<title>a-&gt;conv_masked</title>
+<path fill="none" stroke="black" d="M466.87,-193.55C436.22,-182.4 397.24,-168.8 362,-158.25 344.31,-152.96 325.34,-147.8 306.96,-143.06"></path>
+<polygon fill="black" stroke="black" points="307.93,-139.69 297.37,-140.61 306.2,-146.48 307.93,-139.69"></polygon>
+</g>
+<!-- na&#45;&gt;conv_masked -->
+<g id="edge8" class="edge">
+<title>na-&gt;conv_masked</title>
+<path fill="none" stroke="black" d="M207,-193.69C207,-181.27 207,-165.19 207,-151.18"></path>
+<polygon fill="black" stroke="black" points="210.5,-151.53 207,-141.53 203.5,-151.53 210.5,-151.53"></polygon>
+<text text-anchor="middle" x="282.38" y="-162.2" font-family="Times,serif" font-size="14.00">5. get the final result</text>
+</g>
+<!-- conv_masked&#45;&gt;actual -->
+<g id="edge11" class="edge">
+<title>conv_masked-&gt;actual</title>
+<path fill="none" stroke="black" d="M205.99,-96.99C205.72,-91.1 205.45,-84.67 205.25,-78.75 204.99,-71.01 204.77,-62.66 204.59,-54.83"></path>
+<polygon fill="black" stroke="black" points="208.09,-54.93 204.38,-45.01 201.09,-55.08 208.09,-54.93"></polygon>
+<text text-anchor="middle" x="282.88" y="-65.45" font-family="Times,serif" font-size="14.00">6. compare the result</text>
+</g>
+<!-- imm -->
+<g id="node8" class="node">
+<title>imm</title>
+<polygon fill="none" stroke="black" points="316.62,-97.25 316.62,-139.75 429.38,-139.75 429.38,-97.25 316.62,-97.25"></polygon>
+<text text-anchor="middle" x="373" y="-122.45" font-family="Times,serif" font-size="14.00">imm:</text>
+<text text-anchor="middle" x="373" y="-105.2" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- imm&#45;&gt;actual -->
+<g id="edge9" class="edge">
+<title>imm-&gt;actual</title>
+<path fill="none" stroke="black" d="M372.86,-96.85C371.68,-85.01 368.21,-70.71 359,-61.5 353.54,-56.04 343.14,-51.13 330.2,-46.78"></path>
+<polygon fill="black" stroke="black" points="331.35,-43.47 320.76,-43.86 329.28,-50.16 331.35,-43.47"></polygon>
+</g>
+</g>
+</svg>
+
+<p>Here <code>conv -&gt; na</code> green arrow shows where we throw away all the indefinite
+values. They all get substituted for <code>yes = 0x7FFFffff x4</code> value.</p>
+<p>Thus the program should finally be deterministic, right? Let’s check:</p>
+<pre><code>$ gcc bug.cc -O0 -o a &amp;&amp; ./a
+
+$ gcc bug.cc -O2 -o a &amp;&amp; ./a
+Illegal instruction (core dumped)</code></pre>
+<p>It does not. Only <code>-O0</code> case works (just like before). Looking at the
+assembly again, just <code>-O2</code> this time:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">; $ rizin ./a</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x004010a0]&gt; aaaa</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x004010a0]&gt; s main</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401040]&gt; pdf</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>            <span class="co">; DATA XREF from entry0 @ 0x4010a8</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>            <span class="co">;-- section..text:</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>/ <span class="bu">int</span> main<span class="op">(</span>int argc<span class="op">,</span> char <span class="op">**</span>argv<span class="op">,</span> char <span class="op">**</span>envp<span class="op">)</span><span class="co">;</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>|           <span class="co">; arg uint64_t arg7 @ xmm0</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>|                 subq  <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span>                             <span class="co">; [13] -r-x section size 483 named .text</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movss</span> data<span class="op">.</span><span class="dv">00402004</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span>                 <span class="co">; [0x402004:4]=0x4f000000</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movss</span> data<span class="op">.</span><span class="dv">00402008</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm3</span>                 <span class="co">; [0x402008:4]=0x7fffffff</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">shufps</span> <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movaps</span> <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">cvttps2dq</span> <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">shufps</span> <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm3</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm3</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">cmpleps</span> <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movdqa</span> <span class="op">%</span><span class="kw">xmm2</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">andps</span> <span class="op">%</span><span class="kw">xmm3</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pandn</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">por</span>   <span class="op">%</span><span class="kw">xmm2</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pcmpeqd</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span>                       <span class="co">; arg7</span></span>
+<span id="cb16-22"><a href="#cb16-22" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pcmpeqd</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span>                       <span class="co">; arg7</span></span>
+<span id="cb16-23"><a href="#cb16-23" aria-hidden="true" tabindex="-1"></a>|                 callq sym<span class="op">.</span>assert_eq_int64_t___vector_2___int64_t___vector_2 <span class="co">; sym.assert_eq_int64_t___vector_2___int64_t___vector_2</span></span>
+<span id="cb16-24"><a href="#cb16-24" aria-hidden="true" tabindex="-1"></a>|                 xorl  <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb16-25"><a href="#cb16-25" aria-hidden="true" tabindex="-1"></a>|                 addq  <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb16-26"><a href="#cb16-26" aria-hidden="true" tabindex="-1"></a>\                 retq</span></code></pre></div>
+<p>At the first glance <code>cvttps2dq</code> instruction is present, thus <code>gcc</code> was
+not able to completely constant fold it away. Thus it’s not immediately
+obvious why it’s incorrect. Let’s have a look at the control flow
+diagram reconstructed from the assembly:</p>
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 10.0.1 (0)
+ -->
+<!-- Title: G Pages: 1 -->
+<svg width="871pt" height="439pt" viewBox="0.00 0.00 871.38 438.50" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 434.5)">
+<title>G</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-434.5 867.38,-434.5 867.38,4 -4,4"></polygon>
+<!-- sf -->
+<g id="node1" class="node">
+<title>sf</title>
+<polygon fill="none" stroke="black" points="73.38,-387.5 73.38,-430 214.62,-430 214.62,-387.5 73.38,-387.5"></polygon>
+<text text-anchor="middle" x="144" y="-412.7" font-family="Times,serif" font-size="14.00">sf:</text>
+<text text-anchor="middle" x="144" y="-395.45" font-family="Times,serif" font-size="14.00">2147483648.0 x4</text>
+</g>
+<!-- overflow_mask -->
+<g id="node2" class="node">
+<title>overflow_mask</title>
+<polygon fill="none" stroke="black" points="103.25,-290.75 103.25,-333.25 420.75,-333.25 420.75,-290.75 103.25,-290.75"></polygon>
+<text text-anchor="middle" x="262" y="-315.95" font-family="Times,serif" font-size="14.00">overflow_mask: cmpge(sf, 2147483648.0f)</text>
+<text text-anchor="middle" x="262" y="-298.7" font-family="Times,serif" font-size="14.00">0xFFFFffff x4</text>
+</g>
+<!-- sf&#45;&gt;overflow_mask -->
+<g id="edge1" class="edge">
+<title>sf-&gt;overflow_mask</title>
+<path fill="none" stroke="black" d="M203.03,-387.18C212.7,-382.18 222.12,-376.16 230,-369 237.68,-362.02 244,-352.75 248.93,-343.76"></path>
+<polygon fill="black" stroke="black" points="252.05,-345.36 253.4,-334.85 245.79,-342.22 252.05,-345.36"></polygon>
+<text text-anchor="middle" x="356.12" y="-355.7" font-family="Times,serif" font-size="14.00">1. compare for int32_t overflow</text>
+</g>
+<!-- conv -->
+<g id="node3" class="node">
+<title>conv</title>
+<polygon fill="none" stroke="black" points="0,-290.75 0,-333.25 54,-333.25 54,-290.75 0,-290.75"></polygon>
+<text text-anchor="middle" x="26.75" y="-315.95" font-family="Times,serif" font-size="14.00">conv:</text>
+<text text-anchor="middle" x="26.75" y="-298.7" font-family="Times,serif" font-size="14.00">? x4</text>
+</g>
+<!-- sf&#45;&gt;conv -->
+<g id="edge2" class="edge">
+<title>sf-&gt;conv</title>
+<path fill="none" stroke="black" d="M81.39,-387.06C71.93,-382.13 62.82,-376.16 55.25,-369 47.92,-362.06 42.19,-352.8 37.87,-343.82"></path>
+<polygon fill="black" stroke="black" points="41.21,-342.72 34.03,-334.93 34.78,-345.5 41.21,-342.72"></polygon>
+<text text-anchor="middle" x="143.38" y="-355.7" font-family="Times,serif" font-size="14.00">2. convert float-&gt;int32_t</text>
+</g>
+<!-- a -->
+<g id="node5" class="node">
+<title>a</title>
+<polygon fill="none" stroke="black" points="418,-194 418,-236.5 626,-236.5 626,-194 418,-194"></polygon>
+<text text-anchor="middle" x="522" y="-219.2" font-family="Times,serif" font-size="14.00">a: and(overflow_mask, yes)</text>
+<text text-anchor="middle" x="522" y="-201.95" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- overflow_mask&#45;&gt;a -->
+<g id="edge4" class="edge">
+<title>overflow_mask-&gt;a</title>
+<path fill="none" stroke="black" d="M420.97,-295.11C452.93,-289.47 480.78,-282.02 494,-272.25 502.29,-266.12 508.29,-256.84 512.54,-247.59"></path>
+<polygon fill="black" stroke="black" points="515.78,-248.93 516.22,-238.34 509.27,-246.34 515.78,-248.93"></polygon>
+<text text-anchor="middle" x="644" y="-258.95" font-family="Times,serif" font-size="14.00">3. leave substutes for overflow values</text>
+</g>
+<!-- na -->
+<g id="node6" class="node">
+<title>na</title>
+<polygon fill="none" stroke="black" points="109.12,-194 109.12,-236.5 368.88,-236.5 368.88,-194 109.12,-194"></polygon>
+<text text-anchor="middle" x="239" y="-219.2" font-family="Times,serif" font-size="14.00">na: and(not(overflow_mask), conv)</text>
+<text text-anchor="middle" x="239" y="-201.95" font-family="Times,serif" font-size="14.00">0x00000000 x4</text>
+</g>
+<!-- overflow_mask&#45;&gt;na -->
+<g id="edge6" class="edge">
+<title>overflow_mask-&gt;na</title>
+<path fill="none" stroke="black" d="M257.01,-290.44C254,-278.02 250.09,-261.94 246.69,-247.93"></path>
+<polygon fill="black" stroke="black" points="250.1,-247.13 244.34,-238.24 243.3,-248.78 250.1,-247.13"></polygon>
+<text text-anchor="middle" x="371.5" y="-258.95" font-family="Times,serif" font-size="14.00">4. remove the overflowing values</text>
+</g>
+<!-- conv&#45;&gt;na -->
+<g id="edge5" class="edge">
+<title>conv-&gt;na</title>
+<path fill="none" stroke="green" d="M23.87,-290.42C23.29,-278.61 24.83,-264.31 33.5,-255 43.68,-244.08 68.52,-236.17 97.57,-230.47"></path>
+<polygon fill="green" stroke="green" points="98.19,-233.92 107.39,-228.67 96.92,-227.03 98.19,-233.92"></polygon>
+<text text-anchor="middle" x="139.75" y="-258.95" font-family="Times,serif" font-size="14.00">No values shoud survive here</text>
+</g>
+<!-- actual -->
+<g id="node9" class="node">
+<title>actual</title>
+<polygon fill="none" stroke="black" points="116.38,-0.5 116.38,-43 347.62,-43 347.62,-0.5 116.38,-0.5"></polygon>
+<text text-anchor="middle" x="232" y="-25.7" font-family="Times,serif" font-size="14.00">actual: eq(conv_masked, imm)</text>
+<text text-anchor="middle" x="232" y="-8.45" font-family="Times,serif" font-size="14.00">? x4</text>
+</g>
+<!-- conv&#45;&gt;actual -->
+<g id="edge10" class="edge">
+<title>conv-&gt;actual</title>
+<path fill="none" stroke="red" d="M22.48,-290.39C16.83,-259.2 10.74,-199.33 36.25,-158.25 67.91,-107.27 126.62,-70.53 171.52,-48.28"></path>
+<polygon fill="red" stroke="red" points="172.89,-51.5 180.38,-44 169.85,-45.2 172.89,-51.5"></polygon>
+<text text-anchor="middle" x="136.38" y="-162.2" font-family="Times,serif" font-size="14.00">buggy assumed value reuse</text>
+</g>
+<!-- yes -->
+<g id="node4" class="node">
+<title>yes</title>
+<polygon fill="none" stroke="black" points="750.62,-290.75 750.62,-333.25 863.38,-333.25 863.38,-290.75 750.62,-290.75"></polygon>
+<text text-anchor="middle" x="807" y="-315.95" font-family="Times,serif" font-size="14.00">yes:</text>
+<text text-anchor="middle" x="807" y="-298.7" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- yes&#45;&gt;a -->
+<g id="edge3" class="edge">
+<title>yes-&gt;a</title>
+<path fill="none" stroke="black" d="M803.35,-290.31C800.09,-278.15 794.06,-263.52 783,-255 760.12,-237.37 696.44,-227.7 637.7,-222.43"></path>
+<polygon fill="black" stroke="black" points="638.19,-218.96 627.93,-221.6 637.6,-225.94 638.19,-218.96"></polygon>
+</g>
+<!-- conv_masked -->
+<g id="node7" class="node">
+<title>conv_masked</title>
+<polygon fill="none" stroke="black" points="149.25,-97.25 149.25,-139.75 328.75,-139.75 328.75,-97.25 149.25,-97.25"></polygon>
+<text text-anchor="middle" x="239" y="-122.45" font-family="Times,serif" font-size="14.00">conv_masked: or(a, na)</text>
+<text text-anchor="middle" x="239" y="-105.2" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- a&#45;&gt;conv_masked -->
+<g id="edge7" class="edge">
+<title>a-&gt;conv_masked</title>
+<path fill="none" stroke="black" d="M479.75,-193.63C455.14,-182.16 423.27,-168.23 394,-158.25 376.74,-152.36 358.13,-146.95 339.99,-142.14"></path>
+<polygon fill="black" stroke="black" points="341.11,-138.82 330.55,-139.69 339.35,-145.59 341.11,-138.82"></polygon>
+</g>
+<!-- na&#45;&gt;conv_masked -->
+<g id="edge8" class="edge">
+<title>na-&gt;conv_masked</title>
+<path fill="none" stroke="black" d="M239,-193.69C239,-181.27 239,-165.19 239,-151.18"></path>
+<polygon fill="black" stroke="black" points="242.5,-151.53 239,-141.53 235.5,-151.53 242.5,-151.53"></polygon>
+<text text-anchor="middle" x="314.38" y="-162.2" font-family="Times,serif" font-size="14.00">5. get the final result</text>
+</g>
+<!-- conv_masked&#45;&gt;actual -->
+<g id="edge11" class="edge">
+<title>conv_masked-&gt;actual</title>
+<path fill="none" stroke="black" d="M235.48,-97.04C234.59,-91.16 233.76,-84.71 233.25,-78.75 232.59,-70.96 232.22,-62.55 232.02,-54.67"></path>
+<polygon fill="black" stroke="black" points="235.52,-54.72 231.87,-44.78 228.53,-54.83 235.52,-54.72"></polygon>
+<text text-anchor="middle" x="310.88" y="-65.45" font-family="Times,serif" font-size="14.00">6. compare the result</text>
+</g>
+<!-- imm -->
+<g id="node8" class="node">
+<title>imm</title>
+<polygon fill="none" stroke="black" points="352.62,-97.25 352.62,-139.75 465.38,-139.75 465.38,-97.25 352.62,-97.25"></polygon>
+<text text-anchor="middle" x="409" y="-122.45" font-family="Times,serif" font-size="14.00">imm:</text>
+<text text-anchor="middle" x="409" y="-105.2" font-family="Times,serif" font-size="14.00">0x7FFFffff x4</text>
+</g>
+<!-- imm&#45;&gt;actual -->
+<g id="edge9" class="edge">
+<title>imm-&gt;actual</title>
+<path fill="none" stroke="brown" stroke-dasharray="1,5" d="M405.74,-96.94C402.8,-84.98 397.28,-70.53 387,-61.5 378.48,-54.02 368.73,-47.94 358.36,-43"></path>
+<polygon fill="brown" stroke="brown" points="359.76,-39.79 349.2,-39.04 356.98,-46.22 359.76,-39.79"></polygon>
+<text text-anchor="middle" x="526.38" y="-65.45" font-family="Times,serif" font-size="14.00">not used, used 'conv' result instead</text>
+</g>
+</g>
+</svg>
+
+<p>In practice <code>pcmpeqd %xmm0, %xmm1</code> instruction that was supposed to
+implement <code>_mm_cmpeq_epi32(conv_masked, _mm_set1_epi32(INT32_MAX))</code> gets
+<code>INT32_MAX</code> not as a constant (say, from <code>%xmm3</code>), but as a <code>%xmm0</code>
+register assuming it already has the expected value. Red line shows
+where the assumption is introduced and brown dotted line shows what it
+is removing.</p>
+<p>The optimizer was not able to constant-fold all the arithmetic operations,
+but it was able to fold just enough to introduce the discrepancy between
+assumed and actual value of <code>cvttps2dq</code>.</p>
+<p>To remove this overly specific assumption <code>gcc-15</code> updated <code>fix()</code> code
+not to assume a particular value on overflows using
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=b05288d1f1e4b632eddf8830b4369d4659f6c2ff">this patch</a>:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/fold-const.cc</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/fold-const.cc</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2246,7 +2246,18 @@ fold_convert_const_int_from_real (enum tree_code code, tree type, const_tree arg</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>   if (! overflow)</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>     val = real_to_integer (&amp;r, &amp;overflow, TYPE_PRECISION (type));</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  t = force_fit_type (type, val, -1, overflow | TREE_OVERFLOW (arg1));</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  /* According to IEEE standard, for conversions from floating point to</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a><span class="va">+     integer. When a NaN or infinite operand cannot be represented in the</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a><span class="va">+     destination format and this cannot otherwise be indicated, the invalid</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a><span class="va">+     operation exception shall be signaled. When a numeric operand would</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a><span class="va">+     convert to an integer outside the range of the destination format, the</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a><span class="va">+     invalid operation exception shall be signaled if this situation cannot</span></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a><span class="va">+     otherwise be indicated.  */</span></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a><span class="va">+  if (!flag_trapping_math || !overflow)</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a><span class="va">+    t = force_fit_type (type, val, -1, overflow | TREE_OVERFLOW (arg1));</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a><span class="va">+  else</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a><span class="va">+    t = NULL_TREE;</span></span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>   return t;</span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a> }</span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/gcc/simplify-rtx.cc b/gcc/simplify-rtx.cc</span></span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>index 5caf1dfd957f..f6b4d73b593c 100644</span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/simplify-rtx.cc</span></span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/simplify-rtx.cc</span></span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2256,14 +2256,25 @@ simplify_const_unary_operation (enum rtx_code code, machine_mode mode,</span></span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>       switch (code)</span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a> 	{</span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a> 	case FIX:</span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a><span class="va">+	  /* According to IEEE standard, for conversions from floating point to</span></span>
+<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a><span class="va">+	     integer. When a NaN or infinite operand cannot be represented in</span></span>
+<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a><span class="va">+	     the destination format and this cannot otherwise be indicated, the</span></span>
+<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a><span class="va">+	     invalid operation exception shall be signaled. When a numeric</span></span>
+<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a><span class="va">+	     operand would convert to an integer outside the range of the</span></span>
+<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a><span class="va">+	     destination format, the invalid operation exception shall be</span></span>
+<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a><span class="va">+	     signaled if this situation cannot otherwise be indicated.  */</span></span>
+<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a> 	  if (REAL_VALUE_ISNAN (*x))</span>
+<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return const0_rtx;</span></span>
+<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return flag_trapping_math ? NULL_RTX : const0_rtx;</span></span>
+<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a><span class="va">+	  if (REAL_VALUE_ISINF (*x) &amp;&amp; flag_trapping_math)</span></span>
+<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return NULL_RTX;</span></span>
+<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a> 	  /* Test against the signed upper bound.  */</span>
+<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a> 	  wmax = wi::max_value (width, SIGNED);</span>
+<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a> 	  real_from_integer (&amp;t, VOIDmode, wmax, SIGNED);</span>
+<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a> 	  if (real_less (&amp;t, x))</span>
+<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return immed_wide_int_const (wmax, mode);</span></span>
+<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return (flag_trapping_math</span></span>
+<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a><span class="va">+		    ? NULL_RTX : immed_wide_int_const (wmax, mode));</span></span>
+<span id="cb17-52"><a href="#cb17-52" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-53"><a href="#cb17-53" aria-hidden="true" tabindex="-1"></a> 	  /* Test against the signed lower bound.  */</span>
+<span id="cb17-54"><a href="#cb17-54" aria-hidden="true" tabindex="-1"></a> 	  wmin = wi::min_value (width, SIGNED);</span>
+<span id="cb17-55"><a href="#cb17-55" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2276,13 +2287,17 @@ simplify_const_unary_operation (enum rtx_code code, machine_mode mode,</span></span>
+<span id="cb17-56"><a href="#cb17-56" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-57"><a href="#cb17-57" aria-hidden="true" tabindex="-1"></a> 	case UNSIGNED_FIX:</span>
+<span id="cb17-58"><a href="#cb17-58" aria-hidden="true" tabindex="-1"></a> 	  if (REAL_VALUE_ISNAN (*x) || REAL_VALUE_NEGATIVE (*x))</span>
+<span id="cb17-59"><a href="#cb17-59" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return const0_rtx;</span></span>
+<span id="cb17-60"><a href="#cb17-60" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return flag_trapping_math ? NULL_RTX : const0_rtx;</span></span>
+<span id="cb17-61"><a href="#cb17-61" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb17-62"><a href="#cb17-62" aria-hidden="true" tabindex="-1"></a><span class="va">+	  if (REAL_VALUE_ISINF (*x) &amp;&amp; flag_trapping_math)</span></span>
+<span id="cb17-63"><a href="#cb17-63" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return NULL_RTX;</span></span>
+<span id="cb17-64"><a href="#cb17-64" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-65"><a href="#cb17-65" aria-hidden="true" tabindex="-1"></a> 	  /* Test against the unsigned upper bound.  */</span>
+<span id="cb17-66"><a href="#cb17-66" aria-hidden="true" tabindex="-1"></a> 	  wmax = wi::max_value (width, UNSIGNED);</span>
+<span id="cb17-67"><a href="#cb17-67" aria-hidden="true" tabindex="-1"></a> 	  real_from_integer (&amp;t, VOIDmode, wmax, UNSIGNED);</span>
+<span id="cb17-68"><a href="#cb17-68" aria-hidden="true" tabindex="-1"></a> 	  if (real_less (&amp;t, x))</span>
+<span id="cb17-69"><a href="#cb17-69" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return immed_wide_int_const (wmax, mode);</span></span>
+<span id="cb17-70"><a href="#cb17-70" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return (flag_trapping_math</span></span>
+<span id="cb17-71"><a href="#cb17-71" aria-hidden="true" tabindex="-1"></a><span class="va">+		    ? NULL_RTX : immed_wide_int_const (wmax, mode));</span></span>
+<span id="cb17-72"><a href="#cb17-72" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-73"><a href="#cb17-73" aria-hidden="true" tabindex="-1"></a> 	  return immed_wide_int_const (real_to_integer (x, &amp;fail, width),</span>
+<span id="cb17-74"><a href="#cb17-74" aria-hidden="true" tabindex="-1"></a> 				       mode);</span></code></pre></div>
+<p>It fixes both tree optimizations if <code>RTL</code> optimizations not to assume a
+specific value on known overflows.</p>
+<p>After the fix <code>gcc</code> generates something that passes the test at hand:</p>
+<pre><code>$ g++ bug.cc -o bug -O2 &amp;&amp; ./bug</code></pre>
+<p>And the <code>highway</code> test suite.</p>
+<p>For completeness the generated code now looks like this:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">; $ rizin ./a</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x004010a0]&gt; aaaa</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x004010a0]&gt; s main</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="co">; [0x00401040]&gt; pdf</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>            <span class="co">; DATA XREF from entry0 @ 0x4010b8</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>            <span class="co">;-- section..text:</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>/ <span class="bu">int</span> main<span class="op">(</span>int argc<span class="op">,</span> char <span class="op">**</span>argv<span class="op">,</span> char <span class="op">**</span>envp<span class="op">)</span><span class="co">;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>|           <span class="co">; arg uint64_t arg8 @ xmm1</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>|                 subq  <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span>                             <span class="co">; [13] -r-x section size 499 named .text</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movss</span> data<span class="op">.</span><span class="dv">00402004</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span>                 <span class="co">; [0x402004:4]=0x4f000000</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">shufps</span> <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movaps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">cmpleps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">cvttps2dq</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movdqa</span> <span class="op">%</span><span class="kw">xmm2</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pandn</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">movss</span> data<span class="op">.</span><span class="dv">00402008</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span>                 <span class="co">; [0x402008:4]=0x7fffffff</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">shufps</span> <span class="op">$</span><span class="bn">0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">andps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pcmpeqd</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm0</span></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">por</span>   <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm2</span></span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pcmpeqd</span> <span class="op">%</span><span class="kw">xmm1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span>                       <span class="co">; arg8</span></span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">psrld</span> <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>|                 <span class="bu">pcmpeqd</span> <span class="op">%</span><span class="kw">xmm2</span><span class="op">,</span> <span class="op">%</span><span class="kw">xmm1</span>                       <span class="co">; arg8</span></span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>|                 callq sym<span class="op">.</span>assert_eq_int64_t___vector_2___int64_t___vector_2 <span class="co">; sym.assert_eq_int64_t___vector_2___int64_t___vector_2</span></span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>|                 xorl  <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>|                 addq  <span class="op">$</span><span class="bn">8</span><span class="op">,</span> <span class="op">%</span><span class="kw">rsp</span></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>\                 retq</span></code></pre></div>
+<p>This code looks slightly closed to originally written <code>C</code> code: <code>%xmm2</code>
+collects masked result of <code>cvttps2dq</code> and <code>%xmm1</code> contains <code>0x7FFFffff</code>
+value.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>While not as powerful as tree passes <code>RTL</code> passes are capable of folding
+constants, propagating assumed values and removing dead code.</p>
+<p><code>highway</code> uncovered an old <code>gcc</code> bug in a set of <code>float-&gt;int</code> conversion
+<code>x86</code> intrinsics. This bug was not seen as frequently until <code>gcc</code>
+implemented more constant folding cases for intrinsics in
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=f2449b55fb2d32">this change</a>.</p>
+<p><code>gcc</code> still has a few places where it could constant-fold a lot more:</p>
+<ul>
+<li>handle <code>_mm_cvttps_epi32(constant)</code></li>
+<li>eliminate redundant <code>movaps %xmm0, %xmm2; cmpleps %xmm0, %xmm2</code> and
+below</li>
+</ul>
+<p>But <code>gcc</code> does not do it today.</p>
+<p>If <code>gcc</code> thinks that some intrinsic returns a value that differs from
+reality it’s very hard to reliably convince <code>gcc</code> to assume something
+else. Sometimes it’s easier to use inline assembly to get the desired
+result as a short term workaround.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
