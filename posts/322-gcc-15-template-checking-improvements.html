@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>gcc-15 template checking improvements</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc-15 template checking improvements</h1>
+            
+                <div class="info">July 22, 2024</div>
+            
+
+            <h2 id="tldr">Tl;DR</h2>
+<p>On 18 Jul <code>gcc</code>
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=313afcfdabeab3e6705ac0bd1273627075be0023">merged</a>
+extended correctness checks for template functions. This will cause some
+incorrect unused code to fail to compile. Consider fixing or deleting
+the code. I saw at least two projects affected by it:</p>
+<ul>
+<li><a href="https://github.com/GNUAspell/aspell/pull/650"><code>aspell</code></a></li>
+<li><a href="https://sourceforge.net/p/mjpeg/patches/63/"><code>mjpegtools</code></a></li>
+</ul>
+<h2 id="more-words">more words</h2>
+<p><code>c++</code> is a complex language with a type system that does static checking.
+Most of the time checking the type correctness is easy by both human and
+the compiler. But sometimes it’s less trivial. Namespaces and function
+arguments can bring various declarations into the scope. Template code
+splits a single definition point into two: template definition point
+and template instantiation.</p>
+<p>Let’s look at a simple example:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">struct</span> S <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> bar<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> bar<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">42</span><span class="op">;</span> <span class="op">}</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    S<span class="op">&lt;</span><span class="dt">int</span><span class="op">&gt;</span> v<span class="op">;</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> v<span class="op">.</span>foo<span class="op">();</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>This fails to build on all recent <code>gcc</code> as:</p>
+<pre><code>$ g++ -c a.cc
+a.cc: In member function 'int S&lt;T&gt;::foo()':
+a.cc:2:28: error: there are no arguments to 'bar' that depend on a
+  template parameter, so a declaration of 'bar' must be available [-fpermissive]
+    2 |     int foo(void) { return bar(); }
+      |                            ^~~
+a.cc:2:28: note: (if you use '-fpermissive', G++ will accept your code,
+  but allowing the use of an undeclared name is deprecated)</code></pre>
+<p><code>gcc</code> really wants <code>bar</code> to be visible at the template instantiation
+time. But what is we don’t call <code>foo</code> at all?</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">struct</span> S <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> bar<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{}</span></span></code></pre></div>
+<p>Still fails the same:</p>
+<pre><code>$ g++ -c a.cc
+a.cc: In member function 'int S&lt;T&gt;::foo()':
+a.cc:2:28: error: there are no arguments to 'bar' that depend on a
+  template parameter, so a declaration of 'bar' must be available [-fpermissive]
+    2 |     int foo(void) { return bar(); }
+      |                            ^~~
+a.cc:2:28: note: (if you use '-fpermissive', G++ will accept your code,
+  but allowing the use of an undeclared name is deprecated)</code></pre>
+<p>That is neat: even if you never try to instantiate a function <code>gcc</code>
+still tries to do basic checks on it.</p>
+<p>But what if we call <code>foo()</code> via <code>this</code> pointer explicitly?</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> T<span class="op">&gt;</span> <span class="kw">struct</span> S <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="kw">this</span><span class="op">-&gt;</span>bar<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{}</span></span></code></pre></div>
+<p>Is it valid <code>c++</code>?</p>
+<p><code>gcc-14</code> says it’s fine:</p>
+<pre><code>$ g++-14 -c a.cc
+&lt;ok&gt;</code></pre>
+<p>Is there a way to somehow make <code>bar()</code> available via <code>this</code>? Maybe, via
+inheritance? Apparently, no. <code>gcc-15</code> now flags the code above as
+unconditionally invalid:</p>
+<pre><code>$ g++-15 -c a.cc
+a.cc: In member function 'int S&lt;T&gt;::foo()':
+a.cc:2:34: error: 'struct S&lt;T&gt;' has no member named 'bar'
+    2 |     int foo(void) { return this-&gt;bar(); }
+      |                                  ^~~</code></pre>
+<p>To get it to work you need something like a
+<a href="https://en.wikipedia.org/wiki/Curiously_recurring_template_pattern#Static_polymorphism"><code>CRTP</code></a>
+pattern:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Assume Derived::bar() will be provided.</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">typename</span> Derived<span class="op">&gt;</span> <span class="kw">struct</span> S <span class="op">{</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="kw">static_cast</span><span class="op">&lt;</span>Derived<span class="op">*&gt;(</span><span class="kw">this</span><span class="op">)-&gt;</span>bar<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{}</span></span></code></pre></div>
+<p>Interestingly the above problem pops up time to time in real projects in
+template code that was not tried after refactors. One such example is an
+<a href="https://github.com/GNUAspell/aspell/pull/650"><code>aspell</code> bug</a>:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">template</span><span class="op">&lt;</span><span class="kw">class</span> Parms<span class="op">&gt;</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> VectorHashTable<span class="op">&lt;</span>Parms<span class="op">&gt;::</span>recalc_size<span class="op">()</span> <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="va">size_</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span>iterator i <span class="op">=</span> begin<span class="op">();</span> i <span class="op">!=</span> <span class="kw">this</span><span class="op">-&gt;</span>e<span class="op">;</span> <span class="op">++</span>i<span class="op">,</span> <span class="op">++</span><span class="kw">this</span><span class="op">-&gt;</span>_size<span class="op">);</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span></code></pre></div>
+<p><code>gcc-14</code> built it just fine. <code>gcc-15</code> started rejecting the build as:</p>
+<pre><code>In file included from modules/speller/default/readonly_ws.cpp:51:
+modules/speller/default/vector_hash-t.hpp:
+  In member function 'void aspeller::VectorHashTable&lt;Parms&gt;::recalc_size()':
+modules/speller/default/vector_hash-t.hpp:186:43:
+  error: 'class aspeller::VectorHashTable&lt;Parms&gt;' has no member named 'e'
+  186 |     for (iterator i = begin(); i != this-&gt;e; ++i, ++this-&gt;_size);
+      |                                           ^
+modules/speller/default/vector_hash-t.hpp:186:59:
+  error: 'class aspeller::VectorHashTable&lt;Parms&gt;' has no member named '_size'; did you mean 'size'?
+  186 |     for (iterator i = begin(); i != this-&gt;e; ++i, ++this-&gt;_size);
+      |                                                           ^~~~~
+      |                                                           size</code></pre>
+<p><code>VectorHashTable</code> does not contain <code>_size</code> field, but it does contain
+<code>size_</code> (used just a line before). <code>e</code> field is not a thing either.</p>
+<p>The change is simple:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/modules/speller/default/vector_hash-t.hpp</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/modules/speller/default/vector_hash-t.hpp</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -183,7 +183,7 @@ namespace aspeller {</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>   template&lt;class Parms&gt;</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>   void VectorHashTable&lt;Parms&gt;::recalc_size() {</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>     size_ = 0;</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="st">-    for (iterator i = begin(); i != this-&gt;e; ++i, ++this-&gt;_size);</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="va">+    for (iterator i = begin(), e = end(); i != e; ++i, ++size_);</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>   }</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<p>Or you could also delete the function if it was broken like that for a
+while.</p>
+<p>Another example is <a href="https://sourceforge.net/p/mjpeg/patches/63/"><code>mjpegtools</code> bug</a>:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// The commented-out method prototypes are methods to be implemented by</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="co">// subclasses.  Not all methods have to be implemented, depending on</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="co">// whether it's appropriate for the subclass, but that may impact how</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">// widely the subclass may be used.</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> INDEX<span class="op">,</span> <span class="kw">class</span> SIZE<span class="op">&gt;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Region2D</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">public</span><span class="op">:</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> REGION<span class="op">,</span> <span class="kw">class</span> REGION_O<span class="op">,</span> <span class="kw">class</span> REGION_TEMP<span class="op">&gt;</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> UnionDebug <span class="op">(</span><span class="dt">Status_t</span> <span class="op">&amp;</span>a_reStatus<span class="op">,</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>        REGION_O <span class="op">&amp;</span>a_rOther<span class="op">,</span> REGION_TEMP <span class="op">&amp;</span>a_rTemp<span class="op">);</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// bool DoesContainPoint (INDEX a_tnY, INDEX a_tnX);</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> INDEX<span class="op">,</span> <span class="kw">class</span> SIZE<span class="op">&gt;</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a><span class="kw">template</span> <span class="op">&lt;</span><span class="kw">class</span> REGION<span class="op">,</span> <span class="kw">class</span> REGION_TEMP<span class="op">&gt;</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>Region2D<span class="op">&lt;</span>INDEX<span class="op">,</span>SIZE<span class="op">&gt;::</span>UnionDebug <span class="op">(</span><span class="dt">Status_t</span> <span class="op">&amp;</span>a_reStatus<span class="op">,</span> INDEX a_tnY<span class="op">,</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>    INDEX a_tnXStart<span class="op">,</span> INDEX a_tnXEnd<span class="op">,</span> REGION_TEMP <span class="op">&amp;</span>a_rTemp<span class="op">)</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(!((</span>rHere<span class="op">.</span><span class="va">m_tnY</span> <span class="op">==</span> a_tnY</span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>                <span class="op">&amp;&amp;</span> <span class="op">(</span>tnX <span class="op">&gt;=</span> a_tnXStart <span class="op">&amp;&amp;</span> tnX <span class="op">&lt;</span> a_tnXEnd<span class="op">))</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a>            <span class="op">||</span> <span class="kw">this</span><span class="op">-&gt;</span>DoesContainPoint <span class="op">(</span>rHere<span class="op">.</span><span class="va">m_tnY</span><span class="op">,</span> tnX<span class="op">)))</span></span>
+<span id="cb12-30"><a href="#cb12-30" aria-hidden="true" tabindex="-1"></a>                <span class="cf">goto</span> error<span class="op">;</span></span>
+<span id="cb12-31"><a href="#cb12-31" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb12-32"><a href="#cb12-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Here <code>mjpegtools</code> assumes that <code>DoesContainPoint</code> should come from
+derived type. But modern <code>c++</code> just does allow it to be defined like that:</p>
+<pre><code>In file included from SetRegion2D.hh:12,
+                 from MotionSearcher.hh:15,
+                 from newdenoise.cc:19:
+Region2D.hh: In member function 'void Region2D&lt;INDEX, SIZE&gt;::UnionDebug(Status_t&amp;, INDEX, INDEX, INDEX, REGION_TEMP&amp;)':
+Region2D.hh:439:34: error: 'class Region2D&lt;INDEX, SIZE&gt;' has no member named 'DoesContainPoint'
+  439 |                         || this-&gt;DoesContainPoint (rHere.m_tnY, tnX)))
+      |                                  ^~~~~~~~~~~~~~~~</code></pre>
+<p>The <a href="https://sourceforge.net/p/mjpeg/Code/3513/">fix</a> just deleted these
+unusable functions. An alternative fix would need to look closer to a
+<code>CRTP</code> tweak in our contrived example. But it’s a bit more invasive change.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>gcc-15</code> will reject more invalid unusable <code>c++</code> code in uninstantiated
+templates. The simplest code change might be to just delete broken code.
+More involved fix would require some knowledge of the code base to fix
+the declaration lookups (or to fix obvious typos).</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
