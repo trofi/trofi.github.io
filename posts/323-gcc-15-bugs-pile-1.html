@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>gcc-15 bugs, pile 1</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc-15 bugs, pile 1</h1>
+            
+                <div class="info">August 25, 2024</div>
+            
+
+            <p>About 4 months have passed since <code>gcc-14.1.0</code> release. Around the same
+time <code>gcc-15</code> development has started and a few major changes were
+merged into the <code>master</code> development branch.</p>
+<h2 id="summary">summary</h2>
+<p>This time I waited to collect about 20 bug reports I encountered:</p>
+<ul>
+<li><a href="https://gcc.gnu.org/PR114933">c++/114933</a>: <code>mcfgthread-1.6.1</code>
+typecheck failure. Ended up being <code>mcfgthread</code> bug caused by stronger
+<code>gcc</code> checks.</li>
+<li><a href="https://gcc.gnu.org/PR114872">tree-optimization/114872</a>: <code>sagemath</code>
+<code>SIGSEGV</code>ed due to broken assumptions around <code>setjmp()</code> / <code>longjmp()</code>.
+Not a <code>gcc</code>bug either.</li>
+<li><a href="https://gcc.gnu.org/PR115115">target/115115</a>: <code>highway-1.0.7</code> test
+suite expected too specific <code>_mm_cvttps_epi32()</code> semantics. A <code>gcc-12</code>
+regression!</li>
+<li><a href="https://gcc.gnu.org/PR115146">target/115146</a>: <code>highway-1.0.7</code> test
+suite exposed <code>gcc-15</code> bug in vectoring <code>bswap16()</code>-like code.</li>
+<li><a href="https://gcc.gnu.org/PR115227">tree-optimization/115227</a>: <code>libepoxy</code>,
+<code>p11-kit</code> and <code>doxygen</code> can’t fit in RAM of 32-bit <code>gcc</code> due to memory
+leak in value range propagation subsystem.</li>
+<li><a href="https://gcc.gnu.org/PR115397">target/115397</a>: <code>numpy</code> ICE for <code>-m32</code>:
+<code>gcc</code> code generator generated a constant pool memory reference and
+crashed in instruction selection.</li>
+<li><a href="https://gcc.gnu.org/PR115403">c++/115403</a>: <code>highway</code> build failure
+due to wrong scope handling of <code>#pragma GCC target</code> by <code>gcc</code>.</li>
+<li><a href="https://gcc.gnu.org/PR115602">tree-optimization/115602</a>:
+<code>liblapack-3.12.0</code> ICE in <code>slp</code> pass. <code>gcc</code> generated a self-reference
+cycle after applying code subexpression elimination.</li>
+<li><a href="https://gcc.gnu.org/PR115655">bootstrap/115655</a>: <code>gcc</code> bootstrap
+failure on <code>-Werror=unused-function</code>.</li>
+<li><a href="https://gcc.gnu.org/PR115797">libstdc++/115797</a>: <code>gcc</code> failed to
+compile <code>extern "C" { #include &lt;math.h&gt; }</code> code. <code>&lt;math.h&gt;</code> was fixed
+to survive such imports.</li>
+<li><a href="https://gcc.gnu.org/PR115863">middle-end/115863</a>: wrong code on
+<code>zlib</code> when handling saturated logic. A bug in truncation handling.</li>
+<li><a href="https://gcc.gnu.org/PR115916">rtl-optimization/115916</a>: wrong code on
+<code>highway</code>. Bad arithmetic shift <code>ubsan</code>-related fix in <code>gcc</code>’s own code.</li>
+<li><a href="https://gcc.gnu.org/PR115961">middle-end/115961</a>: wrong code on <code>llvm</code>,
+bad bitfield truncation handling for sub-byte bitfield sizes. Saturated
+truncation arithmetics handling was applied too broadly.</li>
+<li><a href="https://gcc.gnu.org/PR115991">tree-optimization/115991</a>: ICE on
+<code>linux-6.10</code>. Caused by too broad acceptance of sub-register use in an
+instruction. ENded up selecting invalid instructions.</li>
+<li><a href="https://gcc.gnu.org/PR116037">rtl-optimization/116037</a>: <code>python3</code>
+hangup due to an <code>-fext-dce</code> bug.</li>
+<li><a href="https://gcc.gnu.org/PR116200">rtl-optimization/116200</a>: crash during
+<code>gcc</code> bootstrap, wrong code on <code>libgcrypt</code>. A bug in RTL constant pool
+handling.</li>
+<li><a href="https://gcc.gnu.org/PR116353">rtl-optimization/116353</a>: ICE on
+<code>glibc-2.39</code>. Another RTL bug where <code>gcc</code> instruction selector was
+presented with invalid value reference.</li>
+<li><a href="https://gcc.gnu.org/PR116411">middle-end/116411</a>: ICE on
+<code>readline-8.2p13</code>. Conditional operation was incorrectly optimized for
+some of builtin functions used in branches.</li>
+<li><a href="https://gcc.gnu.org/PR116412">tree-optimization/116412</a>: ICE on
+<code>openblas-0.3.28</code>. Similar to the above: conditional operation was
+incorrectly optimized for complex types.</li>
+</ul>
+<h2 id="fun-bug">fun bug</h2>
+<p>The <a href="https://gcc.gnu.org/PR115863"><code>zlib</code> bug</a> is probably the most
+unusual one. Due to a typo in newly introduced set of optimizations
+<code>gcc</code> managed to convert <code>a &gt; b ? b : a</code> type of expressions into an
+equivalent of <code>b &gt; a ? b : a</code>. But it only does it for <code>b = INT_MAX</code>
+type of arguments (case of saturation).</p>
+<p>As a result it only broke <code>zlib</code> test suite as it specifically tests for
+out of range access to cause <code>SIGSEGV</code>s. For well-behaved inputs it never
+caused any problems. The <code>gcc</code> fix
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=aae535f3a870659d1f002f82bd585de0bcec7905">was trivial</a>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/config/i386/i386.md</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/config/i386/i386.md</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -9990,7 +9990,7 @@</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>   rtx sat = force_reg (DImode, GEN_INT (GET_MODE_MASK (&lt;MODE&gt;mode)));</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>   rtx dst;</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  emit_insn (gen_cmpdi_1 (op1, sat));</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  emit_insn (gen_cmpdi_1 (sat, op1));</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>   if (TARGET_CMOVE)</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>     {</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -10026,7 +10026,7 @@</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>   rtx sat = force_reg (SImode, GEN_INT (GET_MODE_MASK (&lt;MODE&gt;mode)));</span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>   rtx dst;</span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="st">-  emit_insn (gen_cmpsi_1 (op1, sat));</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="va">+  emit_insn (gen_cmpsi_1 (sat, op1));</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>   if (TARGET_CMOVE)</span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>     {</span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -10062,7 +10062,7 @@</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>   rtx sat = force_reg (HImode, GEN_INT (GET_MODE_MASK (QImode)));</span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>   rtx dst;</span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a><span class="st">-  emit_insn (gen_cmphi_1 (op1, sat));</span></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a><span class="va">+  emit_insn (gen_cmphi_1 (sat, op1));</span></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>   if (TARGET_CMOVE)</span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>     {</span></code></pre></div>
+<p>We swap argument order to restore original intent.</p>
+<h2 id="histograms">histograms</h2>
+<p>Where did most <code>gcc</code> bugs come from?</p>
+<ul>
+<li><code>tree-optimization</code>: 4</li>
+<li><code>rtl-optimization</code>: 4</li>
+<li><code>middle-end</code>: 3</li>
+<li><code>target</code>: 3</li>
+<li><code>c++</code>: 1</li>
+<li><code>bootstrap</code>: 1</li>
+<li><code>libstdc++</code>: 1</li>
+</ul>
+<p>As usual <code>tree-optimization</code> is at the top of subsystem causing troubles.
+But this time <code>rtl-optimization</code> got close to it as well.</p>
+<p><code>highway</code> managed to yield us 4 new bugs while <code>llvm</code> got us just one
+new bug.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>gcc-15</code> got a few very nice optimizations (and bugs) related to
+saturated truncation, zero/sign-extension elimination, constant folding
+in RTL.</p>
+<p>I saw at least 5 bugs related to wrong code generation (and
+also slowly reducing another one in the background). <code>middl-end</code> ones
+were easy to reduce and explore, <code>RTL</code> ones were very elusive.</p>
+<p>The most disruptive change is probably a removal of <code>#include &lt;cstdint&gt;</code>
+from one of <code>libstdc++</code> headers. That requires quite a few upstream
+fixes to add missing headers (<a href="https://github.com/google/cppdap/pull/133">cppdap</a>,
+<a href="https://github.com/google/woff2/pull/176">woff2</a>,
+<a href="https://github.com/silnrsi/graphite/pull/91">graphite</a>,
+<a href="https://github.com/KhronosGroup/glslang/pull/3684">glslang</a>,
+<a href="https://github.com/widelands/widelands/pull/6522">widelands</a>,
+<a href="https://github.com/wesnoth/wesnoth/pull/9250">wesnoth</a> and many others).</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>

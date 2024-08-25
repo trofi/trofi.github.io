@@ -7,8 +7,144 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Mon, 22 Jul 2024 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sun, 25 Aug 2024 00:00:00 UT</lastBuildDate>
         <item>
+    <title>gcc-15 bugs, pile 1</title>
+    <link>https://trofi.github.io/posts/323-gcc-15-bugs-pile-1.html</link>
+    <description><![CDATA[<p>About 4 months have passed since <code>gcc-14.1.0</code> release. Around the same
+time <code>gcc-15</code> development has started and a few major changes were
+merged into the <code>master</code> development branch.</p>
+<h2 id="summary">summary</h2>
+<p>This time I waited to collect about 20 bug reports I encountered:</p>
+<ul>
+<li><a href="https://gcc.gnu.org/PR114933">c++/114933</a>: <code>mcfgthread-1.6.1</code>
+typecheck failure. Ended up being <code>mcfgthread</code> bug caused by stronger
+<code>gcc</code> checks.</li>
+<li><a href="https://gcc.gnu.org/PR114872">tree-optimization/114872</a>: <code>sagemath</code>
+<code>SIGSEGV</code>ed due to broken assumptions around <code>setjmp()</code> / <code>longjmp()</code>.
+Not a <code>gcc</code>bug either.</li>
+<li><a href="https://gcc.gnu.org/PR115115">target/115115</a>: <code>highway-1.0.7</code> test
+suite expected too specific <code>_mm_cvttps_epi32()</code> semantics. A <code>gcc-12</code>
+regression!</li>
+<li><a href="https://gcc.gnu.org/PR115146">target/115146</a>: <code>highway-1.0.7</code> test
+suite exposed <code>gcc-15</code> bug in vectoring <code>bswap16()</code>-like code.</li>
+<li><a href="https://gcc.gnu.org/PR115227">tree-optimization/115227</a>: <code>libepoxy</code>,
+<code>p11-kit</code> and <code>doxygen</code> can’t fit in RAM of 32-bit <code>gcc</code> due to memory
+leak in value range propagation subsystem.</li>
+<li><a href="https://gcc.gnu.org/PR115397">target/115397</a>: <code>numpy</code> ICE for <code>-m32</code>:
+<code>gcc</code> code generator generated a constant pool memory reference and
+crashed in instruction selection.</li>
+<li><a href="https://gcc.gnu.org/PR115403">c++/115403</a>: <code>highway</code> build failure
+due to wrong scope handling of <code>#pragma GCC target</code> by <code>gcc</code>.</li>
+<li><a href="https://gcc.gnu.org/PR115602">tree-optimization/115602</a>:
+<code>liblapack-3.12.0</code> ICE in <code>slp</code> pass. <code>gcc</code> generated a self-reference
+cycle after applying code subexpression elimination.</li>
+<li><a href="https://gcc.gnu.org/PR115655">bootstrap/115655</a>: <code>gcc</code> bootstrap
+failure on <code>-Werror=unused-function</code>.</li>
+<li><a href="https://gcc.gnu.org/PR115797">libstdc++/115797</a>: <code>gcc</code> failed to
+compile <code>extern "C" { #include &lt;math.h&gt; }</code> code. <code>&lt;math.h&gt;</code> was fixed
+to survive such imports.</li>
+<li><a href="https://gcc.gnu.org/PR115863">middle-end/115863</a>: wrong code on
+<code>zlib</code> when handling saturated logic. A bug in truncation handling.</li>
+<li><a href="https://gcc.gnu.org/PR115916">rtl-optimization/115916</a>: wrong code on
+<code>highway</code>. Bad arithmetic shift <code>ubsan</code>-related fix in <code>gcc</code>’s own code.</li>
+<li><a href="https://gcc.gnu.org/PR115961">middle-end/115961</a>: wrong code on <code>llvm</code>,
+bad bitfield truncation handling for sub-byte bitfield sizes. Saturated
+truncation arithmetics handling was applied too broadly.</li>
+<li><a href="https://gcc.gnu.org/PR115991">tree-optimization/115991</a>: ICE on
+<code>linux-6.10</code>. Caused by too broad acceptance of sub-register use in an
+instruction. ENded up selecting invalid instructions.</li>
+<li><a href="https://gcc.gnu.org/PR116037">rtl-optimization/116037</a>: <code>python3</code>
+hangup due to an <code>-fext-dce</code> bug.</li>
+<li><a href="https://gcc.gnu.org/PR116200">rtl-optimization/116200</a>: crash during
+<code>gcc</code> bootstrap, wrong code on <code>libgcrypt</code>. A bug in RTL constant pool
+handling.</li>
+<li><a href="https://gcc.gnu.org/PR116353">rtl-optimization/116353</a>: ICE on
+<code>glibc-2.39</code>. Another RTL bug where <code>gcc</code> instruction selector was
+presented with invalid value reference.</li>
+<li><a href="https://gcc.gnu.org/PR116411">middle-end/116411</a>: ICE on
+<code>readline-8.2p13</code>. Conditional operation was incorrectly optimized for
+some of builtin functions used in branches.</li>
+<li><a href="https://gcc.gnu.org/PR116412">tree-optimization/116412</a>: ICE on
+<code>openblas-0.3.28</code>. Similar to the above: conditional operation was
+incorrectly optimized for complex types.</li>
+</ul>
+<h2 id="fun-bug">fun bug</h2>
+<p>The <a href="https://gcc.gnu.org/PR115863"><code>zlib</code> bug</a> is probably the most
+unusual one. Due to a typo in newly introduced set of optimizations
+<code>gcc</code> managed to convert <code>a &gt; b ? b : a</code> type of expressions into an
+equivalent of <code>b &gt; a ? b : a</code>. But it only does it for <code>b = INT_MAX</code>
+type of arguments (case of saturation).</p>
+<p>As a result it only broke <code>zlib</code> test suite as it specifically tests for
+out of range access to cause <code>SIGSEGV</code>s. For well-behaved inputs it never
+caused any problems. The <code>gcc</code> fix
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=aae535f3a870659d1f002f82bd585de0bcec7905">was trivial</a>:</p>
+<pre class="diff"><code>--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -9990,7 +9990,7 @@
+   rtx sat = force_reg (DImode, GEN_INT (GET_MODE_MASK (&lt;MODE&gt;mode)));
+   rtx dst;
+
+-  emit_insn (gen_cmpdi_1 (op1, sat));
++  emit_insn (gen_cmpdi_1 (sat, op1));
+
+   if (TARGET_CMOVE)
+     {
+@@ -10026,7 +10026,7 @@
+   rtx sat = force_reg (SImode, GEN_INT (GET_MODE_MASK (&lt;MODE&gt;mode)));
+   rtx dst;
+
+-  emit_insn (gen_cmpsi_1 (op1, sat));
++  emit_insn (gen_cmpsi_1 (sat, op1));
+
+   if (TARGET_CMOVE)
+     {
+@@ -10062,7 +10062,7 @@
+   rtx sat = force_reg (HImode, GEN_INT (GET_MODE_MASK (QImode)));
+   rtx dst;
+
+-  emit_insn (gen_cmphi_1 (op1, sat));
++  emit_insn (gen_cmphi_1 (sat, op1));
+
+   if (TARGET_CMOVE)
+     {</code></pre>
+<p>We swap argument order to restore original intent.</p>
+<h2 id="histograms">histograms</h2>
+<p>Where did most <code>gcc</code> bugs come from?</p>
+<ul>
+<li><code>tree-optimization</code>: 4</li>
+<li><code>rtl-optimization</code>: 4</li>
+<li><code>middle-end</code>: 3</li>
+<li><code>target</code>: 3</li>
+<li><code>c++</code>: 1</li>
+<li><code>bootstrap</code>: 1</li>
+<li><code>libstdc++</code>: 1</li>
+</ul>
+<p>As usual <code>tree-optimization</code> is at the top of subsystem causing troubles.
+But this time <code>rtl-optimization</code> got close to it as well.</p>
+<p><code>highway</code> managed to yield us 4 new bugs while <code>llvm</code> got us just one
+new bug.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>gcc-15</code> got a few very nice optimizations (and bugs) related to
+saturated truncation, zero/sign-extension elimination, constant folding
+in RTL.</p>
+<p>I saw at least 5 bugs related to wrong code generation (and
+also slowly reducing another one in the background). <code>middl-end</code> ones
+were easy to reduce and explore, <code>RTL</code> ones were very elusive.</p>
+<p>The most disruptive change is probably a removal of <code>#include &lt;cstdint&gt;</code>
+from one of <code>libstdc++</code> headers. That requires quite a few upstream
+fixes to add missing headers (<a href="https://github.com/google/cppdap/pull/133">cppdap</a>,
+<a href="https://github.com/google/woff2/pull/176">woff2</a>,
+<a href="https://github.com/silnrsi/graphite/pull/91">graphite</a>,
+<a href="https://github.com/KhronosGroup/glslang/pull/3684">glslang</a>,
+<a href="https://github.com/widelands/widelands/pull/6522">widelands</a>,
+<a href="https://github.com/wesnoth/wesnoth/pull/9250">wesnoth</a> and many others).</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Sun, 25 Aug 2024 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/323-gcc-15-bugs-pile-1.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>gcc-15 template checking improvements</title>
     <link>https://trofi.github.io/posts/322-gcc-15-template-checking-improvements.html</link>
     <description><![CDATA[<h2 id="tldr">Tl;DR</h2>
@@ -4335,6 +4471,10 @@ attribute.</li>
 as optional.</li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/329515">PR#329515</a>:
 <code>varnish60Packages.modules</code> used invalid <code>hash</code> format.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/331682">PR#331682</a>:
+<code>nixosTests.bittorrent</code> used an alias in package inputs.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/332822">PR#332822</a>:
+<code>octave.buildEnv</code> called the function with undefined attribute.</li>
 </ul>
 <p>Note: It’s not the full list of required fixes. For more complex cases I
 filed a few bugs to get maintainers’ help:</p>
@@ -9440,276 +9580,6 @@ using <code>make -j</code> alone.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Fri, 11 Aug 2023 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/294-an-obscure-make-shuffle-bug.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>Mysterious patchelf linkage bug</title>
-    <link>http://trofi.github.io/posts/293-mysterious-patchelf-linkage-bug.html</link>
-    <description><![CDATA[<p>Today’s mystery started from <a href="https://hydra.nixos.org/build/229663092">this build failure</a>
-noticed by Vladimir on <code>staging-next</code> branch of <code>nixpkgs</code>.</p>
-<p>There <code>aarch64-linux</code> build
-<a href="https://hydra.nixos.org/log/k9mdaj5a9rbpkc8x9hj9mw3papraamcn-patchelf-0.15.0.drv">failed</a>
-to compile <code>patchelf</code> as part of <code>stdenv</code> with this mysterious error:</p>
-<pre><code>Making all in src
-make[1]: Entering directory '/build/patchelf-0.15.0/src'
-g++ -DPACKAGE_NAME=\&quot;patchelf\&quot; -DPACKAGE_TARNAME=\&quot;patchelf\&quot; -DPACKAGE_VERSION=\&quot;0.15.0\&quot; -DPACKAGE_STRING=\&quot;patchelf\ 0.15.0\&quot; -DPACKAGE_BUGREPORT=\&quot;\&quot; -DPACKAGE_URL=\&quot;\&quot; -DPACKAGE=\&quot;patchelf\&quot; -DVERSION=\&quot;0.15.0\&quot; -I.    -Wall -std=c++17 -D_FILE_OFFSET_BITS=64     -g -O2 -c -o patchelf.o patchelf.cc
-g++ -Wall -std=c++17 -D_FILE_OFFSET_BITS=64     -g -O2   -o patchelf patchelf.o  
-ld: patchelf.o: in function `__gnu_cxx::__exchange_and_add(int volatile*, int)':
-...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
-  undefined reference to `__aarch64_ldadd4_acq_rel'
-ld: ...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
-  undefined reference to `__aarch64_ldadd4_acq_rel'
-ld: ...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
-  undefined reference to `__aarch64_ldadd4_acq_rel'
-ld: ...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
-  undefined reference to `__aarch64_ldadd4_acq_rel'
-ld: patchelf.o: in function `__gnu_cxx::__atomic_add(int volatile*, int)':
-...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:71:
-  undefined reference to `__aarch64_ldadd4_acq_rel'
-ld: patchelf.o:...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:71:
-  more undefined references to `__aarch64_ldadd4_acq_rel' follow
-collect2: error: ld returned 1 exit status</code></pre>
-<p>It is the <code>build.log</code> in almost all of it’s entirety. I had a small
-change in <code>staging-next</code> branch which should absolutely not cause that
-failure. But I was not sure (one can never be sure when it comes to the
-toolchain bugs).</p>
-<p><strong>Quick quiz</strong>: why does it happen? A <code>gcc</code> bug? A <code>binutils</code> bug? Wrong
-library lookup paths in <code>cc-wrapper</code> or <code>ld-wrapper</code>? Or a heisenbug?</p>
-<h2 id="first-hypothesis">First hypothesis</h2>
-<p>I had some past experience with errors like that in recent the past
-<a href="https://github.com/NixOS/nixpkgs/pull/158047">here</a> and
-<a href="https://github.com/NixOS/nixpkgs/issues/201254">here</a>.</p>
-<p>In both cases it was a <code>nixpkgs</code>-specific problem of mixing multiple
-toolchain versions in a single <code>stdenv</code>. I expect this kind of problem
-to come back from time to time until bootstrap process is changed to
-avoid any mixing of toolchain versions. Thus I was looking forward to
-debug yet another one of those.</p>
-<p>I ran the bisect and got the
-<a href="https://github.com/NixOS/nixpkgs/commit/8470989a96eb1c0e0c12c30c1b7bd7174ed9349b">Merge pull request #245550 from trofi/gcc-restore-sys-include</a>.
-as the culprit.</p>
-<p>My own commit! Uh-on. One of the problems is that it’s a merge commit of
-the change, not the change itself. Why did bisect skip the change
-itself? Why did the PR cause this failure at all? It did not make sense.
-Reverting the commit on top of <code>staging-next</code> did fix the <code>patchelf</code>
-linkage. Should it be the culprit then? I was about to submit the revert
-and move on to less cryptic things.</p>
-<p>But for some reason just before giving up I tried to run <code>--rebuild</code> on
-a random “good” commit and got the <code>patchelf</code> linkage failure! That
-meant the error was non-deterministic. It did not make sense.</p>
-<p>On one hand <code>sys-include</code> commit above is quite relevant to the way
-<code>gcc</code> bootstraps. On the other hand it is not supposed to lead to
-non-deterministic failures.</p>
-<p>I had to start from the first principles to see where and how linkage
-process breaks.</p>
-<h2 id="what-is-this-error-about">What is this error about?</h2>
-<p>Let’s look at the specifics of code using atomics in <code>gcc</code>.</p>
-<p><code>libstdc++</code> (<code>gcc</code>s <code>c++</code> template library) uses atomic operations in
-various containers. For example <code>&lt;string&gt;</code> uses atomics to implement
-copy-on-write semantics. Naturally <code>patchelf</code> uses a bit of
-<code>std::string</code> as well. Thus it’s expected to use a bit of atomics like
-<code>__atomic_fetch_add()</code> builtin.</p>
-<p>Each architecture implements atomics in a slightly different way: some
-get away with a single instruction, some require quite a bit of code.
-Let’s have a look at <code>x86_64</code> and <code>aarch64</code> to see how close they are.</p>
-<p>I’ll use the very <code>/nix/store/c7qmp1dgqf3hh4fjw74y2k662nmaslcy-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66</code>
-source code bit from the error we saw above.</p>
-<pre class="c"><code>// atomic.c
-int f(int * p, int v) {
-    return __atomic_fetch_add(p, v, __ATOMIC_ACQ_REL);
-}</code></pre>
-<p>The function <code>f()</code> here atomically adds a <code>v</code> value stored at <code>p</code> and
-returns some result.</p>
-<p><code>x86_64</code> generates the following code:</p>
-<pre><code>$ gcc -O2 -S a.c -o -
-    f:
-        movl         %esi, %eax
-        lock xaddl   %eax, (%rdi)
-        ret</code></pre>
-<p>It’s literally one <code>lock xaddl</code> instruction. How about <code>aarch64</code>? Is it
-as simple?</p>
-<pre><code>$ aarch64-unknown-linux-gnu-gcc -O2 -S a.c -o -
-        .arch armv8-a
-    f:
-        mov     x2, x0
-        stp     x29, x30, [sp, -16]!
-        mov     w0, w1
-        mov     x29, sp
-        mov     x1, x2
-        bl      __aarch64_ldadd4_acq_rel
-        ldp     x29, x30, [sp], 16
-        ret</code></pre>
-<p>We see a big difference here: <code>gcc</code> emits call into outside
-<code>__aarch64_ldadd4_acq_rel</code> function. It’s code hides in <code>libgcc.a</code>:</p>
-<pre><code>__aarch64_ldadd4_acq_rel:
-   0:           bti     c
-   4:           adrp    x16, 0 &lt;__aarch64_have_lse_atomics&gt;
-                4: R_AARCH64_ADR_PREL_PG_HI21   __aarch64_have_lse_atomics
-   8:           ldrb    w16, [x16]
-                8: R_AARCH64_LDST8_ABS_LO12_NC  __aarch64_have_lse_atomics
-   c:           cbz     w16, 18 &lt;__aarch64_ldadd4_acq_rel+0x18&gt;
-  10:           ldaddal w0, w0, [x1]
-  14:           ret
-  18:           mov     w16, w0
-  1c:           ldaxr   w0, [x1]
-  20:           add     w17, w0, w16
-  24:           stlxr   w15, w17, [x1]
-  28:           cbnz    w15, 1c &lt;__aarch64_ldadd4_acq_rel+0x1c&gt;
-  2c:           ret</code></pre>
-<p>Quite a bit of code here as well: if CPU supports <code>ldaddal</code> then
-<code>libgcc.a</code> uses that. Otherwise it falls back to
-<code>ldaxr; add; stlxr; cbnz</code>.</p>
-<p>This amount of code is probably the reason why the code is not inlined
-by <code>gcc</code>. For comparison <code>clang</code> does something a bit different:</p>
-<pre><code>$ clang -O2 -S a.c -o - -target aarch64-unknown-linux
-    f:
-        ldaxr   w8, [x0]
-        add     w9, w8, w1
-        stlxr   w10, w9, [x0]
-        cbnz    w10, f
-        mov     w0, w8
-        ret</code></pre>
-<p>Here <code>clang</code> inlined <code>ldaxr; add; stlxr; cbnz</code> and did not consider
-<code>ldaddal</code> at all. If we nudge <code>gcc</code> a bit we can force it to inline
-<code>ldaddal</code> with <code>-march=</code> flag:</p>
-<pre><code>$ aarch64-unknown-linux-gnu-gcc -O2 -S a.c -o - -Wall -march=armv8.1-a
-    f:
-        ldaddal w1, w0, [x0]
-        ret</code></pre>
-<p>And the same for <code>clang</code>:</p>
-<pre><code>$ clang -O2 -S a.c -o - -target aarch64-unknown-linux -march=armv8.1-a
-    f:
-        ldaddal w1, w0, [x0]
-        ret</code></pre>
-<p>All of the above tells us that sometimes <code>gcc</code> generates calls into
-“external” libraries like <code>libgcc.a</code> (or <code>libgcc_s.so</code>) to implement
-larger primitives. And this decision might depend on the backend
-architecture and compiler flags.</p>
-<h2 id="looking-at-the-linkage-command">Looking at the linkage command</h2>
-<p>I filed <a href="https://github.com/NixOS/nixpkgs/issues/246147">the bug</a> to
-start capturing important details of the bug to see how far into it I
-can get.</p>
-<p>First I needed to extract exact attribute failing to build on <code>aarch64</code>.</p>
-<p>I added <code>boot.binfmt.emulatedSystems = [ "aarch64-linux" ];</code> to
-<code>/etc/nixos/configuration.nix</code> to get <code>binfmt-misc</code> wrapper and ran a
-few build commands like:</p>
-<pre><code>$ nix build --no-link -f. --argstr system aarch64-linux patchelf -L</code></pre>
-<p>to point at the exact failing attribute. It ended up being
-<code>stdenv.__bootPackages.stdenv.__bootPackages.stdenv.__bootPackages.patchelf</code>.
-The attribute points right in the middle of <code>stdenv</code> bootstrap.</p>
-<p>I dropped into interactive shell to poke at the exact details of build
-failure against <code>good</code> and <code>bad</code> states with <code>nix develop</code>:</p>
-<pre><code>$ nix develop -f. --argstr system aarch64-linux patchelf
-error (ignored): error: '--arg' and '--argstr' are incompatible with flakes
-$$ genericBuild
-...
-$$ cd src
-$$ g++ -Wall -std=c++17 -D_FILE_OFFSET_BITS=64     -g -O2   -o patchelf patchelf.o
-ld: patchelf.o: in function `__gnu_cxx::__exchange_and_add(int volatile*, int)':
-...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66:
-  undefined reference to `__aarch64_ldadd4_acq_rel'
-...</code></pre>
-<p>Now we can check where exactly linker looks the libraries up by adding
-<code>-Wl,--verbose</code>:</p>
-<pre><code>$$ g++ -Wall -std=c++17 -D_FILE_OFFSET_BITS=64 -g -O2 -o patchelf patchelf.o -Wl,--verbose
-...
-==================================================
-ld: mode aarch64linux
-attempt to open ...-glibc-2.37-8/lib/crt1.o succeeded
-...-glibc-2.37-8/lib/crt1.o
-attempt to open ...-glibc-2.37-8/lib/crti.o succeeded
-...</code></pre>
-<p>Here is the diff against <code>bad</code> and <code>good</code> environments:</p>
-<pre class="diff"><code>$ diff -u &lt;(cat /tmp/bad | unnix) &lt;(cat /tmp/good | unnix)
---- /dev/fd/63  2023-07-30 08:26:51.561118824 +0100
-+++ /dev/fd/62  2023-07-30 08:26:51.561118824 +0100
-@@ -273,6 +273,8 @@
- attempt to open /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.so failed
- attempt to open /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a succeeded
- /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
-+(/&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a)ldadd_4_4.o
-+(/&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a)lse-init.o
- /&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
- attempt to open /&lt;&lt;NIX&gt;&gt;/bootstrap-stage0-glibc-bootstrapFiles/lib/libgcc.so failed
- attempt to open /&lt;&lt;NIX&gt;&gt;/bootstrap-stage0-glibc-bootstrapFiles/lib/libgcc.a failed</code></pre>
-<p>I expected some difference in library version outputs, some order
-difference in path lookups. But we see nothing like that here. The only
-change is the difference in access to individual object files in
-<code>libgcc.a</code>: <code>ldadd_4_4.o</code> and <code>lse-init.o</code> which we expect in both cases.</p>
-<p>And on inspection of <code>libgcc.a</code> I noticed that in <code>bad</code> case it was
-corrupted:</p>
-<pre><code>$ nm ...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
-nm: ...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a:
-  malformed archive</code></pre>
-<p>How did we manage to corrupt <code>libgcc.a</code>? A bit of strip log spills the
-clue:</p>
-<pre><code>stripping (with command strip and flags -S -p) in
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
-...-xgcc-12.3.0/
-lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc_eh.a
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcov.a
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbegin.o
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginS.o
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginT.o
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtend.o
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtendS.o
-...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/crtfastmath.o
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc_eh.a
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcov.a
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbegin.o
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginS.o
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtbeginT.o
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtend.o
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtendS.o
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/crtfastmath.o</code></pre>
-<p>It’s somewhat hard to read but we have <code>libgcc.a</code> twice in the list:</p>
-<pre><code>...-xgcc-12.3.0/lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a
-...-xgcc-12.3.0/lib64/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc.a</code></pre>
-<p>Both are the same file as <code>lib64</code> is a symlink to <code>lib</code>:</p>
-<pre><code>$ ls -ld ...-xgcc-12.3.0/lib64
-lrwxrwxrwx 1419 root root 3 Jan  1  1970 ...-xgcc-12.3.0/lib64 -&gt; lib</code></pre>
-<h2 id="race-condition">Race condition</h2>
-<p>So even if the file was stripped twice, why would it be a problem? Isn’t
-<code>strip</code> idempotent in this regard?</p>
-<p>It would as long as <code>strip</code> is ran sequentially. And it used to be the
-case for a while. But a few weeks ago the <code>strip</code> hook was made parallel
-in <a href="https://github.com/NixOS/nixpkgs/pull/207101">PR #207101</a>!</p>
-<p>As a result two <code>strip</code> commands had a chance to open <code>libgcc.a</code>, strip
-it and write the result back. Sometimes you are lucky and you get
-something that works. But sometimes you are not so lucky and one of the
-<code>stip</code> commands reads incompletely written <code>libgcc.a</code> by the previous
-<code>strip</code>.</p>
-<h2 id="the-fix">The fix</h2>
-<p>The fix (or the workaround) is not to attemt to process the same file
-twice. <a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a>
-implements naive form of the symlink resolution via <code>realpath</code> and
-double-strip avoidance via <code>sort -u</code>:</p>
-<pre class="diff"><code>--- a/pkgs/build-support/setup-hooks/strip.sh
-+++ b/pkgs/build-support/setup-hooks/strip.sh
-@@ -68,6 +68,11 @@ stripDirs() {
-         striperr=&quot;$(mktemp 'striperr.XXXXXX')&quot;
-         # Do not strip lib/debug. This is a directory used by setup-hooks/separate-debug-info.sh.
-         find $paths -type f -a '!' -path &quot;$prefix/lib/debug/*&quot; -print0 |
-+            # Make sure we process files under symlinks only once. Otherwise
-+            # 'strip` can corrupt files when writes to them in parallel:
-+            #   https://github.com/NixOS/nixpkgs/issues/246147#issuecomment-1657072039
-+            xargs -r -0 -n1 -- realpath -z | sort -u -z |
-+
-             xargs -r -0 -n1 -P &quot;$NIX_BUILD_CORES&quot; -- $cmd $stripFlags 2&gt;&quot;$striperr&quot; || exit_code=$?
-         # xargs exits with status code 123 if some but not all of the
-         # processes fail. We don't care if some of the files couldn't</code></pre>
-<p>Now we should generally try to strip slightly less from now on by
-skipping identical files.</p>
-<h2 id="parting-words">Parting words</h2>
-<p>My initial guess of wrong library lookup paths was completely off. It
-was another case of non-deterministic build causing major toolchain
-breakage. I’m glad it was discovered so quickly after introduction.
-<a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a> should fix it
-for good.</p>
-<p>Turns out <code>clang</code> and <code>gcc</code> generate a bit different code around atomics.</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Mon, 31 Jul 2023 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/293-mysterious-patchelf-linkage-bug.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
