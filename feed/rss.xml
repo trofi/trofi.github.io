@@ -7,8 +7,26 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 25 Aug 2024 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Mon, 07 Oct 2024 00:00:00 UT</lastBuildDate>
         <item>
+    <title>xmms2 0.9.4 is out</title>
+    <link>https://trofi.github.io/posts/324-xmms2-0.9.4-is-out.html</link>
+    <description><![CDATA[<p>Tl;DR: <code>xmms2-0.9.4</code> is out and you can get it at
+<a href="https://github.com/xmms2/xmms2-devel/releases/tag/0.9.4" class="uri">https://github.com/xmms2/xmms2-devel/releases/tag/0.9.4</a>!</p>
+<p><a href="https://github.com/xmms2"><code>xmms2</code></a> is still a music player
+daemon with various plugins to support stream decoding and
+transformation. See
+<a href="https://trofi.github.io/posts/244-xmms2-0.9.1-is-out.html">older announcement</a> on how to
+get started with <code>xmms2</code>.</p>
+<h2 id="highlights">Highlights</h2>
+<p>It’s a small maintenance release. The only notable change is support for
+<code>ffmpeg-7</code> as a build dependency.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Mon, 07 Oct 2024 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/324-xmms2-0.9.4-is-out.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>gcc-15 bugs, pile 1</title>
     <link>https://trofi.github.io/posts/323-gcc-15-bugs-pile-1.html</link>
     <description><![CDATA[<p>About 4 months have passed since <code>gcc-14.1.0</code> release. Around the same
@@ -4488,6 +4506,21 @@ associative array field.</li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/338597">PR#338597</a>:
 <code>pypy2Packages.python-socketio-v4</code> constructs incorrect derivation with an
 associative array field.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/341497">PR#341497</a>:
+<code>dotnet/build-dotnet-module</code> fails to handle missing <code>pname</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/341985">PR#341985</a>:
+<code>perlInterpreters.perl536</code> requires already deleted attribute.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/346336">PR#346336</a>:
+<code>libtorrent</code> and <code>rtorrent</code> <code>updaterScript</code> passed non-existent
+parameters.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/346689">PR#346689</a>:
+<code>nix-plugin-pijul.tests</code> fix the invalid attribute reference.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/346746">PR#346746</a>:
+<code>python3Packages.sshfs.optional-dependencies.pkcs11</code> fix incorrect
+attribute name.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/347172">PR#347172</a>:
+<code>python3Packages.sshfs.optional-dependencies.pyopenssl</code>: fix incorrect
+attribute name.</li>
 </ul>
 <p>Note: It’s not the full list of required fixes. For more complex cases I
 filed a few bugs to get maintainers’ help:</p>
@@ -9301,298 +9334,6 @@ connections.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Wed, 30 Aug 2023 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/295-ssh-over-https.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>An obscure make --shuffle bug</title>
-    <link>http://trofi.github.io/posts/294-an-obscure-make-shuffle-bug.html</link>
-    <description><![CDATA[<p>Most of the time <code>make --shuffle</code> finds somewhat trivial bugs of missing
-dependencies. I have collected a few examples <a href="https://trofi.github.io/posts/249-an-update-on-make-shuffle.html">here</a>.</p>
-<p>It is sometimes hard, but still feasible to trigger these bugs without a
-shuffle by carefully placing a few <code>sleep 10</code> calls here and there to
-reorder rule execution.</p>
-<p>But today I’ll talk about the bugs that could not be easily triggered by
-just waiting more. Should these bugs be treats as bugs in <code>Makefile</code>s?
-Or are they bugs in the <code>make --shuffle</code> permutation algorithm? You be
-the judge!</p>
-<h2 id="a-gist-of-the-makefile-language">A gist of the Makefile language</h2>
-<p><code>Makefile</code> language is an interesting one: it has a strong spirit of a
-declarative family: it should not be very important in which order you
-define rules and variables in the file, the rule execution order should
-not matter much either. That property makes the input very friendly to
-parallelism: you can consider a <code>Makefile</code> as a form of a serialized
-build graph.</p>
-<p>The graph analogy holds surprisingly well for most of the build systems
-out there. But sometimes you get the rare ones that are clearly
-not designed to be executed in parallel. Those are also fine. We can
-add <code>.NOTPARALLEL:</code> to them and be done with it.</p>
-<p>If we ignore clearly unclean build systems there are a few GNU
-extensions that break the graph model a bit. Things like immediate
-variable assignments <code>A := B</code> are one of them.</p>
-<p>For example the following <code>Makefile</code> illustrates the subtlety of
-immediate and deferred assignments:</p>
-<pre class="makefile"><code>all: a b
-
-V := 1
-AI := $(V)
-AD = $(V)
-a:
-        @echo a: V=$(V) AI=$(AI) AD=$(AD)
-
-V := 2
-BI := $(V)
-BD = $(V)
-b:
-        @echo b: V=$(V) BI=$(BI) BD=$(BD)</code></pre>
-<p>Take some time time and try to predict the output here.</p>
-<p>Ready now? Here is the correct answer:</p>
-<pre><code>$ make
-a: V=2 AI=1 AD=2
-b: V=2 BI=2 BD=2</code></pre>
-<p>Here both <code>V=</code> and <code>AD=</code> values are deferred until the final assignment.
-This is a well-known gotcha of <code>Makefiles</code>: immediate and deferred
-assignments can influence macro expansion and rule definition.</p>
-<p>Immediate assignment arguably does not break declarative model too much.</p>
-<p>Don’t worry just yet: <code>make --shuffle</code> does not change output of this
-example.</p>
-<h2 id="target-specific-variables">Target-specific variables</h2>
-<p>Another <code>GNU make</code> extension is
-<a href="https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html">Target-specific Variable Values</a>.</p>
-<p>The typical use looks benign:</p>
-<pre class="makefile"><code>all: foo bar
-        @echo all
-
-foo: a.o b.o
-        @echo &quot;foo ($^)&quot;
-
-bar: c.o d.o
-        @echo &quot;bar ($^)&quot;
-
-%.o:
-        @echo cc $(CFLAGS) -o $@
-
-foo: CFLAGS=-g</code></pre>
-<p>Here we define 2 targets: <code>foo</code> and <code>bar</code>. But for <code>foo</code> (and it’s
-prerequisites) we specify <code>CFLAGS=-g</code> target-specific override.</p>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/1-mf.svg" /></p>
-<p>For this case the execution looks like that:</p>
-<pre><code>$ make
-cc -g -o a.o
-cc -g -o b.o
-foo (a.o b.o)
-cc -o c.o
-cc -o d.o
-bar (c.o d.o)
-all</code></pre>
-<p>No surprises here either: all object files needed for <code>foo</code> use
-<code>CFLAGS=-g</code> override. None of the object files used by <code>bar</code> use <code>-g</code>:</p>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/1-mf-expanded.svg" /></p>
-<p>So far so good. No ambiguities here.</p>
-<p><code>make --shuffle</code> does not change this output either.</p>
-<h2 id="todays-problem">Today’s problem</h2>
-<p>Now, what happens if we do share an object file across the targets and
-happen to use different overrides for it?</p>
-<p>Here is our toy example:</p>
-<pre class="makefile"><code>all: foo bar
-        @echo all
-
-foo: a.o b.o shared.o
-        @echo &quot;foo ($^)&quot;
-
-bar: c.o d.o shared.o
-        @echo &quot;bar ($^)&quot;
-
-%.o:
-        @echo cc $(CFLAGS) -o $@
-
-foo: CFLAGS=-ffoo
-bar: CFLAGS=-fbar</code></pre>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf.svg" /></p>
-<p>What output do you expect here? Does <code>shared.o</code> get compiled once? Or
-twice? Does it use <code>-ffoo</code> or <code>-ffbar</code>? Is it deterministic?</p>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf-expq.svg" /></p>
-<p>Take some time and come up with an answer.</p>
-<h2 id="how-it-all-behaves">How it all behaves</h2>
-<p>Let’s start from the simple case:</p>
-<pre><code>$ make
-cc -ffoo -o a.o
-cc -ffoo -o b.o
-cc -ffoo -o shared.o
-foo (a.o b.o shared.o)
-cc -fbar -o c.o
-cc -fbar -o d.o
-bar (c.o d.o shared.o)
-all</code></pre>
-<p>Here <code>shared.o</code> gets built once (it’s a single node in our build graph
-after all) and it uses <code>-ffoo</code> flag.</p>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf-expanded.svg" /></p>
-<p>Now, why does it use <code>-ffoo</code> and not <code>-fbar</code>? Can you come up with a
-scenario when it uses <code>-fbar</code>?</p>
-<p>Apparently if you use just <code>make</code> or <code>make -j</code> you will consistently get
-the same <code>cc -ffoo -o shared.o</code> command.</p>
-<p>The way <code>GNU make</code> builds the graph is the topological sorting of
-targets and prerequisites defined by <code>Makefile</code> syntax.</p>
-<p>It is always starts with <code>a.o b.o shared.o</code> and maybe finishes with
-<code>foo c.o d.o bar all</code>.</p>
-<p>But there is an easy way to alter this order! Try this instead:</p>
-<pre><code>$ make bar foo
-cc -fbar -o c.o
-cc -fbar -o d.o
-cc -fbar -o shared.o
-bar (c.o d.o shared.o)
-cc -ffoo -o a.o
-cc -ffoo -o b.o
-foo (a.o b.o shared.o)</code></pre>
-<p>Now <code>shared.o</code> is built with <code>-fbar</code> flag! And the same would happen if
-you did a partial <code>make bar</code> build. Or if you would change <code>Makefile</code>
-from <code>all: foo bar</code> to <code>all: bar foo</code>:</p>
-<pre class="diff"><code>--- a/Makefile
-+++ b/Makefile
-@@ -1,4 +1,4 @@
--all: foo bar
-+all: bar foo
-        @echo all
-
- foo: a.o b.o shared.o</code></pre>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf-expanded-2.svg" /></p>
-<p>This is a problem. And that can be triggered by <code>make --shuffle</code>!</p>
-<p>No shuffle:</p>
-<pre><code>$ for i in `seq 1 1000`; do make -j | grep -- '-o shared.o'; done | sort | uniq -c
-   1000 cc -ffoo -o shared.o</code></pre>
-<p>Ideal consistency. Nothing shows the problem.</p>
-<p>With shuffle:</p>
-<pre><code>$ for i in `seq 1 1000`; do make -j --shuffle | grep -- '-o shared.o'; done | sort | uniq -c
-    494 cc -fbar -o shared.o
-    506 cc -ffoo -o shared.o</code></pre>
-<p>Almost 50% perfect instability!</p>
-<p>What is the correct fix here? Is it a <code>make --shuffle</code> bug to introduce
-non-determinism? I would say: no, <code>Makefile</code> should be more robust in
-face of target sequence passed to it.</p>
-<p>How would one fix it properly? This default recursive propagation is
-non-intuitive, <code>GNU make</code> provides a few keywords including <code>private</code>.
-<code>private</code> makes the variable override local to specified targets and
-does not recurse.</p>
-<p>I suggest the following fix:</p>
-<pre class="makefile"><code>all: foo bar
-        @echo all
-
-foo: a.o b.o shared.o
-        @echo &quot;foo ($^)&quot;
-
-bar: c.o d.o shared.o
-        @echo &quot;bar ($^)&quot;
-
-%.o:
-        @echo cc $(CFLAGS) -o $@
-
-a.o b.o: private CFLAGS=-ffoo
-c.o d.o: private CFLAGS=-fbar
-shared.o: private CFLAGS=-fshared</code></pre>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/2-mf-fixed.svg" /></p>
-<p>Note that here we use the new <code>-fshared</code> value to make it distinct from
-the other two. Running:</p>
-<pre><code>$ for i in `seq 1 1000`; do make -j --shuffle | grep -- '-o shared.o'; done | sort | uniq -c
-   1000 cc -fshared -o shared.o</code></pre>
-<p>No instability!</p>
-<h2 id="the-need-for-private">The need for private</h2>
-<p>Is <code>private</code> really needed? In this toy example it would work the same
-with and without it.</p>
-<p>The troubles would start if any of <code>.o</code> files would have in
-prerequisites another <code>.o</code> file, say a generator that builds header
-files or some other input:</p>
-<pre class="makefile"><code>all: foo bar
-        @echo all
-
-foo: a.o b.o shared.o
-        @echo &quot;foo ($^)&quot;
-
-bar: c.o d.o shared.o
-        @echo &quot;bar ($^)&quot;
-
-%.o:
-        @echo cc $(CFLAGS) -o $@
-
-a.o b.o: CFLAGS=-ffoo
-c.o d.o: CFLAGS=-fbar
-shared.o: CFLAGS=-fshared
-
-# simulate that also shared.o depends on `generated.h`
-# generated by `gen` tool.
-all: gen
-
-gen: gen.o
-        @echo gen
-gen.h: gen
-        @echo gen.h
-
-shared.o: gen.h</code></pre>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/3-mf.svg" /></p>
-<p>This time we will check what flags are passed to <code>gen.o</code>.</p>
-<p>Without shuffle:</p>
-<pre><code>$ for i in `seq 1 1000`; do make -j | grep -- '-o gen.o'; done | sort | uniq -c
-   1000 cc -fshared -o gen.o</code></pre>
-<p>Whoops: <code>-fshared</code> got leaked into <code>gen.o</code> build, but at least it’s
-consistent.</p>
-<p>With <code>--shuffle</code>:</p>
-<pre><code>$ for i in `seq 1 1000`; do make -j --shuffle | grep -- '-o gen.o'; done | sort | uniq -c
-    697 cc -fshared -o gen.o
-    303 cc -o gen.o</code></pre>
-<p>33% instability! Why it’s just 33% (and not, say, 50%) is an exercise
-for the reader.</p>
-<p>Adding <code>private</code> to all of <code>CFLAGS=</code> fixes the issue:</p>
-<pre class="makefile"><code>$ for i in `seq 1 1000`; do make -j --shuffle | grep -- '-o gen.o'; done | sort | uniq -c
-   1000 cc -o gen.o</code></pre>
-<p>It’s not just stable: it also removes unexpected -<code>fshared</code> flag as one
-would probably expect.</p>
-<h2 id="the-real-world-example">The real world example</h2>
-<p>The above hypothetical example is almost 1-to-1 example of what happened
-to <code>efivar</code> in <a href="https://github.com/rhboot/efivar/pull/245">PR #245</a>.</p>
-<p>There <code>make --shuffle</code> build occasionally failed as:</p>
-<pre><code>$ gcc -Og  -g3 -Wall -Wextra  -Werror  -std=gnu11 -funsigned-char -fvisibility=hidden -specs=/build/source/src/include/gcc.specs -fno-merge-constants  -L.   -Wl,--build-id -Wl,--no-allow-shlib-undefined -Wl,--no-undefined-version -Wl,-z,now -Wl,-z,muldefs -Wl,-z,relro -Wl,--fatal-warnings     -DLIBEFIVAR_VERSION=38 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I/build/source/src/include/  -shared -Wl,-soname,libefisec.so.1 -Wl,--version-script=libefisec.map  -o libefisec.so sec.o secdb.o esl-iter.o util.o -lefivar -lefisec -ldl
-ld: cannot find -lefivar: No such file or directory
-collect2: error: ld returned 1 exit status
-make[1]: *** [/build/source/src/include/rules.mk:38: libefisec.so] Error 1 shuffle=721268944</code></pre>
-<p>Initially I thought it was just a matter of missing <code>libefivar.so</code>
-dependency on <code>libefisec</code>. But Artem Klimov pointed out that those two
-are not expected to depend on one another.</p>
-<p>And indeed <code>Makefile</code> uses <code>LIBS</code> variable to specify dependencies:</p>
-<pre class="makefile"><code>all: libefivar.so libefisec.so efisecdb # and more ...
-# ...
-libefivar.so : LIBS=dl
-# ...
-efisecdb : $(EFISECDB_OBJECTS) | libefisec.so
-efisecdb : LIBS=efivar efisec dl
-# ...
-libefisec.so : # nothing</code></pre>
-<p><img src="https://trofi.github.io/posts.data/294-an-obscure-make-shuffle-bug/4-mf.svg" /></p>
-<p>The intent of the <code>Makefile</code> is to say that <code>libefisec.so</code> has no
-external <code>LIBS=</code> dependencies. But <code>LIBS=</code> override gets leaked via
-<code>efisecdb : LIBS=efivar efisec dl</code> and into <code>libefisec.so</code> via
-order-only dependency.</p>
-<p>The fix is to add <code>private</code> keyword to prevent the <code>LIBS=...</code> leakage
-from <code>efisecdb</code> into libraries in it’s prerequisite list:</p>
-<pre class="diff"><code>--- a/src/Makefile
-+++ b/src/Makefile
-@@ -42,3 +42,3 @@
- # ...
- efisecdb : $(EFISECDB_OBJECTS) | libefisec.so
--efisecdb : LIBS=efivar efisec dl
-+efisecdb : private LIBS=efivar efisec dl</code></pre>
-<h2 id="parting-words">Parting words</h2>
-<p><a href="https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html">Target-specific Variable Values</a>
-is a tool with very sharp edges. While it allows writing very concise
-build rules their recursive nature quickly get out of hand if you don’t
-see the whole <code>Makefile</code> in front of you.</p>
-<p>One of the mitigations is to use <code>private</code> keyword at an assignment site.</p>
-<p>Another mitigation is to use different global variables for different
-purposes. Individual global variables are also easier to override from
-the outside.</p>
-<p><code>make --shuffle</code> might be able to expose instability problems in
-<code>Makefile</code>s that use target-specific variables not reproducible by
-using <code>make -j</code> alone.</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Fri, 11 Aug 2023 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/294-an-obscure-make-shuffle-bug.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
