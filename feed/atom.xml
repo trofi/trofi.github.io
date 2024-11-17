@@ -10,8 +10,187 @@
         <email>slyich@gmail.com</email>
         
     </author>
-    <updated>2024-11-04T00:00:00Z</updated>
+    <updated>2024-11-17T00:00:00Z</updated>
     <entry>
+    <title>gcc-15 switched to C23</title>
+    <link href="https://trofi.github.io/posts/326-gcc-15-switched-to-c23.html" />
+    <id>https://trofi.github.io/posts/326-gcc-15-switched-to-c23.html</id>
+    <published>2024-11-17T00:00:00Z</published>
+    <updated>2024-11-17T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<h2 id="tldr">Tl;DR</h2>
+<p>In November <code>gcc</code>
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=55e3bd376b2214e200fa76d12b67ff259b06c212">merged</a>
+the switch from <code>C17</code> (<code>-std=gnu17</code>) to <code>C23</code> (<code>-std=c23</code>) language
+standard used by default for <code>C</code> code.</p>
+<p>This will cause quite a few build breakages in projects written in
+C. A few example fixes:</p>
+<ul>
+<li><a href="https://github.com/libffi/libffi/pull/861/files"><code>libffi</code></a>: optional
+<code>va_start</code> parameter.</li>
+<li><a href="https://github.com/vapier/ncompress/pull/40/files"><code>ncompress</code></a>:
+<code>void foo()</code> changed the meaning to <code>void foo(void)</code>.</li>
+<li><a href="https://lore.kernel.org/ell/20241117001814.2149181-1-slyich@gmail.com/T/#t"><code>ell</code></a>
+<code>bool</code>, <code>true</code> and <code>false</code> are new keywords. And specifically <code>false</code>
+is not equals to <code>0</code> or <code>NULL</code>.</li>
+</ul>
+<h2 id="more-words">more words</h2>
+<p><code>C23</code> has a few high-visibility breaking changes compared to <code>C17</code>.</p>
+<h3 id="bool-true-and-false-are-unconditionally-predefined"><code>bool</code>, <code>true</code>, and <code>false</code> are unconditionally predefined</h3>
+<p><code>true</code> and <code>false</code> are now predefined constants (instead of being a
+part of <code>&lt;stdboo.h&gt;</code> macros and <code>typedef</code>s). Thus code like below does
+not compile any more:</p>
+<pre class="c"><code>enum { false = 0; }
+typedef int bool;</code></pre>
+<p>Error messages:</p>
+<pre><code>$ printf 'enum { false = 0 };' | gcc -std=c17 -c -x c -
+$ printf 'enum { false = 0 };' | gcc -c -x c -
+&lt;stdin&gt;:1:8: error: expected identifier before 'false'
+
+$ printf 'typedef int bool;' | gcc -std=c17 -c -x c -
+$ printf 'typedef int bool;' | gcc -c -x c -
+&lt;stdin&gt;:1:13: error: two or more data types in declaration specifiers
+&lt;stdin&gt;:1:1: warning: useless type name in empty declaration</code></pre>
+<p>The fix is usually to use <code>&lt;stdbool.h&gt;</code> or avoid name collisions.</p>
+<p>Example affected project is <code>linux</code>.</p>
+<h3 id="partially-defined-int-function-prototypes-are-just-int-void-now">partially defined <code>int (*)()</code> function prototypes are just <code>int (*)(void)</code> now</h3>
+<p>This one is trickier to fix when intentionally used. <code>C</code> happened to
+allow the following code:</p>
+<pre class="c"><code>// $ cat a.c
+typedef void (*PF)();
+
+static int f0(void)  { return 42; }
+static int f1(int a) { return 42 + a; }
+
+int main() {
+    PF pf;
+
+    // 0-argument function pointer
+    pf = f0;
+    pf();
+
+    // 1-argument function pointer
+    pf = f1;
+    pf(42);
+
+    // 3-argument function pointer: an odd one, but happens to work
+    pf(42,42,42);
+}</code></pre>
+<p>But not any more:</p>
+<pre><code>$ gcc -std=c17 -c a.c
+$ gcc -c a.c
+a.c: In function 'main':
+a.c:15:8: error: assignment to 'PF' {aka 'int (*)(void)'} from incompatible pointer type 'int (*)(int)' [-Wincompatible-pointer-types]
+   15 |     pf = f1;
+      |        ^
+a.c:16:5: error: too many arguments to function 'pf'
+   16 |     pf(42);
+      |     ^~
+a.c:19:5: error: too many arguments to function 'pf'
+   19 |     pf(42,42,42);
+      |     ^~</code></pre>
+<p>This hack is used at least in <code>ski</code>, <code>ghc</code> and <code>ncompress</code>. But more
+frequently it’s use is an accident (<code>ell</code>, <code>iwd</code>, <code>bash</code> and a few others).</p>
+<h2 id="parting-words">parting words</h2>
+<p>Quick quiz: the above changes look like they tickle some very obscure
+case. How many packages are affected on a typical desktop system? What
+would be your guess? 1? 5? 100? 1000?</p>
+<p>So far on my system (~2000 installed packages) I observed the failures
+of the following projects:</p>
+<ul>
+<li><code>linux</code></li>
+<li><code>speechd</code></li>
+<li><code>vde2</code></li>
+<li><code>sane-backends</code></li>
+<li><code>timidity</code></li>
+<li><code>neovim</code></li>
+<li><code>bluez</code></li>
+<li><code>samba</code></li>
+<li><code>weechat</code></li>
+<li><code>iwd</code></li>
+<li><code>protobuf</code></li>
+<li><code>netpbm</code></li>
+<li><code>mariadb-connector-c</code></li>
+<li><code>liblqr1</code></li>
+<li><code>sqlite-odbc-driver</code></li>
+<li><code>python:typed-ast</code></li>
+<li><code>python2</code></li>
+<li><code>perl:XS-Parse-Keyword</code></li>
+<li><code>pgpdump</code></li>
+<li><code>ell</code></li>
+<li><code>SDL-1</code></li>
+<li><code>ruby-3.1</code></li>
+<li><code>dnsmasq</code></li>
+<li><code>ghc</code></li>
+<li><code>gnupg</code></li>
+<li><code>ghostscript</code></li>
+<li><code>procmail</code></li>
+<li><code>jq</code></li>
+<li><code>libsndfile</code></li>
+<li><code>ppp</code></li>
+<li><code>time</code></li>
+<li><code>postfi</code>x</li>
+<li><code>mcpp</code></li>
+<li><code>xmlrpc-c</code></li>
+<li><code>unifdef</code></li>
+<li><code>hotdoc</code></li>
+<li><code>mypy</code></li>
+<li><code>rustc</code></li>
+<li><code>xorg:libXt</code></li>
+<li><code>rsync</code></li>
+<li><code>oniguruma</code></li>
+<li><code>ltrace</code></li>
+<li><code>sudo</code></li>
+<li><code>lsof</code></li>
+<li><code>lv</code></li>
+<li><code>dbus-glib</code></li>
+<li><code>argyllcms</code></li>
+<li><code>valgrind</code></li>
+<li><code>postgresql-14</code></li>
+<li><code>gdb</code></li>
+<li><code>git</code></li>
+<li><code>ncompress</code></li>
+<li><code>w3m</code></li>
+<li><code>freeglut</code></li>
+<li><code>xcur2png</code></li>
+<li><code>vifm</code></li>
+<li><code>p11-kit</code></li>
+<li><code>cyrus-sasl</code></li>
+<li><code>xvidcore</code></li>
+<li><code>guile</code></li>
+<li><code>editline</code></li>
+<li><code>e2fsprogs</code></li>
+<li><code>gsm</code></li>
+<li><code>libconfig</code></li>
+<li><code>db</code></li>
+<li><code>libtirpc</code></li>
+<li><code>nghttp2</code></li>
+<li><code>libkrb5</code></li>
+<li><code>libgpg-error</code></li>
+<li><code>cpio</code></li>
+<li><code>sharutils</code></li>
+<li><code>gpm</code></li>
+<li><code>expect</code></li>
+<li><code>ncurses</code></li>
+<li><code>yasm</code></li>
+<li><code>texinfo-6.7</code></li>
+<li><code>gettext</code></li>
+<li><code>unzip</code></li>
+<li><code>gdbm</code></li>
+<li><code>m4</code></li>
+<li><code>binutils</code></li>
+<li><code>ed</code></li>
+<li><code>gmp</code></li>
+<li><code>bash</code></li>
+</ul>
+<p>That’s more than 80 packages, or about 4% of all the packages I have.</p>
+<p>Looks like <code>gcc-15</code> will be a disruptive release (just like <code>gcc-14</code>)
+that will require quite a few projects to adapt to new requirements
+(either by fixing code or by slapping <code>-std=gnu17</code> as a requirement).</p>
+<p>Most of the breakages above are not yet fixed upstream. These can be
+good first contribution fixes if you are thinking of making one.</p>
+<p>Have fun!</p>]]></summary>
+</entry>
+<entry>
     <title>Zero Hydra Failures towards 24.11 NixOS release</title>
     <link href="https://trofi.github.io/posts/325-Zero-Hydra-Failures-towards-24.11-NixOS-release.html" />
     <id>https://trofi.github.io/posts/325-Zero-Hydra-Failures-towards-24.11-NixOS-release.html</id>
@@ -4576,6 +4755,8 @@ attribute name.</li>
 to it.</li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/352825">PR#352825</a>:
 <code>pyamlboot.tests</code> passed the parameter if incorrect type.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/355051">PR#355051</a>:
+<code>pypy3Packages.home-assistant-chip-clusters</code> dereferenced <code>null</code>.</li>
 </ul>
 <p>Note: It’s not the full list of required fixes. For more complex cases I
 filed a few bugs to get maintainers’ help:</p>
@@ -9156,80 +9337,6 @@ place to make it smoother. Otherwise one-off
 <p>If you see a project that still uses 32-bit APIs please send a patch
 upstream to use 64-bit API if possible. Chances are it will fix real
 breakage on filesystems with 64-bit inodes.</p>
-<p>Have fun!</p>]]></summary>
-</entry>
-<entry>
-    <title>gcc-14 bugs, pile 2</title>
-    <link href="http://trofi.github.io/posts/296-gcc-14-bugs-pile-2.html" />
-    <id>http://trofi.github.io/posts/296-gcc-14-bugs-pile-2.html</id>
-    <published>2023-09-06T00:00:00Z</published>
-    <updated>2023-09-06T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p>Two more months of <code>gcc-14</code> development have passed. The bug rate slowed
-down considerably. Let’s look at the new bugs since. This time it is
-mere <code>10</code> bugs.</p>
-<h2 id="summary">Summary</h2>
-<p>Here are the bugs themselves:</p>
-<ul>
-<li><a href="https://gcc.gnu.org/PR110652">tree-optimization/110652</a>: bootstrap failure for <code>-Werror</code>.</li>
-<li><a href="https://gcc.gnu.org/PR110697">middle-end/110697</a>: bootstrap failure for <code>-Werror</code>.</li>
-<li><a href="https://gcc.gnu.org/PR110726">tree-optimization/110726</a>: wrong code on <code>llvm</code>: <code>a |= a == 0</code>.</li>
-<li><a href="https://gcc.gnu.org/PR110790">target/110787</a>: wrong code on <code>gmp</code></li>
-<li><a href="https://gcc.gnu.org/PR110838">tree-optimization/110838</a>: wrong code on <code>x365</code></li>
-<li><a href="https://gcc.gnu.org/PR110880">target/110880</a>: <code>aarch64</code> ICE on <code>highway-1.0.5</code></li>
-<li><a href="https://gcc.gnu.org/PR111009">tree-optimization/111009</a>: wrong code on <code>perf</code> from <code>linux</code></li>
-<li><a href="https://gcc.gnu.org/PR111048">tree-optimization/111048</a>: wrong code on <code>highway-1.0.6</code></li>
-<li><a href="https://gcc.gnu.org/PR111051">target/111051</a>: <code>gcc</code> fails to use <code>avx2</code> primitives
-on <code>avx512</code> targeted functions on <code>highway-1.0.6</code></li>
-<li><a href="https://gcc.gnu.org/PR111060">target/111060</a>: <code>i686-linux</code> <code>gcc</code> fails to build
-it’s own <code>libbstdc++</code> due to missing <code>Float16</code> support.</li>
-</ul>
-<p>Histograms time!</p>
-<p>Type of bugs:</p>
-<ul>
-<li><code>wrong-code</code>: 5</li>
-<li><code>other</code>: 4</li>
-<li><code>ICEs</code>: 1</li>
-</ul>
-<p>This was an unusual cycle: most of the bugs were related to the wrong
-code generated by <code>gcc</code>. Some of them (like <code>gmp</code> and <code>perf</code> ones) were
-very nasty to extract and report.</p>
-<p>Subsystems:</p>
-<ul>
-<li><code>tree-optimization</code>: 5</li>
-<li><code>target</code>: 4</li>
-<li><code>middle-end</code>: 1</li>
-</ul>
-<p>As usual half the bugs are lurking in <code>tree-optimization</code> part of the
-compiler. Though this time <code>target</code>-specific bugs are frequent as well.</p>
-<h2 id="a-note-on-highway">A note on highway</h2>
-<p>3 out of 10 bugs were exposed by a <code>highway</code> library. It’s such a great
-vectorizer benchmark for <code>gcc</code>!</p>
-<p>Initially I was a bit upset by the amount of C++ template indirections
-<code>highway</code> uses on it’s implementation.</p>
-<p>As it exercises all the possible vector units available for the platform
-(<code>SSE{2,3,4}</code>, <code>AVX{1,2}</code> and many others) it was hard for me to narrow
-down to a single failing unit type: attempts to remove code for one of
-them fails the build for others.</p>
-<p>But! I found an easy way to deal with it! We can disable most irrelevant
-targets in <code>hwy/detect_targets.h</code> by adding all the irrelevant targets
-to <code>HWY_BROKEN_TARGETS</code> define. I usually add everything except the
-broken target (usually <code>HWY_AVX2</code> :).</p>
-<p>And then reduction becomes trivial: I expand all the templates and get
-the simple function with a failure.</p>
-<h2 id="parting-words">Parting words</h2>
-<p><code>gcc</code> <code>master</code> still yields new bugs. It is still quite a bit of fun to
-get and extract build compiler failures from real world usage.</p>
-<p>I liked <a href="https://gcc.gnu.org/PR111048" class="uri">https://gcc.gnu.org/PR111048</a> the most. There <code>gcc</code> generated
-wrong code for <code>highway-1.0.6</code> library in <code>-mavx2</code> mode.</p>
-<p>When handling the following loop:</p>
-<pre class="c"><code>u8 in_lanes[32];
-for (unsigned i = 0; i &lt; 32; i += 2) {
-  in_lanes[i + 0] = 0;
-  in_lanes[i + 1] = ((u8)0xff) &gt;&gt; (i &amp; 7);
-}</code></pre>
-<p><code>gcc</code> broke <code>i = 12;</code> iteration and instead of <code>i[13] = 0xf;</code>
-(<code>0xff &gt;&gt; 4</code>) stored something like <code>i[13] = 0xef;</code> there. <code>gcc</code> was
-able to fully constant-fold the loop (and did it slightly incorrectly).</p>
 <p>Have fun!</p>]]></summary>
 </entry>
 
