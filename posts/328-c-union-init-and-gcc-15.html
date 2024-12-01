@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>C union initialization and gcc-15</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>C union initialization and gcc-15</h1>
+            
+                <div class="info">December  1, 2024</div>
+            
+
+            <h2 id="a-contrived-example">a contrived example</h2>
+<p>Let’s start from a quiz. What do you think will this program print:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span> <span class="dt">static</span> <span class="dt">void</span> use_stack<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="dt">int</span> foo<span class="op">[]</span> <span class="op">=</span> <span class="op">{</span> <span class="bn">0x40</span><span class="op">,</span> <span class="bn">0x41</span><span class="op">,</span> <span class="bn">0x42</span><span class="op">,</span> <span class="bn">0x43</span><span class="op">,</span> <span class="op">};</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span> <span class="dt">static</span> <span class="dt">int</span> do_it<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// use 'volatile' to inhibit constant propagation</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">volatile</span> <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>        <span class="dt">int</span> dummy<span class="op">;</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span> <span class="dt">int</span> fs<span class="op">[</span><span class="dv">4</span><span class="op">];</span> <span class="op">}</span> s<span class="op">;</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> v <span class="op">=</span> <span class="op">{</span> <span class="dv">0</span> <span class="op">};</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> v<span class="op">.</span>s<span class="op">.</span>fs<span class="op">[</span><span class="dv">3</span><span class="op">];</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    use_stack<span class="op">();</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> r <span class="op">=</span> do_it<span class="op">();</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;v.s:</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;  .fs[3] = </span><span class="sc">%#08x\n</span><span class="st">&quot;</span><span class="op">,</span> r<span class="op">);</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>The program initializes <code>v</code> union with <code>{ 0 }</code>. Which should be an
+equivalent of <code>v.dummy = 0;</code>. Then the program accesses <code>v.s.fs[3]</code>.
+That element does not overlap in memory with <code>v.dummy</code>. What should it
+do?</p>
+<p>One of the possible answers is: <code>v.s.fs[3]</code> is a garbage value.</p>
+<p>Let’s try to run it on <code>gcc-14</code>:</p>
+<pre><code>$ gcc-14 a.c -o a -O2 &amp;&amp; ./a
+v.s:
+  .fs[3] = 00000000</code></pre>
+<p>The value is all zeros. Is it a coincidence? <code>valgrind</code> does not
+complain either. Let’s have a peek at the disassembly dump:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">; $ objdump --no-addresses --no-show-raw-insn -d a</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>&lt;use_stack<span class="op">&gt;:</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movdqa</span> <span class="bn">0xea8</span><span class="op">(%</span>rip<span class="op">),%</span><span class="kw">xmm0</span> <span class="co">; load the constant from memory</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movaps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,-</span><span class="bn">0x18</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span> <span class="co">; store the constant on stack</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        <span class="bu">xchg</span>   <span class="op">%</span><span class="kw">ax</span><span class="op">,%</span><span class="kw">ax</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>&lt;do_it<span class="op">&gt;:</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>        <span class="bu">pxor</span>   <span class="op">%</span><span class="kw">xmm0</span><span class="op">,%</span><span class="kw">xmm0</span>       <span class="co">; zero-initialize 16 bytes</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        <span class="bu">movaps</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,-</span><span class="bn">0x18</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">)</span> <span class="co">; store all 16 bytes of zeros on stack</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        <span class="bu">mov</span>    <span class="op">-</span><span class="bn">0xc</span><span class="op">(%</span><span class="kw">rsp</span><span class="op">),%</span><span class="kw">eax</span>   <span class="co">; read 32-bits of zeros (part of 16-byte</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>                                 <span class="co">; zeroing one line above)</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">ret</span></span></code></pre></div>
+<p><code>gcc-14</code> implements <code>v = { 0 };</code> as a 128-bit (16-byte)
+zero initialization of <code>sizeof(v)</code> via
+<code>pxor %xmm0,%xmm0; movaps %xmm0,-0x18(%rsp)</code>.</p>
+<p>How about <code>gcc-15</code>?</p>
+<pre><code>$ gcc a.c -o a -O2 &amp;&amp; ./a
+v.s:
+  .fs[3] = 0x000043</code></pre>
+<p>Whoops. That that is clearly uninitialized value left after <code>use_stack()</code>
+execution. <code>valigrind</code> is also not happy about it:</p>
+<pre><code>$ valgrind --quiet --track-origins=yes ./a
+v.s:
+Use of uninitialised value of size 8
+   at 0x48B954A: _itoa_word (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x48C43EB: __printf_buffer (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x48C6300: __vfprintf_internal (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x48BA71E: printf (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x401074: main (a.c:20)
+ Uninitialised value was created by a stack allocation
+   at 0x401190: do_it (a.c:12)</code></pre>
+<p>Disassembly:</p>
+<pre><code>; $ objdump --no-addresses --no-show-raw-insn -d a
+&lt;use_stack&gt;:
+        movabs $0x4100000040,%rax ; load 64-bit part 1
+        movabs $0x4300000042,%rdx ; load 64-bit part 2
+        mov    %rax,-0x18(%rsp)   ; store part 1 on stack
+        mov    %rdx,-0x10(%rsp)   ; store part 2 on stack
+        ret
+        nop
+
+&lt;do_it&gt;:
+        movl   $0x0,-0x18(%rsp)   ; zero-initialize first 32 bits of a union
+        mov    -0xc(%rsp),%eax    ; read uninitialized 32-bit value at 12-byte
+                                  ; offset from a union start
+        ret</code></pre>
+<p><code>gcc-15</code> implements <code>v = { 0 }</code> as a single 32-bit store as if it was
+<code>v.dummy = 0;</code> and leaves the rest of the union intact.</p>
+<p>Is it a bug?</p>
+<p><code>gcc-15</code> intentionally changed the zeroing behaviour to do less in
+<a href="https://gcc.gnu.org/PR116416"><code>PR116416</code></a> with
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=0547dbb725b6d8e878a79e28a2e171eafcfbc1aa">this commit</a>
+to generate more optimal code.</p>
+<p>Fun fact: the patch also adds a <code>-fzero-init-padding-bits=unions</code>
+option to enable the old behaviour.</p>
+<h2 id="the-real-bug">the real bug</h2>
+<p>The above example might sound theoretical, but I extracted it from an
+<code>mbedtls</code> test suite failure. After a recent <code>gcc-15</code> update the tests
+are now failing as:</p>
+<pre><code>The following tests FAILED:
+        91 - psa_crypto-suite (Failed)
+       113 - psa_crypto_storage_format.v0-suite (Failed)</code></pre>
+<p>I initially thought it’s a compiler bug related to arithmetics. But
+exploring the failing test I found the following pattern:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// at tests/src/psa_exercise_key.c:</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  psa_mac_operation_t operation <span class="op">=</span> PSA_MAC_OPERATION_INIT<span class="op">;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">// library/psa_crypto.c:</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>operation<span class="op">.</span>hash_ctx<span class="op">.</span>id <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> error<span class="op">;</span> <span class="op">}</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>  <span class="co">//...</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_struct.h:</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>  <span class="pp">#define PSA_MAC_OPERATION_INIT </span><span class="op">{</span><span class="pp"> </span><span class="dv">0</span><span class="op">,</span><span class="pp"> </span><span class="dv">0</span><span class="op">,</span><span class="pp"> </span><span class="dv">0</span><span class="op">,</span><span class="pp"> </span><span class="op">{</span><span class="pp"> </span><span class="dv">0</span><span class="pp"> </span><span class="op">}</span><span class="pp"> </span><span class="op">}</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto.h:</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>  <span class="kw">typedef</span> <span class="kw">struct</span> psa_mac_operation_s psa_mac_operation_t<span class="op">;</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_struct.h:</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> psa_mac_operation_s <span class="op">{</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">int</span> id<span class="op">;</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint8_t</span> mac_size<span class="op">;</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">int</span> is_sign <span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>    psa_driver_mac_context_t ctx<span class="op">;</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_driver_contexts_composites.h:</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>  <span class="kw">typedef</span> <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> dummy<span class="op">;</span> <span class="co">/* Make sure this union is always non-empty */</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>    mbedtls_psa_mac_operation_t mbedtls_ctx<span class="op">;</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span> psa_driver_mac_context_t<span class="op">;</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_builtin_composites.h:</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>  <span class="kw">typedef</span> <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>    psa_algorithm_t alg<span class="op">;</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> dummy<span class="op">;</span> <span class="co">/* Make the union non-empty even with no supported algorithms. */</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>        mbedtls_psa_hmac_operation_t hmac<span class="op">;</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>        mbedtls_cipher_context_t cmac<span class="op">;</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> ctx<span class="op">;</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span> mbedtls_psa_mac_operation_t<span class="op">;</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_builtin_composites.h</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>  <span class="kw">typedef</span> <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>    <span class="co">/** The HMAC algorithm in use */</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>    psa_algorithm_t alg<span class="op">;</span></span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a>    <span class="co">/** The hash context. */</span></span>
+<span id="cb8-44"><a href="#cb8-44" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> psa_hash_operation_s hash_ctx<span class="op">;</span></span>
+<span id="cb8-45"><a href="#cb8-45" aria-hidden="true" tabindex="-1"></a>    <span class="co">/** The HMAC part of the context. */</span></span>
+<span id="cb8-46"><a href="#cb8-46" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint8_t</span> opad<span class="op">[</span>PSA_HMAC_MAX_HASH_BLOCK_SIZE<span class="op">];</span></span>
+<span id="cb8-47"><a href="#cb8-47" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span> mbedtls_psa_hmac_operation_t<span class="op">;</span></span>
+<span id="cb8-48"><a href="#cb8-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-49"><a href="#cb8-49" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_types.h</span></span>
+<span id="cb8-50"><a href="#cb8-50" aria-hidden="true" tabindex="-1"></a>  <span class="kw">typedef</span> <span class="dt">uint32_t</span> psa_algorithm_t<span class="op">;</span></span>
+<span id="cb8-51"><a href="#cb8-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-52"><a href="#cb8-52" aria-hidden="true" tabindex="-1"></a><span class="co">// include/psa/crypto_struct.h</span></span>
+<span id="cb8-53"><a href="#cb8-53" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> psa_hash_operation_s <span class="op">{</span></span>
+<span id="cb8-54"><a href="#cb8-54" aria-hidden="true" tabindex="-1"></a>    <span class="co">/** Unique ID indicating which driver got assigned to do the</span></span>
+<span id="cb8-55"><a href="#cb8-55" aria-hidden="true" tabindex="-1"></a><span class="co">     * operation. Since driver contexts are driver-specific, swapping</span></span>
+<span id="cb8-56"><a href="#cb8-56" aria-hidden="true" tabindex="-1"></a><span class="co">     * drivers halfway through the operation is not supported.</span></span>
+<span id="cb8-57"><a href="#cb8-57" aria-hidden="true" tabindex="-1"></a><span class="co">     * ID values are auto-generated in psa_driver_wrappers.h.</span></span>
+<span id="cb8-58"><a href="#cb8-58" aria-hidden="true" tabindex="-1"></a><span class="co">     * ID value zero means the context is not valid or not assigned to</span></span>
+<span id="cb8-59"><a href="#cb8-59" aria-hidden="true" tabindex="-1"></a><span class="co">     * any driver (i.e. the driver context is not active, in use). */</span></span>
+<span id="cb8-60"><a href="#cb8-60" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">int</span> id<span class="op">;</span></span>
+<span id="cb8-61"><a href="#cb8-61" aria-hidden="true" tabindex="-1"></a>    psa_driver_hash_context_t ctx<span class="op">;</span></span>
+<span id="cb8-62"><a href="#cb8-62" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span></code></pre></div>
+<p>It’s quite a bit of indirection, but if we compress it into a single
+<code>struct</code> definition and remove irrelevant bits we will get something
+like that:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">int</span> id<span class="op">;</span> <span class="co">// initialized below</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint8_t</span> mac_size<span class="op">;</span> <span class="co">// initialized below</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">int</span> is_sign <span class="op">:</span> <span class="dv">1</span><span class="op">;</span> <span class="co">// initialized below</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>      <span class="dt">unsigned</span> dummy<span class="op">;</span> <span class="co">// initialized below</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>      <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint32_t</span> alg<span class="op">;</span> <span class="co">// initialized below, alias of `dummy`</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>        <span class="co">// anything below is NOT initialized</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>          <span class="dt">unsigned</span> dummy<span class="op">;</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>          <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>              <span class="dt">uint32_t</span> alg<span class="op">;</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>              <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>                  <span class="dt">unsigned</span> <span class="dt">int</span> id<span class="op">;</span> <span class="co">// &lt;- we are about to use this field</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>                  psa_driver_hash_context_t ctx<span class="op">;</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>              <span class="op">}</span> hash_ctx<span class="op">;</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>              <span class="dt">uint8_t</span> opad<span class="op">[</span>PSA_HMAC_MAX_HASH_BLOCK_SIZE<span class="op">];</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>          <span class="op">}</span> hmac<span class="op">;</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>          <span class="co">// ..</span></span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>       <span class="op">}</span> mbedtls_ctx<span class="op">;</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> ctx<span class="op">;</span></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span> operation <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    <span class="dv">0</span><span class="op">,</span> <span class="co">// id</span></span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    <span class="dv">0</span><span class="op">,</span> <span class="co">// mac_size</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    <span class="dv">0</span><span class="op">,</span> <span class="co">// is_sign</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span> <span class="dv">0</span> <span class="op">}</span> <span class="co">// ctx.dummy</span></span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>  <span class="op">};</span></span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>operation<span class="op">.</span>hash_ctx<span class="op">.</span>id <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> error<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<p><code>valgrind</code> complains about the use of an uninitialized value as:</p>
+<pre><code>$ valgrind --track-origins=yes --trace-children=yes --num-callers=50 --track-fds=yes --leak-check=full --show-reachable=yes --malloc-fill=0xE1 --free-fill=0xF1 tests/test_suite_psa_crypto
+...
+==2758824== Conditional jump or move depends on uninitialised value(s)
+==2758824==    at 0x483C6B: psa_hash_setup (psa_crypto.c:2298)
+==2758824==    by 0x490ADA: psa_hmac_setup_internal (psa_crypto_mac.c:90)
+==2758824==    by 0x490ADA: psa_mac_setup (psa_crypto_mac.c:299)
+==2758824==    by 0x48412C: psa_driver_wrapper_mac_sign_setup (psa_crypto_driver_wrappers.h:2297)
+==2758824==    by 0x48412C: psa_mac_setup (psa_crypto.c:2619)
+==2758824==    by 0x4083BC: test_mac_key_policy (test_suite_psa_crypto.function:2192)
+==2758824==    by 0x408877: test_mac_key_policy_wrapper (test_suite_psa_crypto.function:2264)
+==2758824==    by 0x429F4E: dispatch_test (main_test.function:170)
+==2758824==    by 0x42A813: execute_tests (host_test.function:676)
+==2758824==    by 0x40247A: main (main_test.function:263)
+==2758824==  Uninitialised value was created by a stack allocation
+==2758824==    at 0x40822C: test_mac_key_policy (test_suite_psa_crypto.function:2167)</code></pre>
+<p>Unfortunately I don’t think there is a simple fix for that (apart from
+enabling new <code>-fzero-init-padding-bits=unions</code> compiler flag if it’s
+supported.</p>
+<p>I filed the issue upstream as
+<a href="https://github.com/Mbed-TLS/mbedtls/issues/9814">Issue #9814</a> hoping to
+get some guidance.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>gcc-15</code> will be more efficient at handling partial union initialization.</p>
+<p>It will likely be at expense of exposing real code bugs like the
+<a href="https://github.com/Mbed-TLS/mbedtls/issues/9814"><code>mbedtls</code></a> one to the
+users. It’s a bit scary to discover it in security library first.</p>
+<p>At least <code>valgrind</code> is able to detect trivial cases of uninitialized
+use of partially initialized unions.</p>
+<p><code>gcc-15</code> also provides <code>-fzero-init-padding-bits=unions</code> to flip the old
+behaviour back on. This will allow nailing down bugs using a single
+compiler version instead of comparing to <code>gcc-14</code>.</p>
+<p>I suspect <code>gcc</code> historically zero-initialized the whole enums to be
+closer to incomplete <code>struct</code> initialization
+<a href="https://en.cppreference.com/w/c/language/struct_initialization">rule</a>.
+But now it causes performance problems if the union branches are
+different in size.</p>
+<p>I suspect we’ll see a few more projects affected by this change.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>

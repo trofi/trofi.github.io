@@ -10,8 +10,250 @@
         <email>slyich@gmail.com</email>
         
     </author>
-    <updated>2024-11-23T00:00:00Z</updated>
+    <updated>2024-12-01T00:00:00Z</updated>
     <entry>
+    <title>C union initialization and gcc-15</title>
+    <link href="https://trofi.github.io/posts/328-c-union-init-and-gcc-15.html" />
+    <id>https://trofi.github.io/posts/328-c-union-init-and-gcc-15.html</id>
+    <published>2024-12-01T00:00:00Z</published>
+    <updated>2024-12-01T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<h2 id="a-contrived-example">a contrived example</h2>
+<p>Let’s start from a quiz. What do you think will this program print:</p>
+<pre class="c"><code>#include &lt;stdio.h&gt;
+
+__attribute__((noipa)) static void use_stack(void) {
+    volatile int foo[] = { 0x40, 0x41, 0x42, 0x43, };
+}
+
+__attribute__((noipa)) static int do_it(void) {
+    // use 'volatile' to inhibit constant propagation
+    volatile union {
+        int dummy;
+        struct { int fs[4]; } s;
+    } v = { 0 };
+    return v.s.fs[3];
+}
+
+int main(void) {
+    use_stack();
+    int r = do_it();
+    printf(&quot;v.s:\n&quot;);
+    printf(&quot;  .fs[3] = %#08x\n&quot;, r);
+}</code></pre>
+<p>The program initializes <code>v</code> union with <code>{ 0 }</code>. Which should be an
+equivalent of <code>v.dummy = 0;</code>. Then the program accesses <code>v.s.fs[3]</code>.
+That element does not overlap in memory with <code>v.dummy</code>. What should it
+do?</p>
+<p>One of the possible answers is: <code>v.s.fs[3]</code> is a garbage value.</p>
+<p>Let’s try to run it on <code>gcc-14</code>:</p>
+<pre><code>$ gcc-14 a.c -o a -O2 &amp;&amp; ./a
+v.s:
+  .fs[3] = 00000000</code></pre>
+<p>The value is all zeros. Is it a coincidence? <code>valgrind</code> does not
+complain either. Let’s have a peek at the disassembly dump:</p>
+<pre class="asm"><code>; $ objdump --no-addresses --no-show-raw-insn -d a
+&lt;use_stack&gt;:
+        movdqa 0xea8(%rip),%xmm0 ; load the constant from memory
+        movaps %xmm0,-0x18(%rsp) ; store the constant on stack
+        ret
+        xchg   %ax,%ax
+
+&lt;do_it&gt;:
+        pxor   %xmm0,%xmm0       ; zero-initialize 16 bytes
+        movaps %xmm0,-0x18(%rsp) ; store all 16 bytes of zeros on stack
+        mov    -0xc(%rsp),%eax   ; read 32-bits of zeros (part of 16-byte
+                                 ; zeroing one line above)
+        ret</code></pre>
+<p><code>gcc-14</code> implements <code>v = { 0 };</code> as a 128-bit (16-byte)
+zero initialization of <code>sizeof(v)</code> via
+<code>pxor %xmm0,%xmm0; movaps %xmm0,-0x18(%rsp)</code>.</p>
+<p>How about <code>gcc-15</code>?</p>
+<pre><code>$ gcc a.c -o a -O2 &amp;&amp; ./a
+v.s:
+  .fs[3] = 0x000043</code></pre>
+<p>Whoops. That that is clearly uninitialized value left after <code>use_stack()</code>
+execution. <code>valigrind</code> is also not happy about it:</p>
+<pre><code>$ valgrind --quiet --track-origins=yes ./a
+v.s:
+Use of uninitialised value of size 8
+   at 0x48B954A: _itoa_word (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x48C43EB: __printf_buffer (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x48C6300: __vfprintf_internal (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x48BA71E: printf (in ...-glibc-2.40-36/lib/libc.so.6)
+   by 0x401074: main (a.c:20)
+ Uninitialised value was created by a stack allocation
+   at 0x401190: do_it (a.c:12)</code></pre>
+<p>Disassembly:</p>
+<pre><code>; $ objdump --no-addresses --no-show-raw-insn -d a
+&lt;use_stack&gt;:
+        movabs $0x4100000040,%rax ; load 64-bit part 1
+        movabs $0x4300000042,%rdx ; load 64-bit part 2
+        mov    %rax,-0x18(%rsp)   ; store part 1 on stack
+        mov    %rdx,-0x10(%rsp)   ; store part 2 on stack
+        ret
+        nop
+
+&lt;do_it&gt;:
+        movl   $0x0,-0x18(%rsp)   ; zero-initialize first 32 bits of a union
+        mov    -0xc(%rsp),%eax    ; read uninitialized 32-bit value at 12-byte
+                                  ; offset from a union start
+        ret</code></pre>
+<p><code>gcc-15</code> implements <code>v = { 0 }</code> as a single 32-bit store as if it was
+<code>v.dummy = 0;</code> and leaves the rest of the union intact.</p>
+<p>Is it a bug?</p>
+<p><code>gcc-15</code> intentionally changed the zeroing behaviour to do less in
+<a href="https://gcc.gnu.org/PR116416"><code>PR116416</code></a> with
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=0547dbb725b6d8e878a79e28a2e171eafcfbc1aa">this commit</a>
+to generate more optimal code.</p>
+<p>Fun fact: the patch also adds a <code>-fzero-init-padding-bits=unions</code>
+option to enable the old behaviour.</p>
+<h2 id="the-real-bug">the real bug</h2>
+<p>The above example might sound theoretical, but I extracted it from an
+<code>mbedtls</code> test suite failure. After a recent <code>gcc-15</code> update the tests
+are now failing as:</p>
+<pre><code>The following tests FAILED:
+        91 - psa_crypto-suite (Failed)
+       113 - psa_crypto_storage_format.v0-suite (Failed)</code></pre>
+<p>I initially thought it’s a compiler bug related to arithmetics. But
+exploring the failing test I found the following pattern:</p>
+<pre class="c"><code>// at tests/src/psa_exercise_key.c:
+  psa_mac_operation_t operation = PSA_MAC_OPERATION_INIT;
+
+// library/psa_crypto.c:
+
+  if (operation.hash_ctx.id != 0) { return error; }
+  //...
+
+// include/psa/crypto_struct.h:
+  #define PSA_MAC_OPERATION_INIT { 0, 0, 0, { 0 } }
+
+// include/psa/crypto.h:
+  typedef struct psa_mac_operation_s psa_mac_operation_t;
+
+// include/psa/crypto_struct.h:
+  struct psa_mac_operation_s {
+    unsigned int id;
+    uint8_t mac_size;
+    unsigned int is_sign : 1;
+    psa_driver_mac_context_t ctx;
+  };
+
+// include/psa/crypto_driver_contexts_composites.h:
+  typedef union {
+    unsigned dummy; /* Make sure this union is always non-empty */
+    mbedtls_psa_mac_operation_t mbedtls_ctx;
+  } psa_driver_mac_context_t;
+
+// include/psa/crypto_builtin_composites.h:
+  typedef struct {
+    psa_algorithm_t alg;
+    union {
+        unsigned dummy; /* Make the union non-empty even with no supported algorithms. */
+        mbedtls_psa_hmac_operation_t hmac;
+        mbedtls_cipher_context_t cmac;
+    } ctx;
+  } mbedtls_psa_mac_operation_t;
+
+// include/psa/crypto_builtin_composites.h
+  typedef struct {
+    /** The HMAC algorithm in use */
+    psa_algorithm_t alg;
+    /** The hash context. */
+    struct psa_hash_operation_s hash_ctx;
+    /** The HMAC part of the context. */
+    uint8_t opad[PSA_HMAC_MAX_HASH_BLOCK_SIZE];
+  } mbedtls_psa_hmac_operation_t;
+
+// include/psa/crypto_types.h
+  typedef uint32_t psa_algorithm_t;
+
+// include/psa/crypto_struct.h
+  struct psa_hash_operation_s {
+    /** Unique ID indicating which driver got assigned to do the
+     * operation. Since driver contexts are driver-specific, swapping
+     * drivers halfway through the operation is not supported.
+     * ID values are auto-generated in psa_driver_wrappers.h.
+     * ID value zero means the context is not valid or not assigned to
+     * any driver (i.e. the driver context is not active, in use). */
+    unsigned int id;
+    psa_driver_hash_context_t ctx;
+  };</code></pre>
+<p>It’s quite a bit of indirection, but if we compress it into a single
+<code>struct</code> definition and remove irrelevant bits we will get something
+like that:</p>
+<pre class="c"><code>  struct {
+    unsigned int id; // initialized below
+    uint8_t mac_size; // initialized below
+    unsigned int is_sign : 1; // initialized below
+    union {
+      unsigned dummy; // initialized below
+      struct {
+        uint32_t alg; // initialized below, alias of `dummy`
+
+        // anything below is NOT initialized
+
+        union {
+          unsigned dummy;
+          struct {
+              uint32_t alg;
+              struct {
+                  unsigned int id; // &lt;- we are about to use this field
+                  psa_driver_hash_context_t ctx;
+              } hash_ctx;
+              uint8_t opad[PSA_HMAC_MAX_HASH_BLOCK_SIZE];
+          } hmac;
+          // ..
+       } mbedtls_ctx;
+    } ctx;
+  } operation = {
+    0, // id
+    0, // mac_size
+    0, // is_sign
+    { 0 } // ctx.dummy
+  };
+
+  if (operation.hash_ctx.id != 0) { return error; }</code></pre>
+<p><code>valgrind</code> complains about the use of an uninitialized value as:</p>
+<pre><code>$ valgrind --track-origins=yes --trace-children=yes --num-callers=50 --track-fds=yes --leak-check=full --show-reachable=yes --malloc-fill=0xE1 --free-fill=0xF1 tests/test_suite_psa_crypto
+...
+==2758824== Conditional jump or move depends on uninitialised value(s)
+==2758824==    at 0x483C6B: psa_hash_setup (psa_crypto.c:2298)
+==2758824==    by 0x490ADA: psa_hmac_setup_internal (psa_crypto_mac.c:90)
+==2758824==    by 0x490ADA: psa_mac_setup (psa_crypto_mac.c:299)
+==2758824==    by 0x48412C: psa_driver_wrapper_mac_sign_setup (psa_crypto_driver_wrappers.h:2297)
+==2758824==    by 0x48412C: psa_mac_setup (psa_crypto.c:2619)
+==2758824==    by 0x4083BC: test_mac_key_policy (test_suite_psa_crypto.function:2192)
+==2758824==    by 0x408877: test_mac_key_policy_wrapper (test_suite_psa_crypto.function:2264)
+==2758824==    by 0x429F4E: dispatch_test (main_test.function:170)
+==2758824==    by 0x42A813: execute_tests (host_test.function:676)
+==2758824==    by 0x40247A: main (main_test.function:263)
+==2758824==  Uninitialised value was created by a stack allocation
+==2758824==    at 0x40822C: test_mac_key_policy (test_suite_psa_crypto.function:2167)</code></pre>
+<p>Unfortunately I don’t think there is a simple fix for that (apart from
+enabling new <code>-fzero-init-padding-bits=unions</code> compiler flag if it’s
+supported.</p>
+<p>I filed the issue upstream as
+<a href="https://github.com/Mbed-TLS/mbedtls/issues/9814">Issue #9814</a> hoping to
+get some guidance.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>gcc-15</code> will be more efficient at handling partial union initialization.</p>
+<p>It will likely be at expense of exposing real code bugs like the
+<a href="https://github.com/Mbed-TLS/mbedtls/issues/9814"><code>mbedtls</code></a> one to the
+users. It’s a bit scary to discover it in security library first.</p>
+<p>At least <code>valgrind</code> is able to detect trivial cases of uninitialized
+use of partially initialized unions.</p>
+<p><code>gcc-15</code> also provides <code>-fzero-init-padding-bits=unions</code> to flip the old
+behaviour back on. This will allow nailing down bugs using a single
+compiler version instead of comparing to <code>gcc-14</code>.</p>
+<p>I suspect <code>gcc</code> historically zero-initialized the whole enums to be
+closer to incomplete <code>struct</code> initialization
+<a href="https://en.cppreference.com/w/c/language/struct_initialization">rule</a>.
+But now it causes performance problems if the union branches are
+different in size.</p>
+<p>I suspect we’ll see a few more projects affected by this change.</p>
+<p>Have fun!</p>]]></summary>
+</entry>
+<entry>
     <title>ski 1.5.0 is out</title>
     <link href="https://trofi.github.io/posts/327-ski-1.5.0-is-out.html" />
     <id>https://trofi.github.io/posts/327-ski-1.5.0-is-out.html</id>
@@ -8757,255 +8999,6 @@ sidestep the limit entirely. Filed <a href="https://gcc.gnu.org/PR111527" class=
 <code>nixpkgs</code> to apply programmatic mangling similar to:</p>
 <pre><code># Pseudocode. real regexps do not work for `gcc`:
 -fmacro-prefix-map=s,$NIX_STORE/[a-z0-9]{32}-,$NIX_STORE/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-</code></pre>
-<p>Have fun!</p>]]></summary>
-</entry>
-<entry>
-    <title>Unexpected runtime dependencies in nixpkgs</title>
-    <link href="http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html" />
-    <id>http://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html</id>
-    <published>2023-09-14T00:00:00Z</published>
-    <updated>2023-09-14T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<h2 id="intro">Intro</h2>
-<p><code>nix</code> uses a bit unusual way to detect runtime dependencies: it scans
-the build result for it’s hash inputs used during build and does not
-require manual specification of the dependencies.</p>
-<p>For example if we build a trivial package that just prints a string into
-the file it automatically pulls in that strings into runtime closure:</p>
-<pre><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; runCommand &quot;foo&quot; {} \
-  &quot;echo ${re2c}/bin/re2c &gt; $out&quot;'</code></pre>
-<p>This command builds a package that consists of a single <code>$out</code> file
-(symlinked to <code>./result</code>) which contains absolute path to <code>re2c</code> binary.
-It’s not a complicated package:</p>
-<pre><code>$ cat result
-/nix/store/pj9cdgj07iz3cj88rywapx2lfxfmdqd3-re2c-3.1/bin/re2c</code></pre>
-<p>And yet if we look at full closure of it’s inferred dependencies it
-already has <code>re2c</code> and all it’s runtime dependencies:</p>
-<pre><code>$ nix path-info -r ./result
-/nix/store/gnzwqa9df994g01yw5x75qnbl1rhp9ds-libunistring-1.1
-/nix/store/h3aw16j1c54jv8s39yvdhpfcx3538jwi-libidn2-2.3.4
-/nix/store/kv0v4h5i911gj39m7n9q10k8r8gbn3sa-xgcc-12.3.0-libgcc
-/nix/store/905gkx2q1pswixwmi1qfhfl6mik3f22l-glibc-2.37-8
-/nix/store/s2pgr9iqj60mfnmabixnqacxl4bzb408-gcc-12.3.0-libgcc
-/nix/store/gi26p79iq8jrw51irq5x82c2cqlgicxi-gcc-12.3.0-lib
-/nix/store/pj9cdgj07iz3cj88rywapx2lfxfmdqd3-re2c-3.1
-/nix/store/amiqn0hvnmrfcz2s8b47fb770v8hy9ny-foo</code></pre>
-<p>Such automatic scanning method method has both false positives and false
-negatives.</p>
-<p>Say, if we are to compress the file reference might disappear:</p>
-<pre><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; runCommand &quot;foo&quot; {} \
-  &quot;echo ${re2c}/bin/re2c | bzip2 &gt; $out&quot;'
-
-$ nix path-info -r ./result
-/nix/store/lwx722djnam7yjy439b9k6czb55h707q-foo</code></pre>
-<p>Missing reference detection is a bug here (false negative). False
-negatives can be worked around by explicitly adding plain text
-references into the file just like we did in the original example.</p>
-<p>But I would like to talk about false positives today.</p>
-<h2 id="the-problem">The problem</h2>
-<p>Let’s jump start from the motivating example: right now <code>nix</code> package
-has header only <code>nlohmann/json</code> dependency in it’s runtime closure:</p>
-<pre><code>$ nix path-info -r nixpkgs#nix | fgrep nlohmann_json
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2</code></pre>
-<p>There is nothing in <code>nlohmann/json</code> useful for <code>nix</code>’s runtime:</p>
-<pre><code>$ find /nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2 -type f | unnix
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/detail/conversions/from_json.hpp
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/detail/conversions/to_chars.hpp
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/detail/conversions/to_json.hpp
-...
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/include/nlohmann/ordered_map.hpp
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/cmake/nlohmann_json/nlohmann_jsonTargets.cmake
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/cmake/nlohmann_json/nlohmann_jsonConfig.cmake
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/cmake/nlohmann_json/nlohmann_jsonConfigVersion.cmake
-/&lt;&lt;NIX&gt;&gt;/nlohmann_json-3.11.2/share/pkgconfig/nlohmann_json.pc</code></pre>
-<p>These are a few headers and <code>cmake</code> and <code>pkg-config</code> plumbing.</p>
-<p>So why does <code>nix</code> retain those then?</p>
-<h2 id="debugging-the-details">Debugging the details</h2>
-<p>To figure out where the references come from we can grep the package for
-a raw string and see how it gets there:</p>
-<pre><code>$ LANG=C grep -R $(nix-build --no-link '&lt;nixpkgs&gt;' -A nlohmann_json) $(nix-build --no-link '&lt;nixpkgs&gt;' -A nix.out)
-grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix: binary file matches
-grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-build: binary file matches
-grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-channel: binary file matches
-grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-collect-garbage: binary file matches
-grep: /nix/store/vxx4c6gc2zgfw870b40f06dmli6ljp34-nix-2.17.0/bin/nix-copy-closure: binary file matches
-...</code></pre>
-<p>Here we see that even <code>nix</code> binary itself retains <code>nlohmann/json</code>
-reference. With <code>strings</code> tool from <code>GNU binutils</code> we can check how the
-reference looks like:</p>
-<pre><code>$ nix shell nixpkgs#binutils-unwrapped
-$$strings $(nix-build --no-link '&lt;nixpkgs&gt;' -A nix.out)/bin/nix | grep $(nix-build --no-link '&lt;nixpkgs&gt;' -A nlohmann_json)
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/json.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/output/serializer.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/conversions/to_chars.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/input/lexer.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/iterators/iter_impl.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/input/json_sax.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/iterators/iteration_proxy.hpp
-/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2/include/nlohmann/detail/input/parser.hpp</code></pre>
-<p>Note how absolute header paths are embedded into <code>nix</code> binary. It
-happens via <code>__FILE__</code> macro expansion in C++ code.</p>
-<pre class="cpp"><code>//// in nlohmann_json/include/nlohmann.json.h
-class basic_json {
-    // ...
-    template&lt;typename T, typename... Args&gt; static T* create(Args&amp;&amp; ... args)
-    {
-        // ...
-        JSON_ASSERT(obj != nullptr);
-        // ...
-    }
-
-//// in nlohmann_json/include/nlohmann/detail/macro_scope.hpp
-// allow overriding assert
-#if !defined(JSON_ASSERT)
-    #include &lt;cassert&gt; // assert
-    #define JSON_ASSERT(x) assert(x)
-#endif
-
-// in glibc/include/assert.h
-# if defined __cplusplus
-#  define assert(expr)                                                  \
-     (static_cast &lt;bool&gt; (expr)                                         \
-      ? void (0)                                                        \
-      : __assert_fail (#expr, __FILE__, __LINE__, __ASSERT_FUNCTION))
-// ...</code></pre>
-<p>In this case any code that happens to instantiate <code>basic_json::create()</code>
-function will embed <code>__FILE__</code> definition as part of the <code>assert()</code> call
-and will embed absolute path to the store.</p>
-<p>Absolute path to the store will retain <code>nlohmann/json</code> in runtime closure.
-It’s a completely redundant runtime dependency.</p>
-<h2 id="the-workaround">The workaround</h2>
-<p>Initially I though of using something like <code>nukeReferences</code>
-file-mangling tool to wipe out unexpected references. But I was not sure
-where should I plug this hammer: ideally any user of <code>nlohmann_json</code>
-package should run it just in case. And patching files after-the-fast is
-always prone to break something: be it broken file checksums, broken
-sort ordering, unrelated string sharing due to identical code folding.</p>
-<p>I wanted something milder: ideally tell <code>gcc</code> not to emit problematic
-paths at all. And <code>gcc</code> provides exactly that mechanism!</p>
-<p><code>gcc</code> has a way to slightly mangle absolute paths used by <code>__FILE__</code> via
-<code>-fmacro-prefix-map=old=new</code> set of options: <a href="https://gcc.gnu.org/onlinedocs/gcc/Preprocessor-Options.html" class="uri">https://gcc.gnu.org/onlinedocs/gcc/Preprocessor-Options.html</a>.</p>
-<p>It’s main use case is to untangle final binaries from the temporary
-directory sources are built against:
-<code>-fmacro-prefix-map=/tmp/autogenerated/foo=/usr/src/foo</code>.</p>
-<p>The problem feels vaguely similar: we want to avoid any mention of
-source directories in the final output. I tried to inject
-<code>-fmacro-prefix-map=</code> for every single build input used by <code>nixpkgs</code> as:</p>
-<pre class="diff"><code>--- a/pkgs/build-support/cc-wrapper/setup-hook.sh
-+++ b/pkgs/build-support/cc-wrapper/setup-hook.sh
-@@ -65,15 +65,29 @@
- # function is guaranteed to be exactly the same.
- ccWrapper_addCVars () {
-     # See ../setup-hooks/role.bash
--    local role_post
-+    local role_post mangled_store map_flag var
-     getHostRoleEnvHook
-
-+    var=NIX_CFLAGS_COMPILE${role_post}
-+
-     if [ -d &quot;$1/include&quot; ]; then
--        export NIX_CFLAGS_COMPILE${role_post}+=&quot; -isystem $1/include&quot;
-+        export $var+=&quot; -isystem $1/include&quot;
-     fi
-
-     if [ -d &quot;$1/Library/Frameworks&quot; ]; then
--        export NIX_CFLAGS_COMPILE${role_post}+=&quot; -iframework $1/Library/Frameworks&quot;
-+        export $var+=&quot; -iframework $1/Library/Frameworks&quot;
-+    fi
-+
-+    # Try hard to avoid hardcoding of -dev outputs via __FILE__.
-+    # THe typical examples are: asserts in nlohmann_json leaking into
-+    # nix executable closure, asserts from lttng-ust leaking into
-+    # pipewire.
-+    mangled_store=$(printf &quot;%s&quot; &quot;$1&quot; | sed -e &quot;s|$NIX_STORE/[a-z0-9]\{32\}-|$NIX_STORE/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-|g&quot;)
-+    map_flag=&quot;-fmacro-prefix-map=$1=$mangled_store&quot;
-+    # As it's a long flag try hard not to introduce duplicates as
-+    # environment gets exhausted otherwise for large packages like qemu.
-+    if [[ ${!var-} != *&quot; $map_flag&quot;* ]]; then
-+        export $var+=&quot; $map_flag&quot;
-     fi
- }</code></pre>
-<p>The change adds a bunch of compiler options on form of:</p>
-<pre><code>-fmacro-prefix-map=/nix/store/5xih6daf5g3hpa0wc5vs2cgrhakn4s0j-nlohmann_json-3.11.2=/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nlohmann_json-3.11.2</code></pre>
-<p>That way <code>__FILE__</code> values still have a reasonable form: we can see which
-package they come from. But we can’t use the path in any meaningful way
-as they don’t refer real files anymore. Does not look too bad.</p>
-<p>I also had to avoid attempts at inserting multiple identical values into
-the final <code>NIX_CFLAGS_COMPILE</code> variable. Otherwise some particularly
-large packages like <code>qemu</code> exhaust all the environment space and fail to
-run executables. We might want to do the same for the rest of variables:
-we add most of the options options thrice to <code>NIX_CFLAGS_COMPILE</code>.</p>
-<p>Proposed the workaround as <a href="https://github.com/NixOS/nixpkgs/pull/255192" class="uri">https://github.com/NixOS/nixpkgs/pull/255192</a>.</p>
-<h2 id="the-results">The results</h2>
-<p>Did the workaround help? I placed the patch into <code>~/n</code> checkout of
-<code>nixpkgs</code> repo.</p>
-<pre><code>$ LANG=C grep -R $(nix-build --no-link ~/n -A nlohmann_json) $(nix-build --no-link ~/n -A nix.out)
-&lt;empty&gt;</code></pre>
-<p>Yay! At the very least we got rid of the unneeded reference.</p>
-<p><code>nix</code> was a good example of a superfluous and small harmless dependency.</p>
-<p>Are there packages where this change would be more pronounced? My
-ulterior motive was to fix something similar in <code>lttng-ust.dev</code>. That
-one was not just a set of headers. It also contains python interpreter
-as a dependency:</p>
-<pre><code>$ nix path-info -r $(nix-build '&lt;nixpkgs&gt;' -A lttng-ust.dev) |&amp; unnix
-/&lt;&lt;NIX&gt;&gt;/libunistring-1.1
-/&lt;&lt;NIX&gt;&gt;/libidn2-2.3.4
-/&lt;&lt;NIX&gt;&gt;/xgcc-12.3.0-libgcc
-/&lt;&lt;NIX&gt;&gt;/glibc-2.37-8
-/&lt;&lt;NIX&gt;&gt;/zlib-1.2.13
-/&lt;&lt;NIX&gt;&gt;/sqlite-3.42.0
-/&lt;&lt;NIX&gt;&gt;/numactl-2.0.16
-/&lt;&lt;NIX&gt;&gt;/lttng-ust-2.13.1
-/&lt;&lt;NIX&gt;&gt;/expat-2.5.0
-/&lt;&lt;NIX&gt;&gt;/ncurses-6.4
-/&lt;&lt;NIX&gt;&gt;/liburcu-0.14.0
-/&lt;&lt;NIX&gt;&gt;/xz-5.4.4
-/&lt;&lt;NIX&gt;&gt;/openssl-3.0.10
-/&lt;&lt;NIX&gt;&gt;/bzip2-1.0.8
-/&lt;&lt;NIX&gt;&gt;/libffi-3.4.4
-/&lt;&lt;NIX&gt;&gt;/libxcrypt-4.4.36
-/&lt;&lt;NIX&gt;&gt;/liburcu-0.14.0-dev
-/&lt;&lt;NIX&gt;&gt;/gcc-12.3.0-libgcc
-/&lt;&lt;NIX&gt;&gt;/gcc-12.3.0-lib
-/&lt;&lt;NIX&gt;&gt;/readline-8.2p1
-/&lt;&lt;NIX&gt;&gt;/bash-5.2-p15
-/&lt;&lt;NIX&gt;&gt;/mailcap-2.1.53
-/&lt;&lt;NIX&gt;&gt;/gdbm-1.23
-/&lt;&lt;NIX&gt;&gt;/tzdata-2023c
-/&lt;&lt;NIX&gt;&gt;/python3-3.10.12
-/&lt;&lt;NIX&gt;&gt;/lttng-ust-2.13.1-bin
-/&lt;&lt;NIX&gt;&gt;/lttng-ust-2.13.1-dev</code></pre>
-<p>One of the frequent users of <code>lttng-ust.dev</code> is <code>pipewire</code>:</p>
-<pre><code>$ nix path-info -r $(nix-build '&lt;nixpkgs&gt;' -A pipewire.out) | fgrep lttng
-/nix/store/23jh1m6irhvr16zjmrvy2cnpgz7yi6gj-lttng-ust-2.13.1
-/nix/store/xznqsvr1la1xnfnzia2yvnicfz03yjqb-lttng-ust-2.13.1-bin
-/nix/store/fckk2ncjnxdw1xsx8v8rxjnmhldbx8pr-lttng-ust-2.13.1-dev</code></pre>
-<p>And I’m glad to announce that it’s also gone with the patch above:</p>
-<pre><code>$ nix path-info -r $(nix-build ~/n -A pipewire.out) | fgrep lttng
-/nix/store/bv3i3qjphzgfzmmdhws9nhwz76qscy61-lttng-ust-2.13.1</code></pre>
-<p>Here is the closure size difference:</p>
-<p>Before:</p>
-<pre><code>$ nix path-info -rsSh $(nix-build '&lt;nixpkgs&gt;' -A pipewire.out) | nl | tail -n1
-   219  /nix/store/ff0w34nr807in3b1swmqklxy9g9v5hg9-pipewire-0.3.79 1.4M  543.4M</code></pre>
-<p>After:</p>
-<pre><code>$ nix path-info -rsSh $(nix-build ~/n -A pipewire.out) | nl | tail -n1
-   207  /nix/store/hl4dffvc73nsh3zfbji0y7h9lcnrk14b-pipewire-0.3.79 1.3M  452.0M</code></pre>
-<p>12 dependencies and ~90MB (<code>543.4</code> -&gt; <code>452.0</code> reduction, ~20% of the whole
-output) are just gone!</p>
-<h2 id="parting-words">Parting words</h2>
-<p>Looking at the runtime closure is always fun. There are many other
-low-hanging fruits in <code>nixpkgs</code> to remove. Most of the time just adding
-an extra <code>dev</code> output is enough to slim down the output.</p>
-<p><code>__FILE__</code> is a tricky macro that makes <code>nix</code> builds to leak out
-unnecessary references into final closure.</p>
-<p><code>-fmacro-prefix-map=</code> seems to be a robust workaround for <code>__FILE__</code>
-induced leaks. The flag is supported in both <code>gcc</code> and <code>clang</code> for quite
-a while.</p>
-<p>Even <code>nix</code> package itself had a redundant dependency in it’s final
-closure.</p>
-<p><a href="https://github.com/NixOS/nixpkgs/pull/255192" class="uri">https://github.com/NixOS/nixpkgs/pull/255192</a> should fix it in <code>nixpkgs</code>.</p>
-<p>And for some packages like <code>pipewire</code> the closure size reduction is
-substantial and is taking about 20% of all closure size. Not bad for a
-single extra compiler option.</p>
 <p>Have fun!</p>]]></summary>
 </entry>
 
