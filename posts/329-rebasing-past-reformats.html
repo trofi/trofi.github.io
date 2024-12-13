@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Rebasing past reformats</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>Rebasing past reformats</h1>
+            
+                <div class="info">December 12, 2024</div>
+            
+
+            <h2 id="tldr">TL;DR</h2>
+<p>Did you ever have to deal with a huge list of conflicts on rebase caused
+by automatic reformatting of an upstream code base?</p>
+<p>If you got into a similar situation you might be able to automatically
+recreate your changes with <code>git filter-branch --tree-filter</code> and a
+<code>git commit --allow-empty</code> trick.</p>
+<h2 id="story-mode">story mode</h2>
+<p>I have local fork of <code>staging</code> branch of
+<a href="https://github.com/NixOS/nixpkgs/"><code>nixpkgs</code></a> <code>git</code> repository to do
+various tests against experimental upstream packages (like <code>gcc</code> from
+<code>master</code> branch) or experimental <code>nix</code> features (like <code>ca-derivations</code>).</p>
+<p>I have about 350 patches in the fork. I sync this forked branch about
+daily against the upstream <code>nixpkgs/staging</code>. Most of the time
+<code>git pull --rebase</code> is enough and no conflicts are there. Once a month
+there is one or two files to tweak. Not a big deal.</p>
+<p>A few days ago <code>nixpkgs</code> landed a partial source code reformatting
+patch as <a href="https://github.com/NixOS/nixpkgs/pull/322537">PR#322537</a>. It
+automatically re-indents ~21000 <code>.nix</code> files in the repository with a
+<code>nixfmt</code> tool. My <code>git pull --rebase</code> generated conflicts on first few
+patches against my branch. I aborted it with <code>git rebase --abort</code>.</p>
+<p>I would not be able to manually solve such a huge list of commits and I
+wondered if I could somehow regenerate my patches against the indented
+source.</p>
+<p>I theory rebasing past such change should be a mechanical operation: I
+have the source tree before the patch and after the patch. All I need to
+do is to autoformat both <code>before</code> and <code>after</code> trees and then <code>diff</code>
+them.</p>
+<p>I managed to do it with help of <code>git commit --allow-empty</code> and
+<code>git filter-branch --tree-filter</code>.</p>
+<p>Here are my exact commands used:</p>
+<h3 id="actual-commands">actual commands</h3>
+<p>Here is the step-by-step I did to rebase my local <code>staging</code> branch past
+the source reformatting
+<a href="https://github.com/NixOS/nixpkgs/commit/667d42c00d566e091e6b9a19b365099315d0e611"><code>667d42c00d566e091e6b9a19b365099315d0e611</code> commit</a>
+to avoid conflicts:</p>
+<ol type="1">
+<li><p>Create an empty commit (to absorb initial formatting later):</p>
+<pre><code>$ git commit --allow-empty -m &quot;EMPTY commit: will absorb relevant formatting changes&quot;</code></pre></li>
+<li><p>Move the last empty commit in the patch queue to the beginning of
+the patch queue:</p>
+<pre><code>$ git rebase -i --keep-base</code></pre>
+<p>In the edit menu move the
+<code>"EMPTY commit: will absorb relevant formatting changes"</code> entry from
+last line of the list to the first line.</p></li>
+<li><p>Get affected files in the branch by the formatting change:</p>
+<p>The formatting change is <code>667d42c00d566e091e6b9a19b365099315d0e611</code>.</p>
+<pre><code>$ FORMATTED_FILES=$(git diff --name-only \
+    667d42c00d566e091e6b9a19b365099315d0e611^..667d42c00d566e091e6b9a19b365099315d0e611 \
+    -- $(git diff --name-only origin/staging...staging) | tr $'\n' ' ')</code></pre>
+<p>This will populate <code>FORMATTED_FILES</code> shell variable with affected
+files.</p></li>
+<li><p>Reformat the <code>$FORMATTED_FILES</code> files:</p>
+<pre><code>$ FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch \
+  --tree-filter &quot;nixfmt $FORMATTED_FILES&quot; -- $(git merge-base origin/staging staging)..
+...
+Rewrite 6fc0a951e9b7a7e3f80628ca0a6c4c9f54fd2dd6 (56/327) (65 seconds passed, remaining 314 predicted)
+...
+Rewrite c20df82da66da6521f355af508bfedc047cffa64 (326/326) (1183 seconds passed, remaining 0 predicted)
+Ref 'refs/heads/staging' was rewritten</code></pre>
+<p>This command will populate our empty commit with reformatting changes
+and rebase the rest of commits against it without manual intervention.</p></li>
+<li><p>Rebase past the formatting as usual:</p>
+<pre><code>$ git rebase -i</code></pre>
+<p>Here <code>git rebase -i</code> will tell you that the first commit became empty.
+You can either skip or commit an empty one. I skipped it with
+<code>git rebase --skip</code>.</p></li>
+</ol>
+<p>Done!</p>
+<p>Once I executed the above I got just one trivial conflict unrelated to
+reformatting.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>git filter-branch --tree-filter</code> is a great tool to mangle the
+repository! But before using it make sure you back you local tree: it’s
+very easy to get it to “destroy” all your work (<code>git reflog</code> will still
+be able to save your past commits).</p>
+<p>It took <code>git filter-branch --tree-filter</code> about 5 minutes to rebase
+<code>326</code> commits that touch ~200 files. My understanding is that most time
+is spent on <code>nixfmt</code> utility itself and not on <code>git</code> operations.
+<code>nixfmt</code> is not very fast: it takes about a minute to reformat the whole
+of <code>nixpkgs</code> (~300MB of <code>.nix</code> files).</p>
+<p><code>nixpkgs</code> plans for reformat event more sources in future. I will likely
+be using this tip a few more times.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>

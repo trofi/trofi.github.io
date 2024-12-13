@@ -7,8 +7,98 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 01 Dec 2024 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Thu, 12 Dec 2024 00:00:00 UT</lastBuildDate>
         <item>
+    <title>Rebasing past reformats</title>
+    <link>https://trofi.github.io/posts/329-rebasing-past-reformats.html</link>
+    <description><![CDATA[<h2 id="tldr">TL;DR</h2>
+<p>Did you ever have to deal with a huge list of conflicts on rebase caused
+by automatic reformatting of an upstream code base?</p>
+<p>If you got into a similar situation you might be able to automatically
+recreate your changes with <code>git filter-branch --tree-filter</code> and a
+<code>git commit --allow-empty</code> trick.</p>
+<h2 id="story-mode">story mode</h2>
+<p>I have local fork of <code>staging</code> branch of
+<a href="https://github.com/NixOS/nixpkgs/"><code>nixpkgs</code></a> <code>git</code> repository to do
+various tests against experimental upstream packages (like <code>gcc</code> from
+<code>master</code> branch) or experimental <code>nix</code> features (like <code>ca-derivations</code>).</p>
+<p>I have about 350 patches in the fork. I sync this forked branch about
+daily against the upstream <code>nixpkgs/staging</code>. Most of the time
+<code>git pull --rebase</code> is enough and no conflicts are there. Once a month
+there is one or two files to tweak. Not a big deal.</p>
+<p>A few days ago <code>nixpkgs</code> landed a partial source code reformatting
+patch as <a href="https://github.com/NixOS/nixpkgs/pull/322537">PR#322537</a>. It
+automatically re-indents ~21000 <code>.nix</code> files in the repository with a
+<code>nixfmt</code> tool. My <code>git pull --rebase</code> generated conflicts on first few
+patches against my branch. I aborted it with <code>git rebase --abort</code>.</p>
+<p>I would not be able to manually solve such a huge list of commits and I
+wondered if I could somehow regenerate my patches against the indented
+source.</p>
+<p>I theory rebasing past such change should be a mechanical operation: I
+have the source tree before the patch and after the patch. All I need to
+do is to autoformat both <code>before</code> and <code>after</code> trees and then <code>diff</code>
+them.</p>
+<p>I managed to do it with help of <code>git commit --allow-empty</code> and
+<code>git filter-branch --tree-filter</code>.</p>
+<p>Here are my exact commands used:</p>
+<h3 id="actual-commands">actual commands</h3>
+<p>Here is the step-by-step I did to rebase my local <code>staging</code> branch past
+the source reformatting
+<a href="https://github.com/NixOS/nixpkgs/commit/667d42c00d566e091e6b9a19b365099315d0e611"><code>667d42c00d566e091e6b9a19b365099315d0e611</code> commit</a>
+to avoid conflicts:</p>
+<ol type="1">
+<li><p>Create an empty commit (to absorb initial formatting later):</p>
+<pre><code>$ git commit --allow-empty -m &quot;EMPTY commit: will absorb relevant formatting changes&quot;</code></pre></li>
+<li><p>Move the last empty commit in the patch queue to the beginning of
+the patch queue:</p>
+<pre><code>$ git rebase -i --keep-base</code></pre>
+<p>In the edit menu move the
+<code>"EMPTY commit: will absorb relevant formatting changes"</code> entry from
+last line of the list to the first line.</p></li>
+<li><p>Get affected files in the branch by the formatting change:</p>
+<p>The formatting change is <code>667d42c00d566e091e6b9a19b365099315d0e611</code>.</p>
+<pre><code>$ FORMATTED_FILES=$(git diff --name-only \
+    667d42c00d566e091e6b9a19b365099315d0e611^..667d42c00d566e091e6b9a19b365099315d0e611 \
+    -- $(git diff --name-only origin/staging...staging) | tr $'\n' ' ')</code></pre>
+<p>This will populate <code>FORMATTED_FILES</code> shell variable with affected
+files.</p></li>
+<li><p>Reformat the <code>$FORMATTED_FILES</code> files:</p>
+<pre><code>$ FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch \
+  --tree-filter &quot;nixfmt $FORMATTED_FILES&quot; -- $(git merge-base origin/staging staging)..
+...
+Rewrite 6fc0a951e9b7a7e3f80628ca0a6c4c9f54fd2dd6 (56/327) (65 seconds passed, remaining 314 predicted)
+...
+Rewrite c20df82da66da6521f355af508bfedc047cffa64 (326/326) (1183 seconds passed, remaining 0 predicted)
+Ref 'refs/heads/staging' was rewritten</code></pre>
+<p>This command will populate our empty commit with reformatting changes
+and rebase the rest of commits against it without manual intervention.</p></li>
+<li><p>Rebase past the formatting as usual:</p>
+<pre><code>$ git rebase -i</code></pre>
+<p>Here <code>git rebase -i</code> will tell you that the first commit became empty.
+You can either skip or commit an empty one. I skipped it with
+<code>git rebase --skip</code>.</p></li>
+</ol>
+<p>Done!</p>
+<p>Once I executed the above I got just one trivial conflict unrelated to
+reformatting.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>git filter-branch --tree-filter</code> is a great tool to mangle the
+repository! But before using it make sure you back you local tree: it’s
+very easy to get it to “destroy” all your work (<code>git reflog</code> will still
+be able to save your past commits).</p>
+<p>It took <code>git filter-branch --tree-filter</code> about 5 minutes to rebase
+<code>326</code> commits that touch ~200 files. My understanding is that most time
+is spent on <code>nixfmt</code> utility itself and not on <code>git</code> operations.
+<code>nixfmt</code> is not very fast: it takes about a minute to reformat the whole
+of <code>nixpkgs</code> (~300MB of <code>.nix</code> files).</p>
+<p><code>nixpkgs</code> plans for reformat event more sources in future. I will likely
+be using this tip a few more times.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Thu, 12 Dec 2024 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/329-rebasing-past-reformats.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>C union initialization and gcc-15</title>
     <link>https://trofi.github.io/posts/328-c-union-init-and-gcc-15.html</link>
     <description><![CDATA[<h2 id="a-contrived-example">a contrived example</h2>
@@ -5009,6 +5099,8 @@ to it.</li>
 <code>pyamlboot.tests</code> passed the parameter if incorrect type.</li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/355051">PR#355051</a>:
 <code>pypy3Packages.home-assistant-chip-clusters</code> dereferenced <code>null</code>.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/361669">PR#361669</a>:
+<code>kubernetes-kcp.tests</code> was not passing a required parameter.</li>
 </ul>
 <p>Note: It’s not the full list of required fixes. For more complex cases I
 filed a few bugs to get maintainers’ help:</p>
@@ -8392,610 +8484,6 @@ inlineDot x = return x</code></pre>
 <p>Have fun!</p>]]></description>
     <pubDate>Fri, 06 Oct 2023 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/300-inline-graphviz-dot-in-hakyll.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>Maximum argument count on linux and in gcc</title>
-    <link>http://trofi.github.io/posts/299-maximum-argument-count-on-linux-and-in-gcc.html</link>
-    <description><![CDATA[<h2 id="tldr">Tl;DR</h2>
-<p>By default on <code>linux</code> argument list (and environment) is limited by
-less than <code>2MB</code> all bytes calculated across all arguments and environment
-(including <code>argv/envp</code> array overheads and null terminators).</p>
-<p><code>ulimit -s</code> can increase this limit to <code>6MB</code>. Individual command line
-and environment <code>K=V</code> pairs are limited to <code>128KB</code>.</p>
-<p>And due to internal implementation deficiencies of <code>gcc</code> argument list
-for <code>gcc</code> happens to be limited by the same <code>128KB</code> limit.</p>
-<h2 id="story-mode">Story mode</h2>
-<p>My <a href="https://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html">previous attempt</a>
-to “just add” a bunch of <code>-fmacro-prefix-map=</code> flags to each <code>nixpkgs</code>
-package worked for most packages. But it started failing for <code>qemu</code> as:</p>
-<pre><code>Command line: `gcc -m64 -mcx16 /build/qemu-8.1.0/build/meson-private/tmpbyikv8nc/testfile.c \
-  -o /build/qemu-8.1.0/build/meson-private/tmpbyikv8nc/output.exe -D_FILE_OFFSET_BITS=64 \
-  -O0 -Wl,--start-group -laio -Wl,--end-group -Wl,--allow-shlib-undefined` -&gt; 1
-stderr:
-gcc: fatal error: cannot execute 'cc1': execv: Argument list too long
-compilation terminated.</code></pre>
-<p>The failure happens because we have exhausted some command line argument
-limit. In case of <code>qemu</code> we pass around a few thousands of
-<code>-fmacro-prefix-map=</code> options (<code>qemu</code> is a big package and has many
-build inputs).</p>
-<p>Ideally I would like to be able to pass a lot more options without
-hitting the arguments limit (10x? 100x?). Luckily <code>gcc</code> and other tools
-like <code>ld</code> do support a way to pass many options indirectly via response
-files:</p>
-<pre><code>$ gcc -g -O2 -c a.c</code></pre>
-<p>The above should be equivalent to the below:</p>
-<pre><code>$ echo &quot;-g&quot;   &gt; a.rsp
-$ echo &quot;-O2&quot; &gt;&gt; a.rsp
-$ gcc @a.rsp -c a.c</code></pre>
-<p>But I’ll leave response files to another post as it ended up being
-it’s own rabbit hole.</p>
-<p>Instead let’s explore how many arguments you can pass to a single
-command in <code>linux</code>.</p>
-<h2 id="exploring-the-argument-count-limits">Exploring the argument count limits</h2>
-<p>So what are the actual limits we are hitting against here? How many
-arguments can we pass to <code>gcc</code> without any problems?</p>
-<p>Let’s explore it! I’ll start by adding more and more <code>-g</code> options to
-<code>gcc</code> call until it starts failing for a command line limit:</p>
-<pre><code>$ nix shell nixpkgs#gcc
-$$ set -x; touch a.c; args=(-g); while gcc ${args[@]} -c a.c; do args+=(&quot;${args[@]}&quot;); done; echo ${#args[@]}
-
-+ set -x
-+ touch a.c
-+ args=(-g)
-+ gcc -g -c a.c
-+ args+=(&quot;${args[@]}&quot;)
-+ gcc -g -g -c a.c
-+ args+=(&quot;${args[@]}&quot;)
-+ gcc -g -g -g -g -c a.c
-+ args+=(&quot;${args[@]}&quot;)
-+ gcc -g -g -g -g -g -g -g -g -c a.c
-...
-gcc: fatal error: cannot execute 'cc1': execv: Argument list too long
-compilation terminated.
-+ echo 32768
-32768</code></pre>
-<p>Our limit is somewhere below 32K (this is a lot lower than I expected).</p>
-<p>In the above snippet we double the length of argument list to speed the
-search up a bit, thus it’s not an exact value and some closest
-power-of-2 ceiling.</p>
-<p>Let’s extend this snippet a bit and build more flexible argument count
-probe that returns us precise value. I called it <code>probe-argsize.bash</code>:</p>
-<pre class="bash"><code>#!/usr/bin/env bash
-
-# $1 - payload
-# $2... - prober command to test against argument list
-
-# create an aray of enough elements to start failing the allocation:
-large=(&quot;$1&quot;); shift
-
-while &quot;$@&quot; &quot;${large[@]}&quot; &gt;/dev/null 2&gt;/dev/null; do
-    # double the array lenght until execution start failing
-    large+=(&quot;${large[@]}&quot;)
-done
-
-# Use binary search to find largest successfully running prober
-l=0
-u=${#large[@]}
-
-while (( l &lt; u )); do
-    m=$(( (l + u + 1) / 2 ))
-    if &quot;$@&quot; &quot;${large[@]:0:m}&quot; &gt;/dev/null 2&gt;/dev/null; then
-        # can survive
-        (( l = m ))
-    else
-        (( u = m - 1 ))
-    fi
-done
-
-echo $l</code></pre>
-<p>The first half of the script does the same 2x argument list growth on
-every step as before. And the second half does binary search for an
-exact value.</p>
-<p>Let’s try it out:</p>
-<pre><code>$$ touch a.c; ./probe-argsize.bash -g gcc -c a.c
-
-26118</code></pre>
-<p>~26K parameters. Seems to work!</p>
-<p>What if we make our argument a bit larger? Say, pass <code>-ggdb3</code> instead of
-<code>-g</code>?</p>
-<pre><code>$ touch a.c; ./probe-argsize.bash -ggdb3 gcc -c a.c
-14510</code></pre>
-<p>Just ~14K. That degrades very quickly. The available length is decreased
-by half! (or something like that)</p>
-<p>How about longer option? I’ll try ~100 bytes long one:</p>
-<pre><code>$ touch a.c; ./probe-argsize.bash -I0123456789-90123456789-0123456789-0123456789-0123456789-0123456789-01234567889-0123456789-0123456789 \
-  gcc -c a.c
-1209</code></pre>
-<p>1209 is extremely low. That is on par with what <code>qemu</code> exercises in
-<code>nixpkgs</code>. Looks like our limit here is about <code>~120K</code> bytes if we sum up
-all our argument lengths to <code>gcc</code>.</p>
-<p>What if the problem is in some internal <code>gcc</code> limit and not the OS
-itself? Let’s <code>strace</code> <code>gcc</code> call just to make sure:</p>
-<pre><code>$$ strace -f gcc ${args[@]} -c a.c
-...
-[pid 1360260] execve(&quot;cc1&quot;, [&quot;cc1&quot;, &quot;-quiet&quot;, &quot;-idirafter&quot;, ..., &quot;-g&quot;, ...], \
-    0x1474b80 /* 103 vars */) = -1 E2BIG (Argument list too long)</code></pre>
-<p>Here we see that <code>E2BIG</code> comes right from an <code>execve()</code> system call.
-Thus it’s kernel’s limitation of some sort.</p>
-<h2 id="getting-the-formula">Getting the formula</h2>
-<p>Can we easily increase the limit? Let’s find out how <code>linux</code> implements
-limits in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L1888C1-L1894C13">fs/exec.c</a>.
-Maybe there is a <code>linux</code>-specific hack somewhere we could pull out.</p>
-<p>There are a few places where <code>-E2BIG</code> is returned. This code looks most
-relevant:</p>
-<pre class="c"><code>static int do_execveat_common(int fd, struct filename *filename,
-			      struct user_arg_ptr argv,
-			      struct user_arg_ptr envp,
-			      int flags)
-{
-	struct linux_binprm *bprm;
-	int retval;
-	// ...
-
-	retval = count(argv, MAX_ARG_STRINGS);
-	if (retval &lt; 0)
-		goto out_free;
-	bprm-&gt;argc = retval;
-
-	retval = count(envp, MAX_ARG_STRINGS);
-	if (retval &lt; 0)
-		goto out_free;
-	bprm-&gt;envc = retval;
-
-	// ...
-
-	retval = bprm_stack_limits(bprm);
-	if (retval &lt; 0)
-		goto out_free;
-
-	// ...
-
-	retval = copy_strings(bprm-&gt;envc, envp, bprm);
-	if (retval &lt; 0)
-		goto out_free;
-
-	retval = copy_strings(bprm-&gt;argc, argv, bprm);
-	if (retval &lt; 0)
-		goto out_free;
-
-	// ...
-}</code></pre>
-<p>I wondered if <code>MAX_ARG_STRINGS</code> could be one of our limits once
-we solve the smaller limit we are bumping into now, but nope it’s defined
-in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/include/uapi/linux/binfmts.h#L9">include/uapi/linux/binfmts.h</a>
-as:</p>
-<pre class="c"><code>/*
- * These are the maximum length and maximum number of strings passed to the
- * execve() system call.  MAX_ARG_STRLEN is essentially random but serves to
- * prevent the kernel from being unduly impacted by misaddressed pointers.
- * MAX_ARG_STRINGS is chosen to fit in a signed 32-bit integer.
- */
-#define MAX_ARG_STRLEN (PAGE_SIZE * 32)
-#define MAX_ARG_STRINGS 0x7FFFFFFF</code></pre>
-<p>Which is a ridiculously large number:</p>
-<pre><code>$ printf &quot;%d\n&quot; 0x7FFFFFFF
-2147483647</code></pre>
-<p>Maybe it’s a stack limit then? <code>bprm_stack_limits()</code> looks promising:</p>
-<pre class="c"><code>static int bprm_stack_limits(struct linux_binprm *bprm)
-{
-	unsigned long limit, ptr_size;
-
-	/*
-	 * Limit to 1/4 of the max stack size or 3/4 of _STK_LIM
-	 * (whichever is smaller) for the argv+env strings.
-	 * This ensures that:
-	 *  - the remaining binfmt code will not run out of stack space,
-	 *  - the program will have a reasonable amount of stack left
-	 *    to work from.
-	 */
-	limit = _STK_LIM / 4 * 3;
-	limit = min(limit, bprm-&gt;rlim_stack.rlim_cur / 4);
-	/*
-	 * We've historically supported up to 32 pages (ARG_MAX)
-	 * of argument strings even with small stacks
-	 */
-	limit = max_t(unsigned long, limit, ARG_MAX);
-	/*
-	 * We must account for the size of all the argv and envp pointers to
-	 * the argv and envp strings, since they will also take up space in
-	 * the stack. They aren't stored until much later when we can't
-	 * signal to the parent that the child has run out of stack space.
-	 * Instead, calculate it here so it's possible to fail gracefully.
-	 *
-	 * In the case of argc = 0, make sure there is space for adding a
-	 * empty string (which will bump argc to 1), to ensure confused
-	 * userspace programs don't start processing from argv[1], thinking
-	 * argc can never be 0, to keep them from walking envp by accident.
-	 * See do_execveat_common().
-	 */
-	ptr_size = (max(bprm-&gt;argc, 1) + bprm-&gt;envc) * sizeof(void *);
-	if (limit &lt;= ptr_size)
-		return -E2BIG;
-	limit -= ptr_size;
-
-	bprm-&gt;argmin = bprm-&gt;p - limit;
-	return 0;
-}</code></pre>
-<p>This well-commented function tells us that formula here is. I’ll
-compress it as:</p>
-<pre class="c"><code>limit = _STK_LIM / 4 * 3;
-limit = min(limit, bprm-&gt;rlim_stack.rlim_cur / 4);
-limit = max(limit, ARG_MAX);</code></pre>
-<p>Let’s inline as many constants as we can here:</p>
-<pre><code>// from include/uapi/linux/resource.h
-#define _STK_LIM  (8*1024*1024)
-// from include/uapi/linux/limits.h
-#define ARG_MAX 131072 /* # bytes of args + environ for exec() */</code></pre>
-<p>We’ll get this 3-liner:</p>
-<pre class="c"><code>limit = 6MB; // 8MB / 4 * 3
-limit = min(limit, CURRENT_STACK_LIMIT / 4);
-limit = max(limit, 128K);</code></pre>
-<p>The above in plain words: argument limits (in bytes) are at least 128K
-and at most are 6MB. And by default it’s <code>CURRENT_STACK_LIMIT / 4</code>.</p>
-<p><code>CURRENT_STACK_LIMIT</code> default is set to <code>_STK_LIM</code> as well:</p>
-<pre><code>$ ulimit -s
-8192</code></pre>
-<p>Thus the argument length limit by default is <code>2MB</code>. And wee can raise up
-to 6MB (3x) maximum if we set <code>ulimit -s</code> up to <code>24MB</code>. Setting stack
-to anything higher would not affect argument limit.</p>
-<p>That is the theory. Does it match the practice?</p>
-<p>What did I miss? Why do we get only ~128K or argument limit for <code>gcc</code>
-and not ~2MB?</p>
-<p>There is a small catch: I kept exploring limits of <code>gcc</code> executable. In
-<code>nixpkgs</code> it’s a big shell wrapper. Part of wrapper’s work is to set
-various environment variables. Not just pass through the arguments.
-And each environment variable is treated roughly like a command line
-parameter.</p>
-<p>Let’s use known simple <code>printf</code> binary instead (it should not set any
-environment variables internally) and see what are it’s limits:</p>
-<pre><code>$ ./probe-argsize.bash -g $(which printf) &quot;%s&quot; --
-189929</code></pre>
-<p>189K arguments! This looks more like <code>400KB</code> of argument bytes. But if you
-know anything about <code>char * argv[]</code> parameter to <code>main()</code> you might know
-that it’s a pointer array. And pointers probably take most overhead
-here.</p>
-<p>Let’s use longer arguments to mitigate pointer overhead:</p>
-<pre><code>$ filler=0123456789-90123456789-0123456789-0123456789-0123456789-0123456789-01234567889-0123456789-0123456789
-$ ./probe-argsize.bash $filler $(which printf) &quot;%s&quot; --
-19165</code></pre>
-<p>19K arguments 100 bytes each: that looks more like <code>~2MB</code> limit. Phew!
-We finally got our theoretical limit.</p>
-<h2 id="ultimate-argument-count-linux-allows-today">Ultimate argument count <code>linux</code> allows today</h2>
-<p>Given that argument count somehow depends on stack size via
-<code>CURRENT_STACK_LIMIT</code> can we just change default stack size and set
-<code>10x</code> limit for argument count?</p>
-<p>What is The Largest argument count we can pass on <code>linux</code>?</p>
-<p>It’s not very hard to figure it out from the <code>bprm_stack_limits()</code> code
-above.</p>
-<p>To recap our environment structure in memory (on stack) is an array of
-pointers to the null-terminated string pool:</p>
-<pre><code> | (char *)argv[0] -&gt; &quot;arg0\0&quot;
- | (char *)argv[1] -&gt; &quot;arg1\0&quot;
- | (char *)argv[2] -&gt; &quot;arg2\0&quot;
- | (char *)argv[3] -&gt; &quot;arg3\0&quot;
- | (char *)argv[4] -&gt; &quot;arg4\0&quot;
- | (char *)argv[5] -&gt; &quot;arg5\0&quot;
- | ...
- | (char *)argv[N] -&gt; &quot;argN\0&quot;
- | (char *)NULL</code></pre>
-<p>This means that our most memory-efficient input would be an array of
-zero-byte arguments. Note, that in this case main overhead is on
-pointer array and not on the arguments themselves.</p>
-<p>That would be something like:</p>
-<pre><code> | (char *)argv[0] -&gt; &quot;\0&quot;
- | (char *)argv[1] -&gt; &quot;\0&quot;
- | (char *)argv[2] -&gt; &quot;\0&quot;
- | (char *)argv[3] -&gt; &quot;\0&quot;
- | (char *)argv[4] -&gt; &quot;\0&quot;
- | (char *)argv[5] -&gt; &quot;\0&quot;
- | ...
- | (char *)argv[N] -&gt; &quot;\0&quot;
- | (char *)NULL</code></pre>
-<p>On 64-bit systems this gives us 9 bytes per argument. That gives us
-<code>2MB / 9 = 233016</code> arguments. The experiment confirms that we are very
-close:</p>
-<pre><code>$ ./probe-argsize.bash &quot;&quot; env -i $(which printf) &quot;%s&quot; --
-232134</code></pre>
-<p>An exercise for the reader: why is it 822 arguments shorter that our
-maximum theoretical value? A word of warning: it’s not a very simple
-question.</p>
-<p>Given that <code>2MB</code> is derived from <code>1/4 * CURRENT_STACK_LIMIT</code> we can
-increase that as well using <code>ulimit -s</code>. Let’s add 100x:</p>
-<pre><code>$ ulimit -s
-8192
-$ ulimit -s 819200
-
-$ ./probe-argsize.bash &quot;&quot; env -i $(which printf) &quot;%s&quot; --
-698168</code></pre>
-<p>Note that it’s only a 3x improvement (and not a 100x improvement).</p>
-<p>This is exactly our <code>limit = 6MB;</code> absolute limit above. Once again: i
-you need to get maximum out of your argument limits on today’s <code>linux</code>
-it’s enough to set <code>ulimit -s</code> from <code>8MB</code> to <code>24MB</code>.</p>
-<p>Which gives us final formula of <code>6MB / 9 = 699050</code> argument count on
-64-bit systems.</p>
-<p>Fun fact: on 32-bit host kernel the limit should probably be slightly higher
-due to shorter pointer size:</p>
-<ul>
-<li><code>2MB / 5 = 419430</code> arguments (compared to <code>233016</code> on <code>64-bit</code>)</li>
-<li><code>6MB / 5 = 1258291</code> arguments (compared to <code>699050</code> on <code>64-bit</code>)</li>
-</ul>
-<p>That is 1.8x larger than 64-bit systems!</p>
-<p>Once again: it’s a pretty silly benchmark as it’s not very useful to
-pass a million empty strings to the program. But it’s a good model to
-understand the absolute limits.</p>
-<p>We can do more realistic estimates if we know average argument length
-in our use case. Say, if the bulk of our parameters are paths to the
-<code>/nix/store</code> we can safely say those are at least 50 bytes long.</p>
-<p>For 100-bytes long use case we would get:</p>
-<ul>
-<li><code>2MB / 109 = 19239</code> (64-bit), <code>2MB / 105 = 19972</code> (32-bit)</li>
-<li><code>6MB / 109 = 57719</code> (64-bit), <code>6MB / 105 = 59918</code> (32-bit)</li>
-</ul>
-<p>Thus for simple case we should be able to pull out almost <code>~20K</code> by
-default and almost <code>~60K</code> with larger stack size.</p>
-<h2 id="nixpkgs-gcc-wrapper-mystery"><code>nixpkgs</code> <code>gcc</code> wrapper mystery</h2>
-<p>So why does <code>gcc</code> have so much overhead of <code>-g</code> options? We get about
-<code>190K</code> options for for <code>printf -g</code> and only 20K for <code>gcc -g</code> above.
-That is almost 10x reduction.</p>
-<p>Could <code>nixpkgs</code>’s <code>gcc</code> wrapper artificially inflate it’s arguments
-somehow? <code>strace</code> should help us verify that:</p>
-<pre><code>$ nix shell nixpkgs#gcc
-$$ touch a.c &amp;&amp; strace -etrace=execve -s 10000 -f -v -olog gcc -Ihow-many-duplcates -c a.c
-
-$$ grep cc1 log
-1290300 execve(&quot;.../cc1&quot;, [..., , &quot;-I&quot;, &quot;how-many-duplcates&quot;, ...], [..., &quot;COLLECT_GCC_OPTIONS='-I' 'how-many-duplcates' ...&quot;, ...]) = 0</code></pre>
-<p>Not too bad: we see 2x explosion here:</p>
-<ul>
-<li>one option is in argument list</li>
-<li>another is in <code>COLLECT_GCC_OPTIONS=</code> environment</li>
-</ul>
-<p>The <code>2x</code> explosion itself does not explain 10x reduction.</p>
-<p>There is also an extra catch: the way I tried to set the variable in
-<code>qemu</code> is via <code>NIX_CFLAGS_COMPILE=</code> environment variable. Those get
-translated by package setup hooks not visible in <code>nix shell</code>. Let’s
-check their full effect.</p>
-<p>I’ll write a complete small derivation to demonstrate the explosion
-closer to <code>qemu</code> failure mode.</p>
-<p>Here is a <code>default.nix</code> derivation that should demonstrate the point:</p>
-<pre class="nix"><code>{ pkgs ? import &lt;nixpkgs&gt; { } }:
-pkgs.stdenv.mkDerivation {
-  name = &quot;probe-wrapper&quot;;
-  dontUnpack = true;
-  nativeBuildInputs = [ pkgs.strace ];
-
-  NIX_CFLAGS_COMPILE = &quot;-Ihow-many-duplcates&quot;;
-
-  postInstall = ''
-    touch a.c
-    strace -etrace=execve -s 10000 -f -v -o$out -- $CC -c a.c -o a.o
-  '';
-}</code></pre>
-<p>Now we can quickly build it and explore it’s contents:</p>
-<pre><code>$ nix-build
-$ grep cc1 result
-
-31 execve(&quot;.../cc1&quot;, [..., &quot;-I&quot;, &quot;how-many-duplcates&quot;, ...], &quot;NIX_CFLAGS_COMPILE_x86_64_unknown_linux_gnu=... -Ihow-many-duplcates ...&quot;, &quot;NIX_CFLAGS_COMPILE=-Ihow-many-duplcates ...&quot;, &quot;COLLECT_GCC_OPTIONS=... '-I' 'how-many-duplcates' ...&quot;]) = 0</code></pre>
-<p>Things are a bit worse here: we see 4x explosion:</p>
-<ul>
-<li>[as before] one option is in argument list</li>
-<li>[as before] another is in <code>COLLECT_GCC_OPTIONS=</code> environment</li>
-<li>[new] <code>NIX_CFLAGS_COMPILE</code> variable, the one we added and are using for injection</li>
-<li>[new] <code>NIX_CFLAGS_COMPILE_x86_64_unknown_linux_gnu</code> variable, the one
-<code>pkgs/build-support/cc-wrapper/setup-hook.sh</code> setup hook set for us</li>
-</ul>
-<p>And if we throw cross-compilation into the picture (ideally I wanted to
-avoid <code>__FILE__</code> leaks in all cases) and use all three
-<code>NIX_CFLAGS_COMPILE_FOR_BUILD</code>, <code>NIX_CFLAGS_COMPILE</code> and
-<code>NIX_CFLAGS_COMPILE_FOR_TARGET</code>:</p>
-<pre class="nix"><code>{ pkgs ? import &lt;nixpkgs&gt; { crossSystem = &quot;riscv64-linux&quot;; } }:
-pkgs.stdenv.mkDerivation {
-  name = &quot;probe-wrapper&quot;;
-  dontUnpack = true;
-  nativeBuildInputs = [ pkgs.buildPackages.strace ];
-
-  NIX_CFLAGS_COMPILE_FOR_BUILD =  &quot;-Ihow-many-duplcates&quot;;
-  NIX_CFLAGS_COMPILE =            &quot;-Ihow-many-duplcates&quot;;
-  NIX_CFLAGS_COMPILE_FOR_TARGET = &quot;-Ihow-many-duplcates&quot;;
-
-  postInstall = ''
-    touch a.c
-    strace -etrace=execve -s 10000 -f -v -o$out -- $CC -c a.c -o a.o
-  '';
-}</code></pre>
-<pre><code>$ nix-build
-$ grep cc1 result
-
-35 execve(&quot;.../cc1&quot;, [..., &quot;-I&quot;, &quot;how-many-duplcates&quot;, ...], &quot;NIX_CFLAGS_COMPILE_riscv64_unknown_linux_gnu=... -Ihow-many-duplcates ...&quot;, &quot;NIX_CFLAGS_COMPILE_FOR_BUILD=-Ihow-many-duplcates ...&quot;, &quot;NIX_CFLAGS_COMPILE=-Ihow-many-duplcates ...&quot;, NIX_CFLAGS_COMPILE_FOR_TARGET=-Ihow-many-duplcates ...&quot;, &quot;COLLECT_GCC_OPTIONS=... '-I' 'how-many-duplcates' ...&quot;]) = 0</code></pre>
-<p>Here we see 6x explosion:</p>
-<ul>
-<li>[as before] one option is in argument list</li>
-<li>[as before] another is in <code>COLLECT_GCC_OPTIONS=</code> environment</li>
-<li>[as before] <code>NIX_CFLAGS_COMPILE</code> variable, the one we added and are using for injection</li>
-<li>[as before] <code>NIX_CFLAGS_COMPILE_riscv64_unknown_linux_gnu</code> variable, the one
-<code>pkgs/build-support/cc-wrapper/setup-hook.sh</code> setup hook set for us</li>
-<li>[new] <code>NIX_CFLAGS_COMPILE_FOR_BUILD</code> variable, we set ourselves</li>
-<li>[new] <code>NIX_CFLAGS_COMPILE_FOR_TARGET</code> variable, we set ourselves</li>
-</ul>
-<p>None of these variables looks redundant: they serve the purpose to
-propagate flags across shell wrappers. Thus we’ll have to keep in mind
-this 6x explosion.</p>
-<p>And yet. 6x explosion does not explain why mere <code>-g</code> option can be
-present only 20K times instead of 200K times.</p>
-<h2 id="another-nasty-limit">Another nasty limit</h2>
-<p>I skimmed through maximum individual variable length limit above as if
-it did not exist. But it’s there! Look:</p>
-<pre><code>$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; 100000) $(printf &quot;%0*d&quot; 100000) $(printf &quot;%0*d&quot; 100000) $(printf &quot;%0*d&quot; 100000) &gt;/dev/null; echo $?
-0
-$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; 200000) &gt;/dev/null; echo $?
--bash: /run/current-system/sw/bin/printf: Argument list too long
-126</code></pre>
-<p>More precise limit is <code>128K</code>:</p>
-<pre><code>$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; $((2 ** 17)) ) &gt;/dev/null; echo $?
--bash: /run/current-system/sw/bin/printf: Argument list too long
-126
-$ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; $((2 ** 17 - 1)) ) &gt;/dev/null; echo $?
-0
-$ echo $((2 ** 17))
-131072</code></pre>
-<p>It comes from <code>copy_string()</code> from the same
-<a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L523">fs/exec.c</a>:</p>
-<pre class="c"><code>static int copy_strings(int argc, struct user_arg_ptr argv,
-			struct linux_binprm *bprm)
-{
-	struct page *kmapped_page = NULL;
-	char *kaddr = NULL;
-	unsigned long kpos = 0;
-	int ret;
-
-	while (argc-- &gt; 0) {
-		const char __user *str;
-		int len;
-		unsigned long pos;
-
-		ret = -EFAULT;
-		str = get_user_arg_ptr(argv, argc);
-		if (IS_ERR(str))
-			goto out;
-
-		len = strnlen_user(str, MAX_ARG_STRLEN);
-		if (!len)
-			goto out;
-
-		if (!len)
-			goto out;
-
-		ret = -E2BIG;
-		if (!valid_arg_len(bprm, len))
-			goto out;
-	// ...
-out:
-	// ...
-	return ret;
-}
-
-static bool valid_arg_len(struct linux_binprm *bprm, long len)
-{
-	return len &lt;= MAX_ARG_STRLEN;
-}</code></pre>
-<p>Here <code>MAX_ARG_STRLEN</code> (<code>128K</code>) limits individual entries in arguments
-and environment variable entries:</p>
-<pre><code>$ E=$(printf &quot;%0*d&quot; $((2 ** 17 - 3)) ) $(which printf) &quot;1&quot; &gt;/dev/null; echo $?
-0
-$ E=$(printf &quot;%0*d&quot; $((2 ** 17 - 2)) ) $(which printf) &quot;1&quot; &gt;/dev/null; echo $?
--bash: /run/current-system/sw/bin/printf: Argument list too long
-126</code></pre>
-<p>Here we run <code>printf 1</code> with a large <code>E=000000...000</code> variable and expose
-the same <code>128K</code> limit.</p>
-<p>This is bad news. As we saw above <code>gcc</code> uses single <code>COLLECT_GCC_OPTIONS</code>
-variable to pass all options around. And on top of that it quotes each
-argument.</p>
-<p>As a result <code>gcc -g -g ...</code> turns into
-<code>COLLECT_GCC_OPTIONS="'-g' '-g' ..."</code>. This means that we are limited by
-a <code>128K</code> limit when it comes to <code>gcc</code> flags.</p>
-<p>To estimate our best limit <code>-g</code> gets translated to <code>"'-g' "</code>: 2 bytes
-get turned into 5. That means we can put <code>128K / 5 = 26214</code> entries.</p>
-<p>That is very close to our <code>26118</code> limit we got above. Again, why the
-values differ by <code>96</code> entries is another exercise to the reader.</p>
-<h2 id="the-variable-budget">The variable budget</h2>
-<p>Let’s see what worst-case scenario for the longest option we have for
-<code>-fmacro-prefix-map=</code> on my system for directories that have <code>include</code>
-subdirectory:</p>
-<pre><code>$ for d in *; do [[ -d &quot;$d/include&quot; ]] &amp;&amp; echo &quot;${#d} $d&quot;; done | sort -k 1 -n | tail -n 10
-87 s2zpr18vjr274yaalgz5c4g7dx51cvb9-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-87 s5gn9gwwwpm8ln84apjb8hbrhihq72d4-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-87 scihnclavazxzk0vgblhp4371s3gr40c-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-87 sdf4v7s0avfkgnnnx1hq000ydl7bz9sd-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-87 xfl1c6qmr8b39bxgpmjp004afknm54av-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-87 y00bh71xvsrkazdjy5w4ii8pdkdwb5hr-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-87 z8k642hwqflwmp16ql3jj7z1pslyznzq-mcfgthreads-x86_64-w64-mingw32-unstable-2023-06-06-dev
-88 6lw175bhq8d669jl1ddvwy49hcmlysi0-gmp-with-cxx-static-x86_64-unknown-linux-musl-6.3.0-dev
-89 ljrwhpdcv7xzmxbank3jdi2xyga553s5-gmp-with-cxx-static-aarch64-unknown-linux-musl-6.3.0-dev
-94 r5gzvnjnq024gr830nvpkcyd7n4ip33v-libnetfilter_conntrack-static-x86_64-unknown-linux-musl-1.0.9</code></pre>
-<p>About 90 bytes. With added <code>/nix/store</code> prefix that would be <code>100</code>
-characters long paths. Nice round number.</p>
-<p>This makes <code>-fmacro-prefix-map=/nix/store/...=/nix/store/...</code> options
-around 220 bytes.</p>
-<p>How many of those can we realistically set for our <code>2MB</code> budget?</p>
-<ul>
-<li>for 4x overhead: <code>2 * 1024 * 1024 / (220 + 9) / 4 = 2289</code> variables</li>
-<li>for 6x overhead: <code>2 * 1024 * 1024 / (220 + 9) / 6 = 1526</code> variables</li>
-</ul>
-<p>But given <code>COLLECT_GCC_OPTIONS</code> limitation for <code>128K</code> our calculation
-becomes even more pessimistic:</p>
-<ul>
-<li>for no overhead: <code>128 * 1024 / (220 + 9) / 4 = 143</code> variables!</li>
-</ul>
-<p>It might sound like a lot but it’s not that much of a budget: some
-packaging systems (like <code>haskell</code>’s <code>hackage</code>) do like small
-fine-grained packages and occasionally do install <code>C</code> header files.
-<code>nix</code> itself favours smaller packages to speed up rebuilds and shrink
-runtime closure. <code>pkg-config</code> is geared towards installing packages
-into individual directories.</p>
-<p>And what is worse: <code>NIX_CFLAGS_COMPILE</code> is not the only option
-that exhibits this behaviour. Here is the longer list following
-<code>mangleVarList</code> used in <code>nixpkgs</code>:</p>
-<pre><code># from pkgs/build-support/cc-wrapper/add-flags.sh
-NIX_CFLAGS_COMPILE
-NIX_CFLAGS_COMPILE_BEFORE
-NIX_CFLAGS_LINK
-NIX_CXXSTDLIB_COMPILE
-NIX_CXXSTDLIB_LINK
-NIX_GNATFLAGS_COMPILE
-
-# from ./pkgs/build-support/bintools-wrapper/add-flags.sh
-NIX_IGNORE_LD_THROUGH_GCC
-NIX_LDFLAGS
-NIX_LDFLAGS_BEFORE
-NIX_DYNAMIC_LINKER
-NIX_LDFLAGS_AFTER
-NIX_LDFLAGS_HARDEN
-NIX_HARDENING_ENABLE
-
-# from pkgs/build-support/cc-wrapper/add-gnat-extra-flags.sh
-NIX_GNATMAKE_CARGS
-
-# from pkgs/build-support/pkg-config-wrapper/add-flags.sh
-PKG_CONFIG_PATH</code></pre>
-<p>Thus worst case we get to set at most ~150 entries for all of these
-variables.</p>
-<h2 id="parting-words">Parting words</h2>
-<p>Even on <code>linux</code> command line argument limits are hard. If you can try to
-use files to pass inputs of unbounded sizes.</p>
-<p><code>linux</code> has unreachable <code>0-x7fffFFFF</code> argument count limit when executing
-the commands. It does have an overall limit <code>2MB</code> limit that one can
-increase to <code>6MB</code>. And on top of that individual arguments are limited
-by <code>128K</code> limit that you can’t raise.</p>
-<p>The above effectively means that argument passing overheads define
-argument count limit. For arguments of length <code>0</code> by default you can
-pass <code>233016</code> empty strings on 64-bit kernel and <code>419430</code> on 32-bit one.</p>
-<p>If you increase the default stack size with <code>ulimit -s</code> you can get up
-to <code>1258291</code> empty string arguments on 32-bits and <code>699050</code> on 64-bits.</p>
-<p>For practical argument lengths actual values are way smaller: in order
-of thousands to tens of thousands.</p>
-<p><code>gcc</code> is a special <code>COLLECT_GCC_OPTIONS</code> case and it has a limit of
-<code>128KB</code> making argument limits onto hundreds.</p>
-<p>Initially I planned to workaround <code>qemu</code> failure by using <code>gcc</code>’s
-response files. I thought it would save the problem completely.
-Unfortunately <code>COLLECT_GCC_OPTIONS</code> contains already expanded response
-file contents and thus response files will only remove multiplication
-factor but will not sidestep 128KB limit.</p>
-<p>On the bright side <code>COLLECT_GCC_OPTIONS</code> is an internal <code>gcc</code>
-implementation detail that should be fixable without much external
-impact. Even if we move it to proper argument list it should already
-unlock <code>2MB</code> limit. And if we could pass response files through we cloud
-sidestep the limit entirely. Filed <a href="https://gcc.gnu.org/PR111527" class="uri">https://gcc.gnu.org/PR111527</a> to
-<code>gcc</code> upstream.</p>
-<p>On top of that as a medium-term workaround I proposed the change to
-<code>linux</code> to allow variables as large as the whole limit:
-<a href="https://lkml.org/lkml/2023/9/24/381" class="uri">https://lkml.org/lkml/2023/9/24/381</a>.</p>
-<p>But meanwhile I’ll try to patch <code>gcc</code> (and maybe <code>clang</code>?) just for
-<code>nixpkgs</code> to apply programmatic mangling similar to:</p>
-<pre><code># Pseudocode. real regexps do not work for `gcc`:
--fmacro-prefix-map=s,$NIX_STORE/[a-z0-9]{32}-,$NIX_STORE/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-</code></pre>
-<p>Have fun!</p>]]></description>
-    <pubDate>Thu, 21 Sep 2023 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/299-maximum-argument-count-on-linux-and-in-gcc.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
