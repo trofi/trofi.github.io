@@ -10,8 +10,266 @@
         <email>slyich@gmail.com</email>
         
     </author>
-    <updated>2024-12-12T00:00:00Z</updated>
+    <updated>2024-12-26T00:00:00Z</updated>
     <entry>
+    <title>Another Nix Expression Language non-determinism example</title>
+    <link href="https://trofi.github.io/posts/330-another-nix-language-nondeterminism-example.html" />
+    <id>https://trofi.github.io/posts/330-another-nix-language-nondeterminism-example.html</id>
+    <published>2024-12-26T00:00:00Z</published>
+    <updated>2024-12-26T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>Today I found another source of non-determinism in <code>nix expression language</code>.
+This time it’s a
+<a href="https://github.com/NixOS/nix/issues/12106"><code>builtins.sort</code></a> primitive!</p>
+<p>How do you break <code>sort</code>?</p>
+<p>Compared to the
+<a href="https://trofi.github.io/posts/292-nix-language-nondeterminism-example.html">previous non-determinism instance</a>
+this case of non-determinism breaking <code>sort</code> is not as arcane.</p>
+<h2 id="a-working-sort-example">a working <code>sort</code> example</h2>
+<p>Before triggering the problematic condition let’s look at a working sort:</p>
+<pre><code>$ nix repl
+nix-repl&gt; builtins.sort builtins.lessThan [ 4 3 2 1 ]
+[
+  1
+  2
+  3
+  4
+]
+
+nix-repl&gt; builtins.sort (a: b: a &lt; b) [ 4 3 2 1 ]
+[
+  1
+  2
+  3
+  4
+]</code></pre>
+<p>All nice and good: we pass the comparison predicate and get some result
+back. In the first case we are passing a builtin comparator. In the
+second case we write a lambda that implements <code>&lt;</code>. Nothing fancy.</p>
+<p>Normally <code>sort</code> function expects a bunch of properties from the passed
+predicate, like
+<a href="https://en.wikipedia.org/wiki/Weak_ordering#Strict_weak_orderings">“strict weak ordering”</a>
+to return something that looks sorted.</p>
+<h2 id="suspicious-sort-call">suspicious <code>sort</code> call</h2>
+<p>But what happens if we pass a predicate that does not satisfy that
+property? On vanilla <code>nix</code> that would be:</p>
+<pre><code>nix-repl&gt; builtins.sort (a: b: true) [ 4 3 1 2 ]
+[ 2 1 3 4 ]</code></pre>
+<p>The result is not sensible, but at least it did not crash. All good?</p>
+<p><strong>Quiz question:</strong> Is this returned order guaranteed to be the same across <code>nix</code> implementations
+on different platforms?</p>
+<h2 id="triggering-the-non-determinism">triggering the non-determinism</h2>
+<p>Today I tried to build <code>nix</code> package with <code>gcc</code> <code>STL</code>
+<a href="https://gcc.gnu.org/onlinedocs/libstdc++/manual/debug_mode_using.html#debug_mode.using.mode">debugging enabled</a>. In theory it’s simple: you pass <code>-D_GLIBCXX_DEBUG</code> via
+<code>CXXFLAGS</code> and you get your debugging for free.</p>
+<p>I was chasing an unrelated <code>nix</code> memory corruption bug and did just that.
+I hoped for a simple case like the past <a href="https://github.com/NixOS/nix/pull/8825">PR#8825</a>.</p>
+<p>To my surprise <code>nixpkgs</code> evaluation started triggering <code>libstdc++</code>
+assertions. For the above “suspicious sort” example the execution was:</p>
+<pre><code>$ nix eval --expr 'builtins.sort (a: b: true) [ 4 3 2 1 ]
+
+/nix/store/L89IQC7AM6I60Y8VK507ZWRZXF0WCD3V-gcc-14-20241116/include/c++/14-20241116/bits/stl_algo.h:5027:
+In function:
+    void std::stable_sort(_RAIter, _RAIter, _Compare) [with _RAIter =
+    nix::Value**; _Compare = nix::prim_sort(EvalState&amp;, PosIdx, Value**,
+    Value&amp;)::&lt;lambda(nix::Value*, nix::Value*)&gt;]
+
+Error: comparison doesn't meet irreflexive requirements, assert(!(a &lt; a)).
+
+Objects involved in the operation:
+    instance &quot;functor&quot; @ 0x7ffd7d2fdb00 {
+      type = nix::prim_sort(nix::EvalState&amp;, nix::PosIdx, nix::Value**, nix::Value&amp;)::{lambda(nix::Value*, nix::Value*)#1};
+    }
+    iterator::value_type &quot;ordered type&quot;  {
+      type = nix::Value*;
+    }
+Aborted (core dumped)</code></pre>
+<p>Uh-oh. A crash where there was none before. Note how <code>libstdc++</code> tells us
+that our comparator is not expected to return <code>true</code> for <code>a &lt; a</code>.</p>
+<h2 id="builtins.sort-implementation"><code>builtins.sort</code> implementation</h2>
+<p>Looking at the <code>nix</code> implementation around the crash it reveals that
+<code>nix</code> uses <code>std::stable_sort</code> to implement <code>builtins.sort</code>
+(<a href="https://github.com/NixOS/nix/blob/bff9296ab997269d703c5222b7e17d67a107aeed/src/libexpr/primops.cc#L3642">link</a>) with no predicate validation:</p>
+<pre class="cpp"><code>static void prim_sort(EvalState &amp; state, const PosIdx pos, Value * * args, Value &amp; v)
+{
+    state.forceList(*args[1], pos, &quot;while evaluating the second argument passed to builtins.sort&quot;);
+
+    auto len = args[1]-&gt;listSize();
+    if (len == 0) {
+        v = *args[1];
+        return;
+    }
+
+    state.forceFunction(*args[0], pos, &quot;while evaluating the first argument passed to builtins.sort&quot;);
+
+    auto list = state.buildList(len);
+    for (const auto &amp; [n, v] : enumerate(list))
+        state.forceValue(*(v = args[1]-&gt;listElems()[n]), pos);
+
+    auto comparator = [&amp;](Value * a, Value * b) {
+        /* Optimization: if the comparator is lessThan, bypass
+           callFunction. */
+        if (args[0]-&gt;isPrimOp()) {
+            auto ptr = args[0]-&gt;primOp()-&gt;fun.target&lt;decltype(&amp;prim_lessThan)&gt;();
+            if (ptr &amp;&amp; *ptr == prim_lessThan)
+                return CompareValues(state, noPos, &quot;while evaluating the ordering function passed to builtins.sort&quot;)(a, b);
+        }
+
+        Value * vs[] = {a, b};
+        Value vBool;
+        state.callFunction(*args[0], vs, vBool, noPos);
+        return state.forceBool(vBool, pos, &quot;while evaluating the return value of the sorting function passed to builtins.sort&quot;);
+    };
+
+    /* FIXME: std::sort can segfault if the comparator is not a strict
+       weak ordering. What to do? std::stable_sort() seems more
+       resilient, but no guarantees... */
+    std::stable_sort(list.begin(), list.end(), comparator);
+
+    v.mkList(list);
+}</code></pre>
+<p>Here <code>comparator()</code> calls user-supplied function written in
+<code>nix expression language</code> directly (if we ignore a performance special
+case) into <code>std::stable_sort()</code>. The comment suggests that <code>std::sort()</code>
+was already crashing here.</p>
+<p>This means that today <code>builtins.sort</code> semantics are following <code>c++</code>’s
+<code>std::stable_sort()</code> along with it’s undefined behaviours and
+instability for non-conformant <code>comparator()</code> predicate.</p>
+<h2 id="tracking-down-bad-predicates">tracking down bad predicates</h2>
+<p><code>nixpkgs</code> is a vast code base. It’s quite hard to figure out which part
+of <code>nix expression language</code> code triggers this condition from a <code>C++</code>
+stack trace. I added the following hack into local <code>nix</code> to convert
+those violations into nix-level exceptions:</p>
+<pre class="diff"><code>--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -3633,6 +3633,24 @@ static void prim_sort(EvalState &amp; state, const PosIdx pos, Value * * args, Value
+                 return CompareValues(state, noPos, &quot;while evaluating the ordering function passed to builtins.sort&quot;)(a, b);
+         }
+
++        /* Validate basic ordering requirements for comparator: */
++        {
++            Value * vs[] = {a, a};
++            Value vBool;
++            state.callFunction(*args[0], vs, vBool, noPos);
++            bool br = state.forceBool(vBool, pos, &quot;while evaluating the return value of the sorting function passed to builtins.sort&quot;);
++            if (br)
++                state.error&lt;EvalError&gt;(&quot;!(a &lt; a) assert failed&quot;).atPos(pos).debugThrow();
++        }
++        {
++            Value * vs[] = {b, b};
++            Value vBool;
++            state.callFunction(*args[0], vs, vBool, noPos);
++            bool br = state.forceBool(vBool, pos, &quot;while evaluating the return value of the sorting function passed to builtins.sort&quot;);
++            if (br)
++                state.error&lt;EvalError&gt;(&quot;!(b &lt; b) assert failed&quot;).atPos(pos).debugThrow();
++        }
++
+         Value * vs[] = {a, b};
+         Value vBool;
+         state.callFunction(*args[0], vs, vBool, noPos);</code></pre>
+<p>Here before calling the <code>compare(a,b)</code> against two different list
+elements we are making sure that <code>compare(a,a)</code> and <code>compare(b,b)</code> does
+not return <code>true</code>.</p>
+<p>And now the error is a bit less intimidating:</p>
+<pre><code>nix-repl&gt; builtins.sort (a: b: true) [ 4 3 2 1 ]
+error:
+       … while calling the 'sort' builtin
+         at «string»:1:1:
+            1| builtins.sort (a: b: true) [ 4 3 2 1 ]
+             | ^
+
+       error: !(a &lt; a) assert failed</code></pre>
+<p>On a <code>nixpkgs</code> input the evaluation now fails as:</p>
+<pre><code>$ nix-instantiate -A colmapWithCuda --show-trace
+error:
+       … while calling a functor (an attribute set with a '__functor' attribute)
+         at pkgs/top-level/all-packages.nix:5843:20:
+         5842|   colmap = libsForQt5.callPackage ../applications/science/misc/colmap { inherit (config) cudaSupport; };
+         5843|   colmapWithCuda = colmap.override { cudaSupport = true; };
+             |                    ^
+         5844|
+...
+         at pkgs/development/cuda-modules/generic-builders/multiplex.nix:88:17:
+           87|   # perSystemReleases :: List Package
+           88|   allReleases = lib.pipe releaseSets [
+             |                 ^
+           89|     (lib.attrValues)</code></pre>
+<p>This points us at
+<a href="https://github.com/NixOS/nixpkgs/blob/1557114798a3951db0794379f26b68a5fdf68b12/pkgs/development/cuda-modules/generic-builders/multiplex.nix#L83"><code>cuda-modules/generic-builders/multiplex.nix</code></a>:</p>
+<pre class="nix"><code>  preferable =
+    p1: p2: (isSupported p2 -&gt; isSupported p1) &amp;&amp; (strings.versionAtLeast p1.version p2.version);
+
+  # ...
+
+  newest = builtins.head (builtins.sort preferable allReleases);</code></pre>
+<p>Can you quickly say if <code>preferable</code> satisfies <code>lessThan</code> requirements?</p>
+<p><code>left &gt;= right</code> is generally problematic for sorts:</p>
+<pre><code>nix-repl&gt; builtins.sort (a: b: a &gt;= b) [ 4 3 3 1 ]
+error:
+       … while calling the 'sort' builtin
+         at «string»:1:1:
+            1| builtins.sort (a: b: a &gt;= b) [ 4 3 3 1 ]
+             | ^
+
+       error: !(a &lt; a) assert failed</code></pre>
+<p>To make the comparator stricter it should contain strict inequality,
+like <code>b &lt; a</code> or <code>!(a &gt;= b)</code>:</p>
+<pre><code>nix-repl&gt; builtins.sort (a: b: b &lt; a) [ 4 3 3 1 ]
+[
+  4
+  3
+  3
+  1
+]
+
+nix-repl&gt; builtins.sort (a: b: !(b &gt;= a)) [ 4 3 3 1 ]
+[
+  4
+  3
+  3
+  1
+]</code></pre>
+<p>I proposed a seemingly trivial change as <a href="https://github.com/NixOS/nixpkgs/pull/368366">PR#368366</a>:</p>
+<pre class="diff"><code>--- a/pkgs/development/cuda-modules/generic-builders/multiplex.nix
++++ b/pkgs/development/cuda-modules/generic-builders/multiplex.nix
+@@ -81,7 +81,7 @@ let
+   redistArch = flags.getRedistArch hostPlatform.system;
+
+   preferable =
+-    p1: p2: (isSupported p2 -&gt; isSupported p1) &amp;&amp; (strings.versionAtLeast p1.version p2.version);
++    p1: p2: (isSupported p2 -&gt; isSupported p1) &amp;&amp; (strings.versionOlder p2.version p1.version);
+
+   # All the supported packages we can build for our platform.
+   # perSystemReleases :: List Package
+</code></pre>
+<p>I’m not sure it’s correct.</p>
+<p><code>cuda-modules</code> is not the only <code>sort</code> <code>lessThan</code> property violation. Next
+failure is a <code>stan</code> package:</p>
+<pre><code>$ nix build --no-link -f. cmdstan --show-trace
+...
+       … while calling the 'sort' builtin
+         at pkgs/build-support/coq/meta-fetch/default.nix:115:55:
+          114|     if (isString x &amp;&amp; match &quot;^/.*&quot; x == null) then
+          115|       findFirst (v: versions.majorMinor v == x) null (sort versionAtLeast (attrNames release))
+             |                                                       ^
+          116|     else
+
+       error: !(a &lt; a) assert failed</code></pre>
+<p>Here you can already see that the pattern is suspiciously similar:
+<code>sort versionAtLeast</code> probably does not do what it’s expected to do.</p>
+<p>More stuff to fix!</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nix expression language</code> used in <code>nix</code> package manager is of
+minimalistic kind: it does not have much syntax sugar
+hoping to reach high performance and predictability of the evaluation.
+And it it manages to surprise me time and time again where I have to
+debug both <code>nix expression language</code> and it’s underlying <code>c++</code>
+implementation.</p>
+<p>Sorting is tricky if you allow a user-supplied sorting predicate.</p>
+<p><code>nixpkgs</code> has a few more sorting predicate violations that needs to be
+fixed.</p>
+<p>Have fun!</p>]]></summary>
+</entry>
+<entry>
     <title>Rebasing past reformats</title>
     <link href="https://trofi.github.io/posts/329-rebasing-past-reformats.html" />
     <id>https://trofi.github.io/posts/329-rebasing-past-reformats.html</id>
@@ -5107,6 +5365,8 @@ to it.</li>
 <code>pypy3Packages.home-assistant-chip-clusters</code> dereferenced <code>null</code>.</li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/361669">PR#361669</a>:
 <code>kubernetes-kcp.tests</code> was not passing a required parameter.</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/367950">PR#367950</a>:
+<code>darktable</code> update script was called with incorrect parameters.</li>
 </ul>
 <p>Note: It’s not the full list of required fixes. For more complex cases I
 filed a few bugs to get maintainers’ help:</p>
@@ -8444,49 +8704,6 @@ in structs marked with <code>GTY(())</code> attribute.</p>
 outcomes will be valid.</p>
 <p><code>-fchecking=2</code> not just changes <code>c++</code> <code>gcc</code> understands but also changes
 the way <code>gcc</code> generates code. Both are bugs, but are scary ones.</p>
-<p>Have fun!</p>]]></summary>
-</entry>
-<entry>
-    <title>Inline graphviz dot in hakyll</title>
-    <link href="http://trofi.github.io/posts/300-inline-graphviz-dot-in-hakyll.html" />
-    <id>http://trofi.github.io/posts/300-inline-graphviz-dot-in-hakyll.html</id>
-    <published>2023-10-06T00:00:00Z</published>
-    <updated>2023-10-06T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<p><a href="https://github.com/trofi/trofi.github.io.gen/commit/0872d9dc50c9d15b50ceda16d408a45e5655c913">A while ago</a>
-I added <code>.dot</code> file support into this blog and used it on
-<a href="https://trofi.github.io/posts/248-how-do-shared-library-collisions-break.html">“How do shared library collisions break?”</a>
-post.</p>
-<p>The change was very easy and helped me a bit to add more visual arrows
-into posts that came after.</p>
-<p>The result was fine for larger <code>.dot</code> files, but one-liners were a bit
-clumsy to insert into a stand alone external file. I tried to add a
-quick support for inline <code>.dot</code> syntax and failed.</p>
-<p>But today I had enough time to actually finish it and behold!</p>
-<img src="https://trofi.github.io/posts.data.inline/300-inline-graphviz-dot-in-hakyll/fig-0.gv.svg" />
-<p>This is generated by the following snippet:</p>
-<pre class="dot"><code>    ```{render=dot}
-    digraph {
-      node [shape=box]
-      B [shape=egg]
-      A -&gt; B [label=&quot;i am dotted&quot; style=dotted color=red]
-      A -&gt; C [solor=blue]
-      B -&gt; C -&gt; A [color=green]
-    }
-    ```</code></pre>
-<p>The <a href="https://github.com/trofi/trofi.github.io.gen/commit/1329f12fb75572007cc7dcdc0f980fdd7ba176d7">full change</a>
-ended up being very small thanks to <code>pandoc</code> and <code>hakyll</code>’s <code>unixFilter</code>:</p>
-<pre class="haskell"><code>inlineDotWithGrapthviz :: TP.Pandoc -&gt; Compiler TP.Pandoc
-inlineDotWithGrapthviz = TPW.walkM inlineDot
-
-inlineDot :: TP.Block -&gt; Compiler TP.Block
-inlineDot cb@(TP.CodeBlock (id, classes, namevals) contents)
-  | lookup &quot;render&quot; namevals == Just &quot;dot&quot;
-  = TP.RawBlock (TP.Format &quot;html&quot;) . DT.pack &lt;$&gt; (unixFilter &quot;dot&quot; [&quot;-Tsvg&quot;] (DT.unpack contents))
-inlineDot x = return x</code></pre>
-<p>Here we traverse the <code>pandoc</code> representation of <code>markdown</code> and substitute
-<code>{render=dot}</code> for the raw output of <code>dot -Tsvg</code> tool call. Easy!</p>
-<p>If you never saw what <code>graphviz</code> is capable have a loot at
-<a href="https://graphviz.org/gallery/">their gallery</a>.</p>
 <p>Have fun!</p>]]></summary>
 </entry>
 
