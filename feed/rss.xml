@@ -7,8 +7,273 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sat, 15 Feb 2025 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sat, 19 Apr 2025 00:00:00 UT</lastBuildDate>
         <item>
+    <title>gcc-15 bugs, pile 2</title>
+    <link>https://trofi.github.io/posts/332-gcc-15-bugs-pile-2.html</link>
+    <description><![CDATA[<p>8 more months have passed since my previous
+<a href="https://trofi.github.io/posts/323-gcc-15-bugs-pile-1.html">pile report</a>. <code>gcc-15</code> was
+<a href="https://gcc.gnu.org/pipermail/gcc/2025-April/245943.html">branched off</a>
+from <code>master</code> and will receive only regression fixes. <code>master</code> is called
+<code>gcc-16</code> now.</p>
+<p>It’s a good time to look at the compiler bugs I encountered.</p>
+<h2 id="summary">summary</h2>
+<p>I got about 30 of those:</p>
+<ul>
+<li><a href="https://gcc.gnu.org/PR116516"><code>rtl-optimization/116516</code></a>: ICE on
+<code>linux-6.10</code> due to inability to handle some address calculation
+expressions.</li>
+<li><a href="https://gcc.gnu.org/PR116797"><code>middle-end/116516</code></a>: ICE on
+<code>libvpx-1.14.1</code> due to a vectorizer bug that tried to access outside
+array boundary.</li>
+<li><a href="https://gcc.gnu.org/PR116814"><code>middle-end/116814</code></a>: ICE on
+<code>libjack2-1.9.22</code>i due to <code>gcc</code>’s inability to generate code for
+saturated subtraction</li>
+<li><a href="https://gcc.gnu.org/PR116817"><code>tree-optimization/116817</code></a>: ICE on
+<code>libajantv2-16.2</code> <code>gcc</code>’s vectorizer broke on a loop invariant</li>
+<li><a href="https://gcc.gnu.org/PR116857"><code>libstdc++/116857</code></a>: <code>mingw32</code> build
+failure, was exposed after re-enabling most warnings on <code>gcc</code> headers.</li>
+<li><a href="https://gcc.gnu.org/PR116880"><code>c++/116880</code></a>: <code>co_await</code> use-after-free
+on <code>nix-2.24.8</code> code. A <code>gcc</code> bug in coroutine lifetime management.</li>
+<li><a href="https://gcc.gnu.org/PR116911"><code>c++/116911</code></a>: <code>qt5.qtbase</code> build
+failure due to <code>gcc</code> regression in assigning external linkage to local
+variables.</li>
+<li><a href="https://gcc.gnu.org/PR117039"><code>bootstrap/117039</code></a>: <code>-Werror=</code> <code>libcpp</code>
+<code>gcc</code> buld failure due to format string problems.</li>
+<li><a href="https://gcc.gnu.org/PR117114"><code>c++/117114</code></a>: <code>-Woverloaded-virtual</code>
+false positives due to a <code>gcc</code> in how it tracks methods in case of
+multiple inheritance.</li>
+<li><a href="https://gcc.gnu.org/PR117141"><code>middle-end/117141</code></a>: duplicate pattern
+definitions for subtraction-with-saturation primitive. A build warning.</li>
+<li><a href="https://gcc.gnu.org/PR117177"><code>c/117177</code></a>: wrong code on global arrays
+used by <code>python-3.12.7</code> and others. <code>gcc</code> generated invalid bytes that
+represent the array.</li>
+<li><a href="https://gcc.gnu.org/PR117190"><code>c/117190</code></a>: ICE on <code>linux-6.11.3</code>,
+another case of <code>gcc</code>’s inability to generate static const arrays
+similar to the previous entry.</li>
+<li><a href="https://gcc.gnu.org/PR117194"><code>target/117194</code></a>: wrong code on
+<code>highway-1.2.0</code> in vectorizer code. <code>gcc</code> used incorrect order of
+operands in <code>ANDN</code> primitive.</li>
+<li><a href="https://gcc.gnu.org/PR117220"><code>libstdc++/117220</code></a>: <code>stl_iterator</code> and
+<code>clang</code> incompatibility: <code>gcc</code> allows slightly different mix of
+<code>[[..]]</code> and <code>__attribute((..))</code> style of attributes ordering than
+<code>clang</code>.</li>
+<li><a href="https://gcc.gnu.org/PR117288"><code>lto/117288</code></a>: <code>lto</code> ICE on <code>wolfssl</code>,
+constant arrays are not handled by <code>gcc</code>. This time in <code>LTO</code> bytecode.</li>
+<li><a href="https://gcc.gnu.org/PR117306"><code>tree-optimization/117306</code></a>: <code>-O3</code>
+vectorizer ICE on <code>netpbm-11.8.0</code> of certain <code>bool</code> calculation patterns.</li>
+<li><a href="https://gcc.gnu.org/PR117378"><code>middle-end/117378</code></a>: <code>waybar</code> ICE on
+<code>c++</code> due to a <code>gcc</code> bug in expansion of ternary operators.</li>
+<li><a href="https://gcc.gnu.org/PR117476"><code>rtl-optimization/117476</code></a>: wrong code
+on <code>grep</code> and <code>libgcrypt</code> in a code that handles zero-extension.</li>
+<li><a href="https://gcc.gnu.org/PR117496"><code>middle-end/117496</code></a>: infinite recursion
+on <code>cdrkit</code> due to <code>a | b</code> pattern generating still foldable result.</li>
+<li><a href="https://gcc.gnu.org/PR117843"><code>bootstrap/117843</code></a>: fortran bootstrap
+build failure (<code>-Werror</code>). A missing enum entry handling.</li>
+<li><a href="https://gcc.gnu.org/PR117980"><code>c++/117980</code></a>: ICE on <code>nix-2.25.2</code> where
+<code>gcc</code> transformation broke the type of underlying expression.</li>
+<li><a href="https://gcc.gnu.org/PR118124"><code>c++/118124</code></a>: ICE on <code>nss</code>, <code>c++</code>
+constant arrays were not handled in <code>initializer_list&lt;...&gt;</code>.</li>
+<li><a href="https://gcc.gnu.org/PR118168"><code>preprocessor/118168</code></a>: slow <code>mypy</code>
+compilation on <code>-Wmisleading-indentation</code>. <code>gcc</code> parsed the whole file
+multiple times to resolve locations.</li>
+<li><a href="https://gcc.gnu.org/PR118205"><code>tree-optimization/118205</code></a>: <code>libdeflate</code>
+wrong code, fails <code>libtiff</code> tests due to a <code>gcc</code> bug in handling
+certain form of <code>PHI</code> modes.</li>
+<li><a href="https://gcc.gnu.org/PR118409"><code>tree-optimization/118409</code></a>: <code>gas</code> is
+compiled incorrectly due to <code>gcc</code> bug in handling <code>xor</code> on sub-byte
+bit fields.</li>
+<li><a href="https://gcc.gnu.org/PR118856"><code>c++/118856</code></a>: <code>mesonlsp-4.3.7</code> ICE
+and wrong code due to too early temporary destruction for arrays.</li>
+<li><a href="https://gcc.gnu.org/PR119138"><code>c++/119138</code></a>: <code>mingw32</code> bootstrap
+failure due to a <code>gcc</code> regression in attribute tracking for pointers.</li>
+<li><a href="https://gcc.gnu.org/PR119226"><code>middle-end/119226</code></a>: <code>vifm-0.14</code> ICE on
+<code>strcspn()</code> due to a bad folding recently added to <code>gcc</code> just for this
+function.</li>
+<li><a href="https://gcc.gnu.org/PR119278"><code>analyzer/119278</code></a>: <code>gnutls</code> <code>-fanalyzer</code>
+ICE due to lack of handling of a new type for static const arrays.</li>
+<li><a href="https://gcc.gnu.org/PR119428"><code>target/119428</code></a>: <code>e2fsprogs-1.47.2</code>
+wrong code on bit reset due to a wrong <code>btr</code> pattern.</li>
+<li><a href="https://gcc.gnu.org/PR119646"><code>c++/119428</code></a>: <code>lix</code> ICE on coroutine
+code where coroutine types and values cause <code>gcc</code> to fail to handle
+more complicated (but allowed by standard) cases.</li>
+</ul>
+<h2 id="fun-bugs">fun bugs</h2>
+<h3 id="e2fsprogs-bug"><code>e2fsprogs</code> bug</h3>
+<p>The <a href="https://gcc.gnu.org/PR119428"><code>e2fsprogs bug</code></a> was an interesting
+case of wrong code. This was enough to trigger it:</p>
+<pre class="c"><code>// $ cat bug.c
+__attribute__((noipa, optimize(1)))
+void bug_o1(unsigned int nr, void * addr)
+{
+        unsigned char   *ADDR = (unsigned char *) addr;
+
+        ADDR += nr &gt;&gt; 3;
+        *ADDR &amp;= (unsigned char) ~(1 &lt;&lt; (nr &amp; 0x07));
+}
+
+__attribute__((noipa, optimize(2)))
+void bug_o2(unsigned int nr, void * addr)
+{
+        unsigned char   *ADDR = (unsigned char *) addr;
+
+        ADDR += nr &gt;&gt; 3;
+        *ADDR &amp;= (unsigned char) ~(1 &lt;&lt; (nr &amp; 0x07));
+}
+
+int main() {
+  void * bmo1 = __builtin_malloc(1024);
+  void * bmo2 = __builtin_malloc(1024);
+  for (unsigned bno = 0; bno &lt; 1024 * 8; ++bno) {
+    __builtin_memset(bmo1, 0xff, 1024);
+    __builtin_memset(bmo2, 0xff, 1024);
+    bug_o1(bno, bmo1);
+    bug_o2(bno, bmo2);
+    if (__builtin_memcmp(bmo1, bmo2, 1024) != 0)
+      __builtin_trap();
+  }
+}</code></pre>
+<p>Crashing as:</p>
+<pre><code>$ gcc bug.c -o bug -O0 &amp;&amp; ./bug
+Illegal instruction (core dumped)</code></pre>
+<p>The <code>gcc</code> <a href="https://gcc.gnu.org/cgit/gcc/commit/?id=584b346a4c7a6e6e77da6dc80968401a3c08161d">fix</a>
+amends mask calculation as:</p>
+<pre class="diff"><code>--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -18168,7 +18168,8 @@
+  [(set (match_dup 4) (match_dup 1))
+   (set (match_dup 0)
+        (any_rotate:SWI (match_dup 4)
+-		       (subreg:QI (match_dup 2) 0)))]
++		       (subreg:QI
++			 (and:SI (match_dup 2) (match_dup 3)) 0)))]
+  &quot;operands[4] = gen_reg_rtx (&lt;MODE&gt;mode);&quot;)
+ 
+ (define_insn_and_split &quot;*&lt;insn&gt;&lt;mode&gt;3_mask_1&quot;
+@@ -18202,7 +18203,8 @@
+   == GET_MODE_BITSIZE (&lt;MODE&gt;mode) - 1&quot;
+  [(set (match_dup 4) (match_dup 1))
+   (set (match_dup 0)
+-       (any_rotate:SWI (match_dup 4) (match_dup 2)))]
++       (any_rotate:SWI (match_dup 4)
++		       (and:QI (match_dup 2) (match_dup 3))))]
+  &quot;operands[4] = gen_reg_rtx (&lt;MODE&gt;mode);&quot;)
+ 
+ (define_insn_and_split &quot;*&lt;insn&gt;&lt;mode&gt;3_add&quot;</code></pre>
+<p>Here <code>gcc</code> incorrectly compiled <code>bug_o2()</code> into a single <code>btr</code>
+instruction. <code>gcc</code> assumed <code>btr</code> performs a typical 8-bit mask on
+register operand like other instructions do. But in case of <code>btr</code> it’s
+a 3/4/5-bit mask (for 8/16/32-bit offsets).</p>
+<h3 id="mesonlsp-bug"><code>mesonlsp</code> bug</h3>
+<p>The <a href="https://gcc.gnu.org/PR118856"><code>mesonlsp</code> bug</a> was also interesting.
+There seemingly trivial code:</p>
+<pre class="cpp"><code>// $ cat bug.cpp
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+int main(){
+  for (const auto &amp;vec : std::vector&lt;std::vector&lt;std::string&gt;&gt;{
+           {&quot;aaa&quot;},
+       }) {
+  }
+}</code></pre>
+<p>crashed at runtime:</p>
+<pre><code># ok
+$ g++ bug.cpp -o bug -fsanitize=address
+$ ./bug
+
+# bad:
+$ g++ bug.cpp -o bug -fsanitize=address -std=c++23
+$ ./bug
+
+=================================================================
+==3828042==ERROR: AddressSanitizer: heap-use-after-free on address 0x7ba90dbe0040 at pc 0x000000404279 bp 0x7ffd9db5c110 sp 0x7ffd9db5c108
+READ of size 8 at 0x7ba90dbe0040 thread T0
+    #0 0x000000404278 in std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_data() const (bug+0x404278)
+...
+
+0x7ba90dbe0040 is located 0 bytes inside of 32-byte region [0x7ba90dbe0040,0x7ba90dbe0060)
+freed by thread T0 here:
+    #0 0x7f790f1180c8 in operator delete(void*, unsigned long) (/&lt;&lt;NIX&gt;&gt;/gcc-15.0.1-lib/lib/libasan.so.8+0x1180c8)
+    #1 0x000000406a4b in std::__new_allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::deallocate(std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, unsigned long) (bug+0x406a4b)
+...
+
+previously allocated by thread T0 here:
+    #0 0x7f790f1171a8 in operator new(unsigned long) (/&lt;&lt;NIX&gt;&gt;/gcc-15.0.1-lib/lib/libasan.so.8+0x1171a8)
+    #1 0x000000404c9f in std::__new_allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::allocate(unsigned long, void const*) (bug+0x404c9f)
+...
+
+SUMMARY: AddressSanitizer: heap-use-after-free (bug+0x404278) in std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_data() const
+Shadow bytes around the buggy address:
+  0x7ba90dbdfd80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7ba90dbdfe00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7ba90dbdfe80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7ba90dbdff00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7ba90dbdff80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=&gt;0x7ba90dbe0000: fa fa 00 00 00 fa fa fa[fd]fd fd fd fa fa fd fd
+  0x7ba90dbe0080: fd fa fa fa fd fd fd fd fa fa fa fa fa fa fa fa
+  0x7ba90dbe0100: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x7ba90dbe0180: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x7ba90dbe0200: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x7ba90dbe0280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==3828042==ABORTING</code></pre>
+<p>It’s a use-after-free bug. Caused by the <code>gcc</code> bugs in temporary
+variables lifetime tracking. The <code>gcc</code> fixes
+(<a href="https://gcc.gnu.org/cgit/gcc/commit/?id=e96e1bb69c7b46db18e747ee379a62681bc8c82d">one</a>,
+<a href="https://gcc.gnu.org/cgit/gcc/commit/?id=720c8f685210af9fc9c31810e224751102f1481e">two</a>)
+are not very small, thus I’ll not post them here.</p>
+<h2 id="histograms">histograms</h2>
+<p>As usual what are the subsystems we found the bugs in?</p>
+<ul>
+<li><code>c++</code>: 8</li>
+<li><code>middle-end</code>: 6</li>
+<li><code>tree-optimization</code>: 4</li>
+<li><code>bootstrap</code>: 2</li>
+<li><code>c</code>: 2</li>
+<li><code>libstdc++</code>: 2</li>
+<li><code>lto</code>: 2</li>
+<li><code>rtl-optimization</code>: 2</li>
+<li><code>target</code>: 2</li>
+<li><code>analyzer</code>: 1</li>
+<li><code>preprocessor</code>: 1</li>
+</ul>
+<p>Surprisingly this time <code>c++</code> is at the top of the list. It feels like
+coroutine related bugs pushed the needle. Otherwise <code>middle-end</code> and
+<code>tree-optimization</code> that follow are expected.</p>
+<h2 id="parting-words">parting words</h2>
+<p>Of the bugs above it looks like I reported only 18 of those while 13
+were already reported by others.</p>
+<p>Optimised handling of global constant arrays (<code>#embed</code>-style code) caused
+numerous bugs in various subsystems from compiler crashes to wrong code.</p>
+<p>The most disruptive change probably is the switch to
+<a href="https://trofi.github.io/posts/326-gcc-15-switched-to-c23.html"><code>c23</code></a>.</p>
+<p>Past month was very quiet from <code>gcc</code> bugs view. <code>gcc-15</code> is in a good
+shape to be released.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Sat, 19 Apr 2025 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/332-gcc-15-bugs-pile-2.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>Trying out helix editor</title>
     <link>https://trofi.github.io/posts/331-trying-out-helix-editor.html</link>
     <description><![CDATA[<p>This is another February story about text editors similar to the
@@ -5658,6 +5923,12 @@ to it.</li>
 <code>lego.tests</code> refers to non-existent test.</li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/389369">PR#389369</a>:
 <code>nixosTests.floorp</code> referred to unavailable attribute</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/397002">PR#397002</a>:
+<code>apacheKafka.tests</code> referred to wrong attribute</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/399997">PR#399997</a>:
+<code>python3Packages.ray</code> built infinite recursion</li>
+<li><a href="https://github.com/NixOS/nixpkgs/pull/400179">PR#400179</a>:
+<code>zed-editor.tests</code> refers to non-existent attribute.</li>
 </ul>
 <p>Note: It’s not the full list of required fixes. For more complex cases I
 filed a few bugs to get maintainers’ help:</p>
@@ -7494,379 +7765,6 @@ schedule them for removal.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Wed, 08 Nov 2023 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/303-Zero-Hydra-Failures-towards-23.11-NixOS-release.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>-Ofast and -ffast-math non-local effects</title>
-    <link>http://trofi.github.io/posts/302-Ofast-and-ffast-math-non-local-effects.html</link>
-    <description><![CDATA[<h2 id="tldr">Tl;DR:</h2>
-<p><code>-ffast-math</code> / <code>-Ofast</code> options are very tricky to use correctly:
-in addition to breaking your immediate floating point arithmetic code
-(which you might be prepared for) it also <strong>breaks the code not compiled
-with these options</strong> but happen to be present in the same address
-space:</p>
-<img src="https://trofi.github.io/posts.data.inline/302-Ofast-and-ffast-math-non-local-effects/fig-0.gv.svg" />
-<p>Here I assume that code built with <code>-Ofast</code> was clean and was prepared
-to changes caused by <code>-Ofast</code> effect. <code>-O2</code>-compiled code was not
-prepared for <code>-Ofast</code> flag effects.</p>
-<p>All the red boxes are negatively affected by the module compiled with
-<code>-Ofast</code>.</p>
-<h2 id="more-words">More words</h2>
-<p>Let’s start off with an executable example: we’ll construct a very small
-<code>double</code> value and print it with some of it’s properties:</p>
-<h3 id="an-example">An example</h3>
-<pre class="c"><code>#include &lt;math.h&gt;
-#include &lt;stdio.h&gt;
-
-static const char * fpc(double v) {
-    switch (fpclassify(v)) {
-        case FP_ZERO: return &quot;FP_ZERO&quot;;
-        case FP_SUBNORMAL: return &quot;FP_SUBNORMAL&quot;;
-        case FP_NORMAL: return &quot;FP_NORMAL&quot;;
-        case FP_INFINITE: return &quot;FP_INFINITE&quot;;
-        case FP_NAN: return &quot;FP_NAN&quot;;
-        default: return &quot;UKNOWN (unhandled?)&quot;;
-    }
-}
-
-int main() {
-    double small = 0x1.0p-1040;
-    volatile double also_small = 0x1.0p-1040;
-    printf(&quot;     small = %a or %e (%s)\n&quot;, small, small, fpc(small));
-    printf(&quot;also_small = %a or %e (%s)\n&quot;, also_small, also_small, fpc(also_small));
-}</code></pre>
-<p>C standard defines a few <code>FP</code> classes (taken from <code>man fpcassify</code>):</p>
-<ul>
-<li><code>FP_NAN</code>: x is “Not a Number”.</li>
-<li><code>FP_INFINITE</code>: x is either positive infinity or negative infinity.</li>
-<li><code>FP_ZERO</code>: x is zero.</li>
-<li><code>FP_SUBNORMAL</code>: x is too small to be represented in normalized format.</li>
-<li><code>FP_NORMAL</code>: if nothing of the above is correct then it must be a
-normal floating-point number.</li>
-</ul>
-<p>I am using <code>volatile</code> on <code>also_small</code> to prevent <code>gcc</code> from folding
-constants at compile time. I also use <code>gcc</code> extension to write down
-floats in hexadecimal form (instead of decimal form).</p>
-<p>Quick quiz: what class should the above program print you think?</p>
-<p>Let’s run it and see the answer:</p>
-<pre><code>$ gcc a.c -o a -O2 &amp;&amp; ./a
-     small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-also_small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-
-$ gcc a.c -o a -Ofast &amp;&amp; ./a
-     small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-also_small = 0x0.00004p-1022 or 8.487983e-314 (FP_ZERO)
-
-$ gcc a.c -o a -ffast-math &amp;&amp; ./a
-     small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-also_small = 0x0.00004p-1022 or 8.487983e-314 (FP_ZERO)</code></pre>
-<p>Apparently it depends! On <code>-O2</code> the value is detected as <code>FP_SUBNORMAL</code>
-and on <code>-Ofast</code> (or <code>-ffast-math</code>) it goes as <code>FP_ZERO</code>. Thus <code>printf()</code>
-disagrees and prints something that looks more like a small number than
-zero.</p>
-<p>That is unfortunate. But maybe it’s expected by someone who uses
-<code>-Ofast</code>?</p>
-<h2 id="cross-module-effects">Cross-module effects</h2>
-<p>Let’s create an empty <code>empty.c</code> file and build it with <code>-Ofast</code>. And
-then build our initial program with <code>-O2</code>. I’ll use <code>gcc-12</code>
-specifically:</p>
-<pre><code>$ touch empty.c
-$ gcc-12 -shared -fPIC empty.c -Ofast -o libfast.so
-
-$ gcc-12 -O2 a.c -o a &amp;&amp; ./a
-     small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-also_small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-
-$ gcc-12 -O2 a.c -o a -L. -Wl,--no-as-needed -lfast -Wl,-rpath,'$ORIGIN' &amp;&amp; ./a
-     small = 0x0.00004p-1022 or 8.487983e-314 (FP_SUBNORMAL)
-also_small = 0x0.00004p-1022 or 8.487983e-314 (FP_ZERO)</code></pre>
-<p>See the difference?</p>
-<p>Some distributions like Debian or Ubuntu use <code>-Wl,--as-needed</code> by
-default and throw away the library dependencies without explicit symbol
-references. <code>-Wl,--no-as-needed</code> makes sure we still retain <code>-lfast</code> in
-our runtime dependencies.</p>
-<p>Note how the mere presence of <code>libfast.so</code> in the library dependencies
-changes output of the program otherwise compiled and liked with <code>-O2</code>
-option:</p>
-<img src="https://trofi.github.io/posts.data.inline/302-Ofast-and-ffast-math-non-local-effects/fig-1.gv.svg" />
-<h2 id="breakage-mechanics">Breakage mechanics</h2>
-<p>Before looking at the implementation let’s have a look at the option
-descriptions <code>gcc</code> man page provides:</p>
-<pre><code>-ffast-math
-
-  Sets the options -fno-math-errno, -funsafe-math-optimizations,
-  -ffinite-math-only, -fno-rounding-math, -fno-signaling-nans,
-  -fcx-limited-range and -fexcess-precision=fast.
-
-  This option causes the preprocessor macro &quot;__FAST_MATH__&quot; to be defined.
-
-  This option is not turned on by any -O option besides -Ofast since it
-  can result in incorrect output for programs that depend on an exact
-  implementation of IEEE  or  ISO  rules/specifications  for math
-  functions. It may, however, yield faster code for programs that do not
-  require the guarantees of these specifications.</code></pre>
-<p>Note how vague the description is: it says your floating point code
-might do something funny that violates C standard but does not go into
-specifics.</p>
-<p>For most people it should be a good hint not to use the option lightly.</p>
-<p>The effect we see in <code>fpclassify()</code> in our example’s instability is the
-result of <code>-funsafe-math-optimizations</code> option. That one is described as:</p>
-<pre><code>-funsafe-math-optimizations
-
-  Allow optimizations for floating-point arithmetic that (a) assume that
-  arguments and results are valid and (b) may violate IEEE or ANSI
-  standards.  When used at link time, it may include libraries or
-  startup files that change the default FPU control word or other
-  similar optimizations.
-
-  This option is not turned on by any -O option since it can result in
-  incorrect output for programs that depend on an exact implementation
-  of IEEE or ISO rules/specifications for math functions. It  may,
-  however, yield faster code for programs that do not require the
-  guarantees of these specifications.  Enables -fno-signed-zeros,
-  -fno-trapping-math, -fassociative-math and -freciprocal-math.
-
-  The default is -fno-unsafe-math-optimizations.</code></pre>
-<p>This option changes global setting of an <code>FP</code> unit at program start.
-This change affects not only the code explicitly compiled with
-<code>-ffast-math</code> but also affects everything else that resides in the same
-address space.</p>
-<p>Mechanically the <code>FPU</code> state changes when <code>gcc</code> links <code>crtfastmath.o</code>
-on <code>-Ofast</code> / <code>-ffast-math</code>. Object file is implemented via <code>spec</code>
-machinery:</p>
-<pre><code>$ gcc -dumpspecs | fgrep crtfastmath
-
-... %{Ofast|ffast-math|funsafe-math-optimizations:crtfastmath.o%s} ...</code></pre>
-<p>This <code>spec</code> dump tells <code>gcc</code> to always add a <code>crtfastmath.o</code> as an input
-if any of <code>-Ofast</code>, <code>-ffast-math</code> or <code>-funsafe-math-optimizations</code> is
-passed to <code>gcc</code>. We can also verify it with <code>-Wl,-t</code> to trace all linker
-inputs:</p>
-<pre><code>$ touch a.c
-
-$ gcc -shared a.c -o libshared.so -Wl,-t |&amp; fgrep crtfast
-&lt;nothing&gt;
-
-$ gcc -shared a.c -o libshared.so -Wl,-t -Ofast |&amp; fgrep crtfast |&amp; unnix
-/&lt;&lt;NIX&gt;&gt;/gcc-12.3.0/lib/gcc/x86_64-unknown-linux-gnu/12.3.0/crtfastmath.o</code></pre>
-<p>To achieve this effect <code>libgcc/config/i386/crtfastmath.c</code> defines global
-constructor to change <code>FP</code> state:</p>
-<pre class="c"><code>static void __attribute__((constructor))
-set_fast_math (void)
-{
-  unsigned int mxcsr = __builtin_ia32_stmxcsr ();
-  mxcsr |= MXCSR_DAZ | MXCSR_FTZ;
-  __builtin_ia32_ldmxcsr (mxcsr);
-}</code></pre>
-<p>The above code sets two flags normally disabled in <code>mxcsr</code> <code>SSE</code> flags
-register:</p>
-<ul>
-<li><code>DAZ</code>: Denormalized-Are-Zero - denormalized inputs are treated as zeros.</li>
-<li><code>FTZ</code>: Flush-To-Zero - denormalized outputs are converted to zero.</li>
-</ul>
-<p>This effect was seen as too problematic by many and <code>gcc-13</code> stopped
-enabling <code>crtfastmath.o</code> for libraries (<code>-shared</code> option) in
-<a href="https://gcc.gnu.org/PR55522" class="uri">https://gcc.gnu.org/PR55522</a>.</p>
-<p><code>clang-19</code> will follow <code>gcc</code> example in
-<a href="https://github.com/thexujie/llvm-project/commit/971cc613e994a308f939f68247257b65e04c74fa" class="uri">https://github.com/thexujie/llvm-project/commit/971cc613e994a308f939f68247257b65e04c74fa</a>.
-On top of that <code>clang-19</code> will have a <code>-mdaz-ftz</code> / <code>-mno-daz-ftz</code> flag
-to override the default.</p>
-<p>While the fix limits the impact to final programs that enable <code>-Ofast</code>
-it is still able to break all the libraries linked into the program
-linked with <code>-Ofast</code>.</p>
-<p>As the library test suites are usually not ran with <code>-Ofast</code> the
-breakage might not be noticed until data corruption starts happening on
-real data in final applications.</p>
-<h2 id="actual-breakage-in-an-actual-program">Actual breakage in an actual program</h2>
-<p>I did not know about this <code>-ffast-math</code> problem until <code>nixpkgs</code> updated
-<code>libsodium</code> library to <code>1.0.19</code> which started defaulting to
-<code>-Ofast</code> in <a href="https://github.com/jedisct1/libsodium/commit/ad4584d45590654b9d863ced90d2b2561d5cfbda">“Try using -Ofast / -O3 by default” commit</a>.</p>
-<p>After a <code>libsodium</code> upgrade test suites for various programs started
-failing with obscure errors of data corruption around <code>double</code> conversion
-to string and back. In some of the cases <code>libsodium</code> was not even used
-directly and was an indirect dependency via <code>libzmq</code>:</p>
-<img src="https://trofi.github.io/posts.data.inline/302-Ofast-and-ffast-math-non-local-effects/fig-2.gv.svg" />
-<p>It was very confusing to see <code>bitcoind</code> to fail <code>double</code> serialization /
-deserialization tests after <code>libsodium</code> update (which API was not used
-in the <code>program</code> at all).</p>
-<p>I usually try to avoid crypto-currency software. But in this case
-compiler was implied to generate bad code and I had to look closer.</p>
-<h2 id="other-compilers">Other compilers</h2>
-<p><code>clang</code> also considers disabling <code>crtfastmath.o</code> for shared libraries
-to follow <code>gcc</code> lead: <a href="https://github.com/llvm/llvm-project/issues/57589" class="uri">https://github.com/llvm/llvm-project/issues/57589</a>.</p>
-<p>According to <a href="https://en.wikipedia.org/wiki/Subnormal_number#Intel_SSE">Wikipedia</a>
-<code>ICC</code> enables <code>-ffast-math</code> equivalent on the optimizations above <code>-O0</code>.
-That sounds quite unsafe.</p>
-<h2 id="why-do-we-even-have-that-lever">Why do we even have that lever?</h2>
-<p>But why do these transformations exist at all? Why treat small <code>double</code>s
-differently compared to larger values? We don’t do it with small
-integers after all (I hope!).</p>
-<p>Apparently at least older CPUs (and maybe modern ones as well?) were
-slower to handle denormalized values. Sometimes 100x slower. Thus
-cutting a corner here might have a visible win in applications that
-don’t care about precision or predictability of the result.</p>
-<h2 id="binary-representation-of-floating-points">Binary representation of floating points</h2>
-<p>How small those values need to be to get flushed to zero on occasion?</p>
-<p>Wikipedia’s <a href="https://en.wikipedia.org/wiki/Double-precision_floating-point_format">“Double-precision floating-point format” article</a>
-is a great detailed explanation of the <code>float64</code> format.</p>
-<p>Tl;DR: all the numbers of 64-bits have the following bit layout:</p>
-<img src="https://trofi.github.io/posts.data.inline/302-Ofast-and-ffast-math-non-local-effects/fig-3.gv.svg" />
-<p>Depending on the exponent <code>exp</code> value there are two formulas and
-three(ish) cases:</p>
-<ul>
-<li>Normalized values (for <code>exp</code> in <code>1</code> - <code>2046</code> range): <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mi>−</mi><mn>1</mn><mo stretchy="true" form="postfix">)</mo></mrow><mrow><mi>s</mi><mi>i</mi><mi>g</mi><mi>n</mi></mrow></msup><mo>×</mo><msup><mn>2</mn><mrow><mi>e</mi><mi>x</mi><mi>p</mi><mo>−</mo><mn>1023</mn></mrow></msup><mo>×</mo><mn>1</mn><mi>.</mi><mrow><mi>f</mi><mi>r</mi><mi>a</mi><mi>c</mi></mrow></mrow><annotation encoding="application/x-tex">{(-1)}^{sign}\times2^{exp-1023}\times1.{frac}</annotation></semantics></math></li>
-<li>Denormalized values: (for <code>exp == 0</code>): <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><mi>−</mi><mn>1</mn><mo stretchy="true" form="postfix">)</mo></mrow><mrow><mi>s</mi><mi>i</mi><mi>g</mi><mi>n</mi></mrow></msup><mo>×</mo><msup><mn>2</mn><mrow><mi>e</mi><mi>x</mi><mi>p</mi><mo>−</mo><mn>1022</mn></mrow></msup><mo>×</mo><mn>0</mn><mi>.</mi><mrow><mi>f</mi><mi>r</mi><mi>a</mi><mi>c</mi></mrow></mrow><annotation encoding="application/x-tex">{(-1)}^{sign}\times2^{exp-1022}\times0.{frac}</annotation></semantics></math></li>
-<li><code>exp == 2047</code>: <code>NaN</code>s and infinities of sorts</li>
-</ul>
-<p>The main detail here is implied <code>1.frac</code> vs <code>0.frac</code> in the first two
-cases. Otherwise the structure is the same. A few examples of value
-encodings:</p>
-<table>
-<colgroup>
-<col style="width: 25%" />
-<col style="width: 25%" />
-<col style="width: 25%" />
-<col style="width: 25%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th>value</th>
-<th>encoded</th>
-<th>sign/exp/frac</th>
-<th>notes</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>0x1.5p0</code></td>
-<td><code>0x3ff5000000000000</code></td>
-<td><code>0/0x3ff/0x0005000000000000</code></td>
-<td>A normalized value</td>
-</tr>
-<tr class="even">
-<td><code>0x1.0p-1022</code></td>
-<td><code>0x0010000000000000</code></td>
-<td><code>0/1/0</code></td>
-<td>Smallest normalized value</td>
-</tr>
-<tr class="odd">
-<td><code>0x0.fffffffffffffp-1022</code></td>
-<td><code>0x000fffffffffffff</code></td>
-<td><code>0/0/0x000fffffffffffff</code></td>
-<td>Largest denormalized value</td>
-</tr>
-<tr class="even">
-<td><code>0x1.5p-1040</code></td>
-<td><code>0x0000054000000000</code></td>
-<td><code>0/0/0x0054000000000</code></td>
-<td>A denormalized value</td>
-</tr>
-<tr class="odd">
-<td><code>0x1.0p-1074</code></td>
-<td><code>0x0000000000000001</code></td>
-<td><code>0/0/1</code></td>
-<td>Smallest denormalized value</td>
-</tr>
-<tr class="even">
-<td><code>0.0</code></td>
-<td><code>0x0000000000000000</code></td>
-<td><code>0/0/0</code></td>
-<td>Positive zero</td>
-</tr>
-<tr class="odd">
-<td><code>-0.0</code></td>
-<td><code>0x8000000000000000</code></td>
-<td><code>1/0/0</code></td>
-<td>Negative zero</td>
-</tr>
-<tr class="even">
-<td><code>Inf</code></td>
-<td><code>0x7ff0000000000000</code></td>
-<td><code>0/0x7ff/0</code></td>
-<td>Positive infinity</td>
-</tr>
-<tr class="odd">
-<td><code>-Inf</code></td>
-<td><code>0xfff0000000000000</code></td>
-<td><code>1/0x7ff/0</code></td>
-<td>Negative infinity</td>
-</tr>
-<tr class="even">
-<td><code>NaN</code></td>
-<td><code>0xfff8000000000000</code></td>
-<td><code>1/0x7ff/0x0008000000000000</code></td>
-<td>NaN for <code>0/0</code> value</td>
-</tr>
-</tbody>
-</table>
-<p>There are various curious facts about this encoding:</p>
-<p>Normalized and denormalized value sets do not intersect: all
-denormalized absolute values are smaller than smallest normalized value.</p>
-<p>Having a short glance at first 3 hexadecimal digits is enough to get the
-idea which <code>FP</code> class we are looking at:</p>
-<ul>
-<li><code>0x000 / 0x800</code>: Denormalized numbers or zero</li>
-<li><code>0x7ff / 0xfff</code>: <code>NaN</code> or infinities</li>
-</ul>
-<p>Normalized values do not allow for <code>0.0</code> encoding: <code>frac</code> always has
-an implied leading <code>1.</code> start for fraction. Thus zeros have to be
-encoded using denormalized scheme.</p>
-<p>(Positive) zero is encoded as all zero bits. Thus <code>memset()</code> on array of
-floats creates sensible array of zeros.</p>
-<p>There are two zeros: signed and unsigned.</p>
-<p>While zeros require subnormal encoding of an exponent they are
-considered a separate <code>FP_ZERO</code> class from <code>FP_SUBNORMAL</code></p>
-<p>Normalized values use all their 52 bits of fraction for precision.
-Denormalized values usually use less as they maintain a few leading
-zeros to encode smaller values.</p>
-<p>Looking at the binary representation one can imagine how CPU would
-implement at least trivial operations (like addition and subtraction)
-on floating points with the same exponent value and then slightly extend
-it to operation on numbers with different exponents.</p>
-<h2 id="the-effect-of-mxcsr_daz-and-mxcsr_ftz">The effect of <code>MXCSR_DAZ</code> and <code>MXCSR_FTZ</code></h2>
-<p>By now it should be clear that <code>MXCSR_DAZ</code> and <code>MXCSR_FTZ</code> flags
-effectively turn any denormalized value into zero for any <code>FP</code> operation.</p>
-<p>The minor problem happens if denormalized value is already constructed
-in memory and is used by something else. That is why we get seemingly
-nonsensical result above when <code>FP_ZERO</code> has a non-zero encoding:</p>
-<pre><code>also_small = 0x0.00004p-1022 or 8.487983e-314 (FP_ZERO)</code></pre>
-<p>Is it hard to hit a denormalized value? It depends! If you operate on
-small values like <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msup><mn>10</mn><mrow><mi>−</mi><mn>20</mn></mrow></msup><annotation encoding="application/x-tex">10^{-20}</annotation></semantics></math> (micros) and use to raise it to higher
-powers, like 16, then you get outside the normal range:
-<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mrow><mo stretchy="true" form="prefix">(</mo><msup><mn>10</mn><mrow><mi>−</mi><mn>20</mn></mrow></msup><mo stretchy="true" form="postfix">)</mo></mrow><mn>16</mn></msup><mo>=</mo><mn>0</mn><mi>x</mi><mn>0.00000000007</mn><mi>e</mi><mn>8</mn><msup><mi>p</mi><mrow><mi>−</mi><mn>1022</mn></mrow></msup></mrow><annotation encoding="application/x-tex">{(10^{-20})}^{16} = 0x0.00000000007e8p^{-1022}</annotation></semantics></math></p>
-<p>These are very small values.</p>
-<p>With such flushing enabled it is a lot easier to hit a <code>NaN</code> by dividing
-(flushed) zero by (flushed) zero or by subtracting infinities a bit after.</p>
-<h2 id="parting-words">Parting words</h2>
-<p><code>-Ofast</code> is not a safe option to use without a second thought. In
-addition to breaking your immediate floating point arithmetic code
-<code>-ffast-math</code> / <code>-Ofast</code> also breaks the code not compiled with these
-options. This non-local effect is most problematic.</p>
-<p><code>libsodium</code> tried it and broke a few reverse dependencies that relied on
-denormalized values to work as expected.</p>
-<p>For the time being <code>libsodium</code> <a href="https://github.com/jedisct1/libsodium/commit/0e0e2c16401e63777dce8c7958a3ca789055dfcf">rolled back</a>
-<code>-Ofast</code> default. That should stop <code>FP</code> code breakage for users of older
-<code>gcc</code>.</p>
-<p>There probably is a lot more packages enabling <code>-Ofast</code> without
-realizing what effects it causes on <code>FP</code> code correctness somewhere
-else.</p>
-<p>To notice the problem the code needs to exercise denormalized values
-which might require very small actual values as operands.</p>
-<p>What is worse: the truncation problems might come and go depending on
-what compiler decides to do with the intermediate values: perform
-an operation on <code>FP</code> unit and observe the truncation, pass it in
-memory and process using bitwise arithmetic and not observe the
-truncation or re-associate the operations and expose denormalized values.
-This instability effect is very similar to <code>i387</code> <code>FPU</code> instability
-on <code>i386</code> documented at <a href="https://gcc.gnu.org/wiki/x87note" class="uri">https://gcc.gnu.org/wiki/x87note</a>.</p>
-<p>Floating point encoding is straightforward, but is full of corner cases:
-normalized, denormalized, zeros, infinities and <code>NaN</code>s. Handling all the
-cases requires extra work from the programmer and the CPU.</p>
-<p><code>MXCSR_DAZ</code> and <code>MXCSR_FTZ</code> status bits allow CPU to treat most
-denormalized values as zeros at a cost of <code>C</code> and <code>IEEE</code> standard
-conformance.</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Wed, 25 Oct 2023 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/302-Ofast-and-ffast-math-non-local-effects.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
