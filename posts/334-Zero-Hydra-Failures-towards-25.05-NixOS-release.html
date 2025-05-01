@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Zero Hydra Failures towards 25.05 NixOS release</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>Zero Hydra Failures towards 25.05 NixOS release</h1>
+            
+                <div class="info">May  1, 2025</div>
+            
+
+            <p>It’s May 1 and that means <code>NixOS-25.05</code> is almost
+<a href="https://github.com/NixOS/nixpkgs/issues/390768">there</a>. Today the
+release entered <a href="https://github.com/NixOS/nixpkgs/issues/390768"><code>ZHF</code> phase</a>
+(<code>Zero Hydra Failures</code>) where the main focus
+is to squash as many build failures as possible before the release.</p>
+<p>It’s a good time to fix easy build failures or remove long broken
+packages. <a href="https://github.com/NixOS/nixpkgs/issues/390768" class="uri">https://github.com/NixOS/nixpkgs/issues/390768</a> contains
+detailed step-by-step to identify interesting packages.</p>
+<h2 id="an-example-package-fix">an example package fix</h2>
+<p>I usually try to fix at least one package during <code>ZHF</code>. This time I
+picked <a href="https://hydra.nixos.org/build/294989234"><code>hheretic</code></a>. The
+failure does not look too cryptic:</p>
+<pre><code>...
+checking for OpenGL support... no
+configure: error: *** OpenGL not found!</code></pre>
+<p>To get a bit more detail into it I usually use <code>nix develop</code>:</p>
+<pre><code>$ nix develop -f. hheretic
+$$ genericBuild
+checking for OpenGL support... no
+configure: error: *** OpenGL not found!
+...
+Running phase: buildPhase
+no Makefile or custom buildPhase, doing nothing
+...</code></pre>
+<p>Here I ran <code>genericBuild</code> to start a build process similar to what a
+<code>nix build -f. hheretic</code> would do.</p>
+<p>I got expected error (and a bit of extra stuff). Now I can peek at
+<code>config.log</code> to check why <code>OpenGL</code> was not detected:</p>
+<pre><code>$ cat config.log
+...
+configure:5413: checking for OpenGL support
+configure:5429: gcc -o conftest  -Wall -O2 -ffast-math -fomit-frame-pointer   conftest.c -lm  -Lno -lGL -lGLU &gt;&amp;5
+conftest.c:30:10: fatal error: GL/gl.h: No such file or directory
+   30 | #include &lt;GL/gl.h&gt;
+      |          ^~~~~~~~~
+compilation terminated.</code></pre>
+<p>The compiler does not see <code>GL/gl.h</code> header: a missing dependency. The
+first thing I tried was this patch:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/by-name/hh/hheretic/package.nix</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/by-name/hh/hheretic/package.nix</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -4,6 +4,8 @@</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>   fetchFromGitHub,</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>   SDL,</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>   SDL_mixer,</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  libGL,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  libGLU,</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>   autoreconfHook,</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>   gitUpdater,</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a> }:</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -27,6 +29,8 @@ stdenv.mkDerivation (finalAttrs: {</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>   buildInputs = [</span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>     SDL</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>     SDL_mixer</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a><span class="va">+    libGL</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="va">+    libGLU</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>   ];</span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>   strictDeps = true;</span></code></pre></div>
+<p>Running <code>nix build -f. hheretic</code> against it makes the package build
+successfully. THe change is proposed as a
+<a href="https://github.com/NixOS/nixpkgs/pull/403458">PR#403458</a> now.</p>
+<p>As a bonus let’s figure out when the package broke. In the
+<a href="https://hydra.nixos.org/job/nixos/trunk-combined/nixpkgs.hheretic.x86_64-linux">history tab</a>
+we can see that:</p>
+<ul>
+<li><a href="https://hydra.nixos.org/build/292311010" class="uri">https://hydra.nixos.org/build/292311010</a> was the last successful build</li>
+<li><a href="https://hydra.nixos.org/build/293013734" class="uri">https://hydra.nixos.org/build/293013734</a> was the first failing build</li>
+</ul>
+<p>Both links have <code>Inputs</code> tab where we can extract <code>nixpkgs</code> commits that
+correspond to the build. That is enough for bisection:</p>
+<pre><code>$ git clone https://github.com/NixOS/nixpkgs
+$ cd nixpkgs/
+$ git bisect start 81b934af6399c868c693a945415bd59771f41718 316f79657ec153b51bee287fb1fb016b104af9ef
+    Bisecting: 2949 revisions left to test after this (roughly 12 steps)
+    [8490862820028f5c371ac0a7fde471990ff6ad80] evcc: 0.200.9 -&gt; 0.201.0 (#390530)
+$ git bisect run nix build -f. hheretic
+running 'nix' 'build' '-f.' 'hheretic'
+Bisecting: 1476 revisions left to test after this (roughly 11 steps)
+...
+Bisecting: 0 revisions left to test after this (roughly 1 step)
+[e24f567a68111784e81cdda85e3784dd977f2ef8] Merge master into staging-next
+running 'nix' 'build' '-f.' 'hheretic'
+e47403cf2a2c76ae218bbf519c538b0ed419fa5f is the first bad commit
+commit e47403cf2a2c76ae218bbf519c538b0ed419fa5f
+Date:   Tue Mar 11 09:41:21 2025 +0100
+
+    SDL: point alias to SDL_compat
+
+ pkgs/top-level/all-packages.nix | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+bisect found first bad commit</code></pre>
+<p>Looking at <a href="https://github.com/NixOS/nixpkgs/commit/e47403cf2a2c76ae218bbf519c538b0ed419fa5f" class="uri">https://github.com/NixOS/nixpkgs/commit/e47403cf2a2c76ae218bbf519c538b0ed419fa5f</a>
+the <code>GitHub</code> UI says it corresponds to
+<a href="https://github.com/NixOS/nixpkgs/pull/389106">PR#389106</a>.</p>
+<p>Added
+<a href="https://github.com/NixOS/nixpkgs/pull/389106#issuecomment-2845845704">the comment</a>
+there to get attention of relevant authors.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>ZHF</code> event is a good way to contribute to <code>nixpkgs</code>. If you never did
+but were waiting for an occasion it’s a good one to try!</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
