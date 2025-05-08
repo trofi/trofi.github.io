@@ -7,8 +7,96 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Thu, 01 May 2025 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Thu, 08 May 2025 00:00:00 UT</lastBuildDate>
         <item>
+    <title>sort by key in coreutils</title>
+    <link>https://trofi.github.io/posts/335-sort-by-key-in-coreutils.html</link>
+    <description><![CDATA[<p>This post is about <code>sort</code> tool from <code>GNU coreutils</code>. Until today I
+foolishly thought that to sort a file by a second (and just second
+column) you just need to use <code>sort -k2</code> option.</p>
+<p>Indeed that does seem to work for a simple case:</p>
+<pre><code>$ printf &quot;1 2\n2 1\n&quot;
+1 2
+2 1</code></pre>
+<pre><code>$ printf &quot;1 2\n2 1\n&quot; | sort -k2
+2 1
+1 2</code></pre>
+<p>But today I attempted a slightly more complicated sort by sorting commit
+history:</p>
+<pre><code>abcd foo: commit z
+bcde bar: commit a
+cdef foo: commit y
+defg bar: commit b</code></pre>
+<p>I wanted to sort these by the <code>foo:</code> / <code>bar:</code> component while preserving
+the order of commit within the component. I want this outcome:</p>
+<pre><code>bcde bar: commit a
+defg bar: commit b
+abcd foo: commit z
+cdef foo: commit y</code></pre>
+<p>How do you achieve that? My naive attempt was to use <code>sort -k2 --stable</code>:</p>
+<pre><code>$ sort -k2 --stable &lt;l
+bcde bar: commit a
+defg bar: commit b
+cdef foo: commit y
+abcd foo: commit z</code></pre>
+<p>Note how <code>foo:</code> commits were unexpectedly reordered.</p>
+<p>Quick quiz: why did excessive reorder happen? How to fix it?</p>
+<h2 id="the-answer">The answer</h2>
+<p><code>sort --help</code> has an answer by describing what <code>-k2</code> key selection
+actually does. But <code>--debug</code> option is even better at illustrating what
+is being compared. Let’s use that:</p>
+<pre><code>$ LANG=C sort -k2 --stable --debug &lt;l
+sort: text ordering performed using simple byte comparison
+sort: leading blanks are significant in key 1; consider also specifying 'b'
+bcde bar: commit a
+    ______________
+defg bar: commit b
+    ______________
+cdef foo: commit y
+    ______________
+abcd foo: commit z
+    ______________</code></pre>
+<p>The <code>______________</code> underscore shows the actual compared key: it’s not
+just <code>foo:</code> or <code>bar:</code>. It’s the whole line that starts at the
+whitespace right before <code>foo:</code> and <code>bar:</code>. The fix is to tweak the selector:</p>
+<pre><code>$ LANG=C sort -k2,2 --stable --debug &lt;l
+sort: text ordering performed using simple byte comparison
+sort: leading blanks are significant in key 1; consider also specifying 'b'
+bcde bar: commit a
+    _____
+defg bar: commit b
+    _____
+abcd foo: commit z
+    _____
+cdef foo: commit y
+    _____</code></pre>
+<p>or with <code>-b</code> if leading spaces look confusing:</p>
+<pre><code>$ LANG=C sort -k2,2 --stable --debug -b &lt;l
+sort: text ordering performed using simple byte comparison
+bcde bar: commit a
+     ____
+defg bar: commit b
+     ____
+abcd foo: commit z
+     ____
+cdef foo: commit y
+     ____</code></pre>
+<p>This way the sorting works as expected:</p>
+<pre><code>$ LANG=C sort -k2,2 --stable -b &lt;l
+bcde bar: commit a
+defg bar: commit b
+abcd foo: commit z
+cdef foo: commit y</code></pre>
+<h2 id="parting-words">parting words</h2>
+<p><code>sort -k</code> is tricky: it’s not a field number but a field range. <code>--debug</code>
+option is great at showing used sorting key (or keys of <code>--stable</code> is not
+used).</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Thu, 08 May 2025 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/335-sort-by-key-in-coreutils.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>Zero Hydra Failures towards 25.05 NixOS release</title>
     <link>https://trofi.github.io/posts/334-Zero-Hydra-Failures-towards-25.05-NixOS-release.html</link>
     <description><![CDATA[<p>It’s May 1 and that means <code>NixOS-25.05</code> is almost
@@ -6941,7 +7029,7 @@ endianness-specific? Or it’s closer to <code>50/50</code>?</p>
 <p>Final table:</p>
 <table>
 <thead>
-<tr class="header">
+<tr>
 <th style="text-align: center;">target</th>
 <th style="text-align: center;">Is affected</th>
 <th style="text-align: center;">In registers</th>
@@ -6949,61 +7037,61 @@ endianness-specific? Or it’s closer to <code>50/50</code>?</p>
 </tr>
 </thead>
 <tbody>
-<tr class="odd">
+<tr>
 <td style="text-align: center;"><code>alpha</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">6</td>
 <td style="text-align: center;">7</td>
 </tr>
-<tr class="even">
+<tr>
 <td style="text-align: center;"><code>mips64</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">8</td>
 <td style="text-align: center;">9</td>
 </tr>
-<tr class="odd">
+<tr>
 <td style="text-align: center;"><code>loongarch64</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">8</td>
 <td style="text-align: center;">9</td>
 </tr>
-<tr class="even">
+<tr>
 <td style="text-align: center;"><code>s390x</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">5</td>
 <td style="text-align: center;">6</td>
 </tr>
-<tr class="odd">
+<tr>
 <td style="text-align: center;"><code>powerpc64</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">8</td>
 <td style="text-align: center;">9</td>
 </tr>
-<tr class="even">
+<tr>
 <td style="text-align: center;"><code>sparc64</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">6</td>
 <td style="text-align: center;">7</td>
 </tr>
-<tr class="odd">
+<tr>
 <td style="text-align: center;"><code>riscv64</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">8</td>
 <td style="text-align: center;">9</td>
 </tr>
-<tr class="even">
+<tr>
 <td style="text-align: center;"><strong><code>ia64</code></strong></td>
 <td style="text-align: center;"><strong>yes</strong></td>
 <td style="text-align: center;">8</td>
 <td style="text-align: center;">9</td>
 </tr>
-<tr class="odd">
+<tr>
 <td style="text-align: center;"><code>x86_64</code></td>
 <td style="text-align: center;">no</td>
 <td style="text-align: center;">6</td>
 <td style="text-align: center;">7</td>
 </tr>
-<tr class="even">
+<tr>
 <td style="text-align: center;"><strong><code>aarch64</code></strong></td>
 <td style="text-align: center;"><strong>yes</strong></td>
 <td style="text-align: center;">8</td>
@@ -7238,231 +7326,6 @@ as there were so many obvious bugs that required some attention.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Wed, 22 Nov 2023 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/306-gcc-14-bug-pile-3.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>fuzzing duperemove</title>
-    <link>http://trofi.github.io/posts/305-fuzzing-duperemove.html</link>
-    <description><![CDATA[<p><a href="https://github.com/markfasheh/duperemove/releases/tag/v0.14"><code>duperemove-0.14</code></a>
-was released yesterday and included a few small fixes I wrote about
-<a href="https://trofi.github.io/posts/304-duperemove-speedups.html">before</a>.</p>
-<p>On top of that the new release contains an overhauled parallel file
-scanner and database handler that scale a lot better on large files.</p>
-<h2 id="new-crashes">new crashes</h2>
-<p>Unfortunately recent changes also increased complexity of handling
-deduplication queue in a way that caused occasional crashes like
-asserts in <code>dedupe_extent_list()</code> at
-<a href="https://github.com/markfasheh/duperemove/issues/329"><code>run_dedupe.c:448</code></a>.</p>
-<p>In that case my typical dedupe run started crashing as:</p>
-<pre><code># duperemove -q --batchsize=0 --dedupe-options=partial,same -rd --hashfile=/run/duperemove/root-dupes.db /
-...
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-ERROR: run_dedupe.c:287
-[stack trace follows]
-/nix/store/528cmbj5wnz37llwkfwxjxj3j41ng0gi-duperemove-0.14/bin/duperemove(print_stack_trace+0x2e) [0x409aee]
-/nix/store/528cmbj5wnz37llwkfwxjxj3j41ng0gi-duperemove-0.14/bin/duperemove() [0x40d2dc]
-/nix/store/7wkspba8d5i28bw0jfxyi3c70wrw2512-glib-2.76.4/lib/libglib-2.0.so.0(+0x8b06a) [0x7f906e45006a]
-/nix/store/7wkspba8d5i28bw0jfxyi3c70wrw2512-glib-2.76.4/lib/libglib-2.0.so.0(+0x8a71d) [0x7f906e44f71d]
-/nix/store/qn3ggz5sf3hkjs2c797xf7nan3amdxmp-glibc-2.38-27/lib/libc.so.6(+0x8b084) [0x7f906e038084]
-/nix/store/qn3ggz5sf3hkjs2c797xf7nan3amdxmp-glibc-2.38-27/lib/libc.so.6(+0x10d60c) [0x7f906e0ba60c]
-
-/nix/store/b86jv7hh4656xf60mby91w7a93wi4h03-remove-dupes.bash: line 12: 405268 Aborted                 (core dumped) SQLITE_TMPDIR=/run/duperemove /nix/store/528cmbj5wnz37llwkfwxjxj3j41ng0gi-duperemove-0.14/bin/duperemove -q --batchsize=0 --dedupe-options=partial,same -rd --hashfile=/run/duperemove/root-dupes.db /
-
-duperemove-root.service: Main process exited, code=exited, status=134/n/a
-duperemove-root.service: Failed with result 'exit-code'.
-Failed to start duperemove-root.service.
-duperemove-root.service: Consumed 34min 12.755s CPU time, no IP traffic.</code></pre>
-<p>It took 30 minutes of CPU time (and about 10 minutes of real time) to
-only crash later.</p>
-<h2 id="crash-location">crash location</h2>
-<p>I poked a bit around the crash in <code>gdb</code> to find that failure happens
-somewhere in the middle of <a href="https://github.com/markfasheh/duperemove/blob/v0.14/run_dedupe.c#L274"><code>dedupe_extent_list()</code></a>.
-It’s a seemingly simple but big function:</p>
-<pre class="c"><code>static int dedupe_extent_list(struct dupe_extents *dext, uint64_t *fiemap_bytes,
-                              uint64_t *kern_bytes, unsigned long long passno)
-{
-    int last = 0;
-    struct dedupe_ctxt *ctxt = NULL;
-    // ...
-    list_for_each_entry(extent, &amp;dext-&gt;de_extents, e_list) {
-        if (list_is_last(&amp;extent-&gt;e_list, &amp;dext-&gt;de_extents))
-            last = 1;
-        // ...
-        if (...) {
-            // ...
-            if (ctxt &amp;&amp; last)
-                goto run_dedupe;
-            continue;
-        }
-        if (ctxt == NULL) {
-            ctxt = new_dedupe_ctxt(dext-&gt;de_num_dupes,
-                                   tgt_extent-&gt;e_loff, len,
-                                   tgt_extent-&gt;e_file);
-            // ...
-            if (tgt_extent == extent)
-                continue;
-            // ...
-        }
-        // ...
-        if (...) {
-            // ...
-            if (!last)
-                continue;
-        // ...
-run_dedupe:
-        // ...
-close_files:
-        filerec_close_open_list(&amp;open_files);
-        free_dedupe_ctxt(ctxt);
-        ctxt = NULL;
-        // ...
-    }
-    // ...
-    abort_on(ctxt != NULL); // we fail here
-    // ...
-}</code></pre>
-<p><code>duperemove</code> fails at <code>abort_on(ctxt != NULL);</code> assertion. The intent
-of the assert seems straightforward: <code>ctxt</code> is expected to be created
-within <code>list_for_each_entry()</code> loop and is destroyed before we exit the
-loop.</p>
-<p>There is a bit of logic that tries to track if we are in the last
-element of the loop to make sure we clean up properly.</p>
-<p>From a quick glance I was not able to figure out why <code>duperemove</code> crashes
-on my input. What is worse: running <code>duperemove</code> with
-<code>--io-threads=1 --cpu-threads=1</code> options to decrease parallelism and to
-simplify deduplication sequence started triggering an unrelated
-<code>abort_on()</code> in the same function.</p>
-<p>That means there not just one but a few different cases that manage to
-break <code>duperemove</code>.</p>
-<h2 id="building-a-reproducer">building a reproducer</h2>
-<p>As the scan takes at least 10 minutes on my input data I wondered if I
-could extract a smaller example to present for upstream.</p>
-<p>At first I though of crafting the files on the file system in a
-particular way to match the way <code>duperemove</code> breaks for me. But I also
-felt it would be a tedious task.</p>
-<p>Before actually trying to extract the first crash example I got an idea
-of fuzzing <code>duperemove</code>. In theory a simple sequence of random
-actions against a file system to create interesting enough file state
-would be able to create a lot more interesting scenarios than I have.
-Maybe I’ll get something that crashes <code>duperemove</code> faster?</p>
-<p>I though if the following operations for the fuzzer:</p>
-<ol type="1">
-<li>create a brand new file with a few (<code>4</code>) unique non-dedupable blocks</li>
-<li>copy full existing file contents with or without reflinking into a new file</li>
-<li>copy one random block from one random file to another random file</li>
-<li>run <code>duperemove</code> on the current state</li>
-</ol>
-<p><strong>Quick quiz</strong>: If we execute these actions at random, how long would it
-take to crash <code>duperemove</code>? A second, a minute, a day or never?</p>
-<p>Here is the direct <code>bash</code> implementation of the fuzzer described above:</p>
-<pre class="bash"><code>#!/usr/bin/env bash
-
-duperemove_binary=$1
-target_dir=$2
-
-shift; shift
-
-if [[ -z $duperemove_binary ]] || [[ -z $target_dir ]]; then
-    echo &quot;Usage: $0 &lt;/abs/path/to/duperemove&gt; &lt;directory&gt; [duperemove opts]&quot;
-    exit 1
-fi
-
-# fail on any error
-set -e
-
-mkdir &quot;$target_dir&quot;
-cd &quot;$target_dir&quot;
-
-shopt -s nullglob
-
-while :; do
-    sync
-    files=(*)
-    f_count=${#files[@]}
-    dst=$f_count
-
-    case $((RANDOM % 4)) in
-        0)  # copy existing file
-            [[ $f_count -eq 0 ]] &amp;&amp; continue
-
-            cp_arg=&quot;&quot;
-            case $((RANDOM % 2)) in
-                0) cp_arg=--reflink=always;;
-                1) cp_arg=--reflink=never;;
-            esac
-            src=$((RANDOM % f_count))
-            cp -v &quot;$cp_arg&quot; &quot;$src&quot; &quot;$dst&quot;
-            ;;
-        1) # create new file of 4x4KB distinct blocks
-            printf &quot;0%*d&quot; 4095 &quot;$dst&quot;  &gt; &quot;$dst&quot;
-            printf &quot;1%*d&quot; 4095 &quot;$dst&quot; &gt;&gt; &quot;$dst&quot;
-            printf &quot;2%*d&quot; 4095 &quot;$dst&quot; &gt;&gt; &quot;$dst&quot;
-            printf &quot;3%*d&quot; 4095 &quot;$dst&quot; &gt;&gt; &quot;$dst&quot;
-            ;;
-        2) # run duperemove
-            &quot;$duperemove_binary&quot; &quot;$@&quot; -rd -b 4096 &quot;$target_dir&quot;
-            ;;
-        3) # dd 4KB of one file into another
-            [[ $f_count -eq 0 ]] &amp;&amp; continue
-
-            src=$((RANDOM % f_count))
-            dst=$((RANDOM % f_count))
-            [[ $src = $dst ]] &amp;&amp; continue
-
-            src_block=$((RANDOM % 3))
-            dst_block=$((RANDOM % 3))
-            dd &quot;if=$src&quot; &quot;iseek=$src_block&quot; &quot;of=$dst&quot; &quot;oseek=$dst_block&quot; bs=4096 count=1
-            ;;
-    esac
-done</code></pre>
-<p>Specifically we always create <code>16KB</code> files and move <code>4KB</code> blocks around
-to make sure <code>duperemove</code> considers them as a whole. We also pass
-<code>-b 4096</code> block size as default block size is <code>128KB</code>.</p>
-<p>And now goes the quiz answer:</p>
-<pre><code>$ time { rm -rfv ~/tmp/dr/ &amp;&amp; bash ./duperemove-fuzz.bash $PWD/duperemove/duperemove ~/tmp/dr -q; }
-...
-Simple read and compare of file data found 12 instances of files that might benefit from deduplication.
-ERROR: run_dedupe.c:287
-[stack trace follows]
-/home/slyfox/dev/git/duperemove/duperemove(print_stack_trace+0x29) [0x409b39]
-/home/slyfox/dev/git/duperemove/duperemove() [0x40d844]
-/nix/store/6bpc4sc5apc2ryxhjyij43n3wi169hfn-glib-2.76.4/lib/libglib-2.0.so.0(+0x8ad72) [0x7f8da7b47d72]
-/nix/store/6bpc4sc5apc2ryxhjyij43n3wi169hfn-glib-2.76.4/lib/libglib-2.0.so.0(+0x8a41d) [0x7f8da7b4741d]
-/nix/store/znf2bj54q3qj4pyk0xbp7pk12xbxq07b-glibc-2.38-27/lib/libc.so.6(+0x908b1) [0x7f8da77278b1]
-/nix/store/znf2bj54q3qj4pyk0xbp7pk12xbxq07b-glibc-2.38-27/lib/libc.so.6(+0x114e6c) [0x7f8da77abe6c]
-./duperemove-fuzz.bash: line 27: 264572 Aborted                 (core dumped) &quot;$duperemove_binary&quot; &quot;$@&quot; -rd -b 4096 &quot;$target_dir&quot;
-
-real    0m3.354s
-user    0m0.530s
-sys     0m1.500s</code></pre>
-<p>3 seconds!</p>
-<p>I’m not always as lucky: sometimes it takes 2 seconds, sometimes as much
-as 8 seconds. It feels like a very good result for such a dumb script.</p>
-<h2 id="parting-words">parting words</h2>
-<p><code>duperemove</code> has a non-trivial state machine to track extent state to
-avoid multiple deduplication attempts. It clearly has a few bugs like
-<a href="https://github.com/markfasheh/duperemove/issues/329">issue #329</a>.</p>
-<p>Fuzzing works great for a small set of well defined operations. I picked
-a minimal subset of operations to trigger the failures.</p>
-<p>The fuzzer does not exercise other interesting operations like hardlinks
-creation, file removal or larger files with more interesting extent
-sharing structure. There is still more room for improvement to get into
-darker corners of state tracking in <code>duperemove</code>.</p>
-<p>I will not have much time debugging specifics of these <code>duperemove</code>
-crashes in the following days. Try to fix these crashes yourself!</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Tue, 21 Nov 2023 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/305-fuzzing-duperemove.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 

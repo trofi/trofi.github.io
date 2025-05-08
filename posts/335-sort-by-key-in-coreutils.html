@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>sort by key in coreutils</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>sort by key in coreutils</h1>
+            
+                <div class="info">May  8, 2025</div>
+            
+
+            <p>This post is about <code>sort</code> tool from <code>GNU coreutils</code>. Until today I
+foolishly thought that to sort a file by a second (and just second
+column) you just need to use <code>sort -k2</code> option.</p>
+<p>Indeed that does seem to work for a simple case:</p>
+<pre><code>$ printf &quot;1 2\n2 1\n&quot;
+1 2
+2 1</code></pre>
+<pre><code>$ printf &quot;1 2\n2 1\n&quot; | sort -k2
+2 1
+1 2</code></pre>
+<p>But today I attempted a slightly more complicated sort by sorting commit
+history:</p>
+<pre><code>abcd foo: commit z
+bcde bar: commit a
+cdef foo: commit y
+defg bar: commit b</code></pre>
+<p>I wanted to sort these by the <code>foo:</code> / <code>bar:</code> component while preserving
+the order of commit within the component. I want this outcome:</p>
+<pre><code>bcde bar: commit a
+defg bar: commit b
+abcd foo: commit z
+cdef foo: commit y</code></pre>
+<p>How do you achieve that? My naive attempt was to use <code>sort -k2 --stable</code>:</p>
+<pre><code>$ sort -k2 --stable &lt;l
+bcde bar: commit a
+defg bar: commit b
+cdef foo: commit y
+abcd foo: commit z</code></pre>
+<p>Note how <code>foo:</code> commits were unexpectedly reordered.</p>
+<p>Quick quiz: why did excessive reorder happen? How to fix it?</p>
+<h2 id="the-answer">The answer</h2>
+<p><code>sort --help</code> has an answer by describing what <code>-k2</code> key selection
+actually does. But <code>--debug</code> option is even better at illustrating what
+is being compared. Let’s use that:</p>
+<pre><code>$ LANG=C sort -k2 --stable --debug &lt;l
+sort: text ordering performed using simple byte comparison
+sort: leading blanks are significant in key 1; consider also specifying 'b'
+bcde bar: commit a
+    ______________
+defg bar: commit b
+    ______________
+cdef foo: commit y
+    ______________
+abcd foo: commit z
+    ______________</code></pre>
+<p>The <code>______________</code> underscore shows the actual compared key: it’s not
+just <code>foo:</code> or <code>bar:</code>. It’s the whole line that starts at the
+whitespace right before <code>foo:</code> and <code>bar:</code>. The fix is to tweak the selector:</p>
+<pre><code>$ LANG=C sort -k2,2 --stable --debug &lt;l
+sort: text ordering performed using simple byte comparison
+sort: leading blanks are significant in key 1; consider also specifying 'b'
+bcde bar: commit a
+    _____
+defg bar: commit b
+    _____
+abcd foo: commit z
+    _____
+cdef foo: commit y
+    _____</code></pre>
+<p>or with <code>-b</code> if leading spaces look confusing:</p>
+<pre><code>$ LANG=C sort -k2,2 --stable --debug -b &lt;l
+sort: text ordering performed using simple byte comparison
+bcde bar: commit a
+     ____
+defg bar: commit b
+     ____
+abcd foo: commit z
+     ____
+cdef foo: commit y
+     ____</code></pre>
+<p>This way the sorting works as expected:</p>
+<pre><code>$ LANG=C sort -k2,2 --stable -b &lt;l
+bcde bar: commit a
+defg bar: commit b
+abcd foo: commit z
+cdef foo: commit y</code></pre>
+<h2 id="parting-words">parting words</h2>
+<p><code>sort -k</code> is tricky: it’s not a field number but a field range. <code>--debug</code>
+option is great at showing used sorting key (or keys of <code>--stable</code> is not
+used).</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
