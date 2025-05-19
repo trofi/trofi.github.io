@@ -30,48 +30,58 @@
             
 
             <p>Я периодически нарываюсь на проблемы параллельной сборки всяких проектов
-средствами <strong>make</strong>. Из недавних: <a href="https://bugs.gentoo.org/show_bug.cgi?id=326347">баг #326347</a>,
-<a href="https://bugs.gentoo.org/show_bug.cgi?id=373947">баг #373947</a>. Эти баги особенны тем, что
-они проявляются только на 8-головых (и выше) машинах. На моём корытце они не очень хотят проявляться.</p>
-<p>Концептуально, <strong>Makefile</strong> - файл со списком целей и правил, по которым строятся промежуточные цели,
-чтобы достигнуть конечной.</p>
+средствами <code>make</code>. Из недавних: <a href="https://bugs.gentoo.org/show_bug.cgi?id=326347">баг
+#326347</a>, <a href="https://bugs.gentoo.org/show_bug.cgi?id=373947">баг
+#373947</a>. Эти баги
+особенны тем, что они проявляются только на 8-головых (и выше) машинах.
+На моём корытце они не очень хотят проявляться.</p>
+<p>Концептуально, <code>Makefile</code> - файл со списком целей и правил, по которым
+строятся промежуточные цели, чтобы достигнуть конечной.</p>
 <pre><code>A -(r1)-&gt; B  \
 C -(r2)-&gt; D (r4)-&gt; G
 E -(r3)-&gt; F  /</code></pre>
 <ul>
-<li><strong>A</strong>, <strong>B</strong>, <strong>C</strong> - начальные цели</li>
-<li><strong>D</strong>, <strong>E</strong>, <strong>F</strong> - промежуточные цели</li>
-<li><strong>G</strong> - конечная цель</li>
-<li><strong>rN</strong> - правила построения целей.</li>
+<li><code>A</code>, <code>B</code>, <code>C</code> - начальные цели</li>
+<li><code>D</code>, <code>E</code>, <code>F</code> - промежуточные цели</li>
+<li><code>G</code> - конечная цель</li>
+<li><code>r&lt;N&gt;</code> - правила построения целей.</li>
 </ul>
-<p>Обычно апстрим проекта тестирует сборку через команду <strong>make</strong> без всяких <strong>-jN</strong> параметров,
-а <strong>GNU make</strong> всегда выполняет правила для (хоть и независимых) целей в одном и том же порядке.</p>
+<p>Обычно апстрим проекта тестирует сборку через команду <code>make</code> без
+всяких <code>-jN</code> параметров, а <code>GNU make</code> всегда выполняет правила для
+(хоть и независимых) целей в одном и том же порядке.</p>
 <p>В итоге получаем порядок исполнения правил:</p>
 <ol type="1">
-<li><strong>r1</strong></li>
-<li><strong>r2</strong></li>
-<li><strong>r3</strong></li>
-<li><strong>r4</strong></li>
+<li><code>r1</code></li>
+<li><code>r2</code></li>
+<li><code>r3</code></li>
+<li><code>r4</code></li>
 </ol>
-<p>Но что, если <strong>r2</strong> всё-таки требует результата <strong>r1</strong> и <strong>Makefile</strong> - неправильный?
-Как бы извратиться и найти эту ошибку автоматически?</p>
+<p>Но что, если <code>r2</code> всё-таки требует результата <code>r1</code> и <code>Makefile</code> -
+неправильный? Как бы извратиться и найти эту ошибку автоматически?</p>
 <p>И вот что я надумал:</p>
-<p><strong>Простое решение.</strong>
-Произвольно переставлять порядок исполнения независимых целей при каждом запуске <strong>make</strong>
-в самом <strong>make</strong>. Так бы от запуска к запуску тестировались разные порядки сборки и возможные
-ошибки (правда, не все) выплывали чаще даже без использвания <strong>make -jN</strong>. Чтобы воспроизвести
-тот же порядок при ошибке make мог бы выводить на экран или в файл то, что заставило бы <strong>make</strong>
-пытаться собрать цели в том же порядке. К примеру, <strong>Makefile.faulty</strong> с явно заданной последовательностью
-правил.</p>
-<p><strong>Сложное решение.</strong>
-Встроить в <strong>make</strong> поддержку отслеживания всех порождаемых процессов (например, через <strong>ptrace</strong> или <strong>LD_PRELOAD</strong>)
-и записывать в какие цели они лезут на чтение/запись. После завершения сборки проверять: соответствует
-ли граф зависимотей целей тем целям, которые открывались дочерними программами. В теории, такой вариант
-(в отличии от предыдущего) способен находить сразу все недостаточные завосимости в <strong>Makefile</strong>.</p>
-<p><strong>ptrace</strong> используется <a href="http://git.exherbo.org/?p=sydbox.git;a=summary">sydbox</a> из <strong>exherbo</strong>,
-<strong>LD_PRELOAD</strong> используется (надо проверить) <a href="http://git.overlays.gentoo.org/gitweb/?p=proj/sandbox.git;a=summary">sandbox</a> из gentoo.
-На свете есть еще <a href="http://lwn.net/Articles/311350/">fsnotify</a>.</p>
-<h1 id="кто-реализует-раньше-чем-я-тот---молодец">Кто реализует раньше, чем я, тот - молодец! :]</h1>
+<p><strong>Простое решение.</strong> Произвольно переставлять порядок исполнения
+независимых целей при каждом запуске <code>make</code> в самом <code>make</code>. Так бы
+от запуска к запуску тестировались разные порядки сборки и возможные
+ошибки (правда, не все) выплывали чаще даже без использвания <code>make -j&lt;N&gt;</code>. Чтобы воспроизвести тот же порядок при ошибке make мог бы
+выводить на экран или в файл то, что заставило бы <code>make</code> пытаться
+собрать цели в том же порядке. К примеру, <code>Makefile.faulty</code> с явно
+заданной последовательностью правил.</p>
+<p><strong>Сложное решение.</strong> Встроить в <code>make</code> поддержку отслеживания всех
+порождаемых процессов (например, через <code>ptrace</code> или <code>LD_PRELOAD</code>) и
+записывать в какие цели они лезут на чтение/запись. После завершения
+сборки проверять: соответствует ли граф зависимотей целей тем целям,
+которые открывались дочерними программами. В теории, такой вариант (в
+отличии от предыдущего) способен находить сразу все недостаточные
+завосимости в <code>Makefile</code>.</p>
+<p><code>ptrace</code> используется
+<a href="http://git.exherbo.org/?p=sydbox.git;a=summary"><code>sydbox</code></a> из <code>exherbo</code>,
+<code>LD_PRELOAD</code> используется
+<a href="http://git.overlays.gentoo.org/gitweb/?p=proj/sandbox.git;a=summary"><code>sandbox</code></a>
+из <code>gentoo</code>. На свете есть еще
+<a href="http://lwn.net/Articles/311350/"><code>fsnotify</code></a>.</p>
+<p><strong>Кто реализует раньше, чем я, тот - молодец! :)</strong></p>
+<p><strong>UPDATE</strong>: в <code>GNU make</code> это реализовано в опции
+<a href="../posts/238-new-make-shuffle-mode.html"><code>--shuffle</code></a>.</p>
         </div>
     </body>
 </html>

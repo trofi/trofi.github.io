@@ -29,17 +29,21 @@
                 <div class="info">August 10, 2011</div>
             
 
-            <p>Этот пост будет про <a href="http://www.haskell.org/ghc/docs/latest/html/libraries/base/System-IO-Unsafe.html#v:unsafeInterleaveIO">unsafeInterleaveIO</a>.</p>
-<p>Часто хочется работать с <strong>IO</strong> данными, будто они являются ленивыми.
-Как <strong>hGetContents</strong> (или <strong>readFile</strong>), которая возвращает ленивую строку-содержание файла:</p>
+            <p>Этот пост будет про
+<a href="http://www.haskell.org/ghc/docs/latest/html/libraries/base/System-IO-Unsafe.html#v:unsafeInterleaveIO"><code>unsafeInterleaveIO</code></a>.</p>
+<p>Часто хочется работать с <code>IO</code> данными, будто они являются ленивыми.
+Как <code>hGetContents</code> (или <code>readFile</code>), которая возвращает ленивую
+строку-содержание файла:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">do</span> by_line <span class="ot">&lt;-</span> <span class="fu">lines</span> <span class="ot">`fmap`</span> <span class="fu">readFile</span> <span class="st">&quot;/some/log/file&quot;</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>   <span class="co">-- дальше работает с by_line как с обычным ленивым списком</span></span></code></pre></div>
-<p>По мере необходимости при использваонии новых строк они считываются с диска,
-а чтобы файл закрылся - надо обработать все данные (с этим надо аккуратно).</p>
-<p>Попробуем построить похожую функцию, которая получает данные из <strong>IO</strong> по мере использования.</p>
-<!--more-->
-<p>Примером у нас будет ленивое дерево файловой системы. Будем получать и тут же выводить
-имена файлов в каталогах полностью не получив всё дерево.</p>
+<p>По мере необходимости при использваонии новых строк они считываются с
+диска, а чтобы файл закрылся - надо обработать все данные (с этим надо
+аккуратно).</p>
+<p>Попробуем построить похожую функцию, которая получает данные из <code>IO</code>
+по мере использования.</p>
+<p>Примером у нас будет ленивое дерево файловой системы. Будем получать и
+тут же выводить имена файлов в каталогах полностью не получив всё
+дерево.</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">module</span> <span class="dt">Main</span> (main) <span class="kw">where</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co">--</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.Monad</span></span>
@@ -71,11 +75,13 @@
 <span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>       nothrow <span class="op">$</span> strictTree <span class="st">&quot;/etc&quot;</span> <span class="op">&gt;&gt;=</span> show_tree (<span class="st">&quot;  &quot;</span>, <span class="dv">2</span>)</span>
 <span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>       <span class="fu">putStrLn</span> <span class="st">&quot;2.*** Lazy tree:&quot;</span></span>
 <span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>       nothrow <span class="op">$</span> lazyTree   <span class="st">&quot;/etc&quot;</span> <span class="op">&gt;&gt;=</span> show_tree (<span class="st">&quot;  &quot;</span>, <span class="dv">2</span>)</span></code></pre></div>
-<p>Ничего особенного кроме того, что реализации <strong>strictTree/lazyTree</strong> пока нет.
-Я ее специально оттянул отдельно, чтобы не так страшно было.</p>
-<p>Берем список каталогов <strong>/etc/</strong> и распечанываем первые 2 уровня.
-- <strong>strictTree</strong> получает весь список
-- <strong>lazyTree</strong> получает данные по мере их вывода в <strong>show_tree</strong></p>
+<p>Ничего особенного кроме того, что реализации <code>strictTree</code>/<code>lazyTree</code>
+пока нет. Я ее специально оттянул отдельно, чтобы не так страшно было.</p>
+<p>Берем список каталогов <code>/etc/</code> и распечанываем первые 2 уровня:</p>
+<ul>
+<li><code>strictTree</code> получает весь список</li>
+<li><code>lazyTree</code> получает данные по мере их вывода в <code>show_tree</code></li>
+</ul>
 <div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- ======================= --</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- Implementation details:</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- modes for 'getTree'.</span></span>
@@ -105,9 +111,10 @@
 <span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>                            <span class="op">.</span> <span class="fu">filter</span> (<span class="ot">`notElem`</span> [<span class="st">&quot;.&quot;</span>, <span class="st">&quot;..&quot;</span>]</span>
 <span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>                            ) <span class="op">&gt;&gt;=</span></span>
 <span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>                                \children <span class="ot">-&gt;</span> <span class="fu">return</span> <span class="op">$</span> <span class="dt">Dir</span> basename children</span></code></pre></div>
-<p><strong>lazyTree</strong> и <strong>strictTree</strong> имеют одну реализацию!
-Вся фишка в <strong>eval_thunk</strong>: она и делает всю магию - откладывает вычисление до реального использования.
-С этим нужно быть осторожным, так как в программе порядок выполнения операций <strong>IO</strong> теперь не так очевиден.</p>
+<p><code>lazyTree</code> и <code>strictTree</code> имеют одну реализацию! Вся фишка в
+<code>eval_thunk</code>: она и делает всю магию - откладывает вычисление до
+реального использования. С этим нужно быть осторожным, так как в
+программе порядок выполнения операций <code>IO</code> теперь не так очевиден.</p>
 <p>Проверим, как оно работает:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> runhaskell uili.hs</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">1.</span> Strict tree:</span>
@@ -150,12 +157,12 @@
 <span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>      <span class="ex">services</span></span>
 <span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a><span class="ex">ERROR:</span> I caught an XC: /etc/cron.weekly: getDirectoryContents: permission denied <span class="er">(</span><span class="ex">Permission</span> denied<span class="kw">)</span></span></code></pre></div>
 <ul>
-<li><strong>strictTree</strong> не вернула вообще ничего и завершилась исключением,</li>
-<li><strong>lazyTree</strong> распечатала всё до первого проблемного каталога.
-Если проверить <strong>strace</strong>, мы увидим, что на файлы в каталогах, помеченных как ‘{ … }’
-<strong>stat</strong> не вызывался.</li>
+<li><code>strictTree</code> не вернула вообще ничего и завершилась исключением,</li>
+<li><code>lazyTree</code> распечатала всё до первого проблемного каталога. Если
+проверить <code>strace</code>, мы увидим, что на файлы в каталогах, помеченных
+как <code>'{ ... }</code> <code>stat</code> не вызывался.</li>
 </ul>
-<p>Такие пироги :]</p>
+<p>Такие пироги :)</p>
         </div>
     </body>
 </html>

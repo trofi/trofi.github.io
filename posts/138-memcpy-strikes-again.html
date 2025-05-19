@@ -29,34 +29,39 @@
                 <div class="info">April 16, 2011</div>
             
 
-            <p>За последнее время насилия над <strong>btrfs</strong> я умудрился завалить ее до
-<em>kernel oops</em> <a href="https://slyfox.ath.cx/btrfs/">ненормальное количество раз</a>.</p>
-<p>На реальной машине получать отладочную информацию при падении ядра довольно
-напряжно - нужно перезагружаться, так что я решил таки (снова) осилить
-<a href="http://user-mode-linux.sourceforge.net/">usermode linux</a>.</p>
-<!--more-->
-<p><strong>usermode linux</strong> - особым образом модифицированное ядро <strong>linux</strong>, которое собирается
-как обычный исполняемый <strong>ELF</strong> файл. Его можно запустить непривилегированному пользователю
-и отлаживать как обычный процесс: аттачиться <strong>gdb</strong>, вставлять <strong>printk</strong>, пересобирать и
-тут же видеть результат без перезагрузок.</p>
-<p>Особо это дело полезно при разработке файловых систем, распределителей памяти, и прочих штук,
-которые сильно не привязаны к периферии (типа <strong>RTC</strong> или контроллеров прерывания).</p>
-<p>Реализован <strong>usermode linux</strong> как отдельная архитектура в основном дереве ядра <strong>linux-2.6</strong>.
-Собрать его можно так:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ARCH=um SUBARCH=i386 make <span class="op">&lt;</span>обычные параметры<span class="op">&gt;</span></span></code></pre></div>
-<p>В результате получается обычный исполняемый файл <strong>vmlinux</strong>. У него много всяких
-параметров, которые задают внешние блочные устройства, настройки сети, размер ОЗУ гостя и прочее.</p>
-<p>Пользовательские процессы запускаются там как потоки от процесса <strong>vmlinux</strong> (самого ядра).
-Они отслеживаются <strong>vmlinux</strong> через <strong>ptrace</strong>, чтобы перехватывать:</p>
+            <p>За последнее время насилия над <code>btrfs</code> я умудрился завалить ее до
+<code>kernel Oops</code> ненормальное количество раз.</p>
+<p>На реальной машине получать отладочную информацию при падении ядра
+довольно напряжно - нужно перезагружаться, так что я решил таки (снова)
+осилить <a href="http://user-mode-linux.sourceforge.net/"><code>usermode linux</code></a>.</p>
+<p><code>usermode linux</code> - особым образом модифицированное ядро <code>linux</code>,
+которое собирается как обычный исполняемый <code>ELF</code> файл. Его можно
+запустить непривилегированному пользователю и отлаживать как обычный
+процесс: аттачиться <code>gdb</code>, вставлять <code>printk</code>, пересобирать и тут же
+видеть результат без перезагрузок.</p>
+<p>Особо это дело полезно при разработке файловых систем, распределителей
+памяти, и прочих штук, которые сильно не привязаны к периферии (типа
+<code>RTC</code> или контроллеров прерывания).</p>
+<p>Реализован <code>usermode linux</code> как отдельная архитектура в основном
+дереве ядра <code>linux-2.6</code>. Собрать его можно так:</p>
+<pre><code>$ ARCH=um SUBARCH=i386 make &lt;обычные параметры&gt;</code></pre>
+<p>В результате получается обычный исполняемый файл <code>vmlinux</code>. У него
+много всяких параметров, которые задают внешние блочные устройства,
+настройки сети, размер ОЗУ гостя и прочее.</p>
+<p>Пользовательские процессы запускаются там как потоки от процесса
+<code>vmlinux</code> (самого ядра). Они отслеживаются <code>vmlinux</code> через
+<code>ptrace</code>, чтобы перехватывать:</p>
 <ul>
 <li>системные вызовы (чтобы они не уходили в хост ядро напрямую)</li>
 <li>исключения (падения, невалидные инструкции и прочее)</li>
 </ul>
-<p>и обрабатывать их. Прерывания внутри самого процесса <strong>vmlinux</strong> реализованы через <strong>posix</strong> сигналы.</p>
-<p>Одна из интересных особенностей <strong>um</strong> - монтирование файловой системы хоста.
-То есть не нужно создавать <strong>loopback</strong> устройств, чтобы содать корневую ФС.
-Хватит просто создать пару файлов в одном из пользовательских каталогов.</p>
-<p>Мой скрипт для запуска <strong>um</strong> такой:</p>
+<p>и обрабатывать их. Прерывания внутри самого процесса <code>vmlinux</code>
+реализованы через <code>posix</code> сигналы.</p>
+<p>Одна из интересных особенностей <code>um</code> - монтирование файловой системы
+хоста. То есть не нужно создавать <code>loopback</code> устройств, чтобы содать
+корневую ФС. Хватит просто создать пару файлов в одном из
+пользовательских каталогов.</p>
+<p>Мой скрипт для запуска <code>um</code> такой:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./vmlinux</span>                                        <span class="dt">\</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    ubd0=<span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span>/btr.img                          <span class="dt">\</span></span>
@@ -65,28 +70,28 @@
 <span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    mem=256M init=/init                          <span class="dt">\</span></span>
 <span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>                                                 <span class="dt">\</span></span>
 <span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
-<p>В <strong>“$(pwd)/root”</strong> у меня лежит статически собранный <strong>busybox</strong> и минимальный
-скрипт инициализации. Структура каталогов выглядит так:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> tree <span class="at">-a</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span><span class="ex">--</span> btr.img</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span><span class="ex">--</span> root</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span><span class="ex">--</span> bin</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span>   <span class="kw">`</span><span class="ex">--</span> busybox</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span><span class="ex">--</span> dev</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span><span class="ex">--</span> etc</span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span>   <span class="kw">|</span><span class="ex">--</span> fstab</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span>   <span class="kw">`</span><span class="at">--</span> mtab <span class="at">-</span><span class="op">&gt;</span> ../proc/mounts</span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span><span class="ex">--</span> init</span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">|</span><span class="ex">--</span> proc</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span>   <span class="kw">`</span><span class="ex">--</span> sys</span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="kw">|</span><span class="ex">--</span> run</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="kw">`</span><span class="at">--</span> vmlinux <span class="at">-</span><span class="op">&gt;</span> ../linux-2.6-um-x86_64/vmlinux</span></code></pre></div>
-<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cat root/etc/fstab</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">none</span>            /               hostfs          defaults        1       1</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">none</span>            /proc           proc            defaults        0       0</span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">sysfs</span>           /sys            sysfs           defaults        0       0</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="ex">tmpfs</span>           /dev            tmpfs           defaults        0       0</span></code></pre></div>
+<p>В <code>"$(pwd)/root"</code> у меня лежит статически собранный <code>busybox</code> и
+минимальный скрипт инициализации. Структура каталогов выглядит так:</p>
+<pre><code>$ tree -a
+.
+|-- btr.img
+|-- root
+|   |-- bin
+|   |   `-- busybox
+|   |-- dev
+|   |-- etc
+|   |   |-- fstab
+|   |   `-- mtab -&gt; ../proc/mounts
+|   |-- init
+|   |-- proc
+|   `-- sys
+|-- run
+`-- vmlinux -&gt; ../linux-2.6-um-x86_64/vmlinux</code></pre>
+<pre><code>$ cat root/etc/fstab
+none            /               hostfs          defaults        1       1
+none            /proc           proc            defaults        0       0
+sysfs           /sys            sysfs           defaults        0       0
+tmpfs           /dev            tmpfs           defaults        0       0</code></pre>
 <div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cat root/init</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/busybox sh</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mount</span> /proc</span>
@@ -94,52 +99,71 @@
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="fu">mount</span> /sys</span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ex">mdev</span> <span class="at">-s</span> <span class="co"># populate /dev</span></span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="bu">exec</span> /bin/busybox sh</span></code></pre></div>
-<p>Такое окружение легко редактировать из хоста (даже когда гость работает).
-<strong>/init</strong> мотирует <strong>/proc</strong>, <strong>/sys</strong>, <strong>/dev</strong> и запускает <strong>sh</strong>. Всё просто.</p>
-<p><strong>root/init</strong> зупукасется процессом <strong>vmlinux</strong>, который не требует(!) <strong>root</strong> привилегий.</p>
-<p>При сборке <strong>um</strong> я нарвался на проблему:
-ARCH=um <a href="http://www.spinics.net/lists/mm-commits/msg83315.html">не собирался</a>, когда в конфиге ядра использовался <strong>CONFIG_SLUB=y</strong></p>
-<p>Разобравшись с ней я нарвался на падение <strong>btrfs</strong> в <strong>um</strong>. Меня удивило, что всё вроде
-работает, но как только я пытаюсь возиться с <strong>btrfs</strong> данные на ней портятся практически сразу.</p>
-<p>Я позадавал глупых вопросов в списке рассылки <a href="http://www.mail-archive.com/user-mode-linux-devel@lists.sourceforge.net/msg07085.html">usermode-linux</a>
-и начал штурмовать <a href="http://thread.gmane.org/gmane.comp.file-systems.btrfs/10075">btrfs-devel</a> и их <strong>IRC</strong> канал.</p>
-<p>Кстати, падение ядра по <strong>BUG_ON</strong> не выводило красивого <strong>backtrace</strong> с номером строки.
-Теперь <a href="http://us.generation-nt.com/patch-1-2-um-fix-call-tracer-bug-handler-help-202910422.html">выводит</a> :].</p>
-<p>Мне посоветовали найти работающаю версию ядра с <strong>btrfs</strong> в <strong>um</strong> и <a href="../2009/06/27/git-bisect/">забисектить</a> это дело.
-Бисект “не самой популярной” архитектуры - дело непростое. Результат или не собирался или падал и без попытки
-использования <strong>btrfs</strong>. Сначала я думал, что такие ситуации - редкость, и просто скипал (<strong>git bisect skip</strong>) кривые
-состояния, но начиная с какого-то момента я не мог ничего собрать, а оставалось <strong>3000</strong> ревизий.</p>
-<p>Я понял, что попал и начал <strong>bisect</strong> заново. Перед этим я выгреб все коммиты, относяшиеся к <strong>um</strong>, чтобы
-заставить работать каждое состояние ядра:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">linux-2.6</span> $ git log <span class="at">--oneline</span> <span class="at">--abbrev-commit</span> <span class="at">--no-merges</span> v2.6.36..v2.6.37 <span class="at">--</span> arch/um/</span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">69e83da</span> uml: disable winch irq before freeing handler data</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">451a3c2</span> BKL: remove extraneous <span class="co">#include &lt;smp_lock.h&gt;</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="ex">8818b67</span> um: fix ptrace build error</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="ex">0a3d763</span> ptrace: cleanup arch_ptrace<span class="er">(</span><span class="kw">)</span> <span class="ex">on</span> um</span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="ex">9b05a69</span> ptrace: change signature of arch_ptrace<span class="er">(</span><span class="kw">)</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="ex">be76d81</span> um: migrate from __do_IRQ<span class="er">(</span><span class="kw">)</span> <span class="ex">to</span> generic_handle_irq<span class="er">(</span><span class="kw">)</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="ex">aa5fb4d</span> uml: fix CONFIG_STATIC_LINK=y build failure with newer glibc</span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="ex">d911202</span> uml: define CONFIG_NO_DMA</span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="ex">ece0e2b</span> mm: remove pte_<span class="pp">*</span>map_nested<span class="er">(</span><span class="kw">)</span></span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="ex">dbec921</span> um: fix IRQ flag handling naming</span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="ex">6915e04</span> um: remove PAGE_SIZE alignment in linker script causing kernel segfault.</span>
-<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a><span class="ex">482db6d</span> um: fix global timer issue when using CONFIG_NO_HZ</span>
-<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a><span class="ex">9a181c5</span> uml: kill big kernel lock</span>
-<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="ex">6038f37</span> llseek: automatically add .llseek fop</span>
-<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="ex">d1ea13c</span> genirq: Cleanup irq_chip-<span class="op">&gt;</span>typename leftovers</span>
-<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="ex">838a2e5</span> kbuild: migrate all arch to the kconfig mainmenu upgrade</span></code></pre></div>
-<p>Их не так много, но было подозрение, что один из них и является виновником.
-Некоторые коммиты фиксили зависания (<code>NO_HZ</code>), некоторые - вылеты на старте (<code>__do_IRQ</code>),
-некоторые - сборку из-за переименований (<code>NO_DMA</code>, <code>ptrace</code>, <code>IRQ</code>).</p>
-<p>В этот раз я довольно быстро забисектил до <a href="http://git.kernel.org/?p=linux/kernel/git/torvalds/linux-2.6.git;a=commitdiff;h=59daa7">коммита с memcpy</a>!
-(плавно перешли к теме :]).</p>
-<p>Учитывая, что сейчас почти <strong>2.6.39</strong>, а коммит аж из бородатого <strong>2.6.37</strong>,
-то надо полагать, что <strong>memcpy</strong> работает. Вывод один - <strong>btrfs</strong> неправильно его использует.</p>
-<p>На свете не так много способов лохануться с <strong>memcpy</strong>. Я предположил самый популярный:
-область источника и назначения перекрываются. А как это проверить?</p>
-<p>Сначала я думал пропатчить сам <strong>memcpy</strong> или написть для <strong>um</strong> свою реализацию (это легко сделать для
-конкретной архитектуры), но почему-то забил на это.</p>
-<p>Вместо этого написал свою <strong>memcpy_debug</strong> и с помощью <strong>sed</strong> заменил все <strong>memcpy</strong> в <strong>fs/btrfs/</strong> на свою:</p>
+<p>Такое окружение легко редактировать из хоста (даже когда гость
+работает). <code>/init</code> мотирует <code>/proc</code>, <code>/sys</code>, <code>/dev</code> и запускает
+<code>sh</code>. Всё просто.</p>
+<p><code>root/init</code> зупукасется процессом <code>vmlinux</code>, который не требует(!)
+<code>root</code> привилегий.</p>
+<p>При сборке <code>um</code> я нарвался на проблему: <code>ARCH=um</code> <a href="http://www.spinics.net/lists/mm-commits/msg83315.html">не
+собирался</a>, когда
+в конфиге ядра использовался <code>CONFIG_SLUB=y</code>.</p>
+<p>Разобравшись с ней я нарвался на падение <code>btrfs</code> в <code>um</code>. Меня
+удивило, что всё вроде работает, но как только я пытаюсь возиться с
+<code>btrfs</code> данные на ней портятся практически сразу.</p>
+<p>Я позадавал глупых вопросов в списке рассылки
+<a href="http://www.mail-archive.com/user-mode-linux-devel@lists.sourceforge.net/msg07085.html"><code>usermode-linux</code></a>
+и начал штурмовать
+<a href="http://thread.gmane.org/gmane.comp.file-systems.btrfs/10075"><code>btrfs-devel</code></a>
+и их <code>IRC</code> канал.</p>
+<p>Кстати, падение ядра по <strong>BUG_ON</strong> не выводило красивого <code>backtrace</code> с
+номером строки. Теперь
+<a href="http://us.generation-nt.com/patch-1-2-um-fix-call-tracer-bug-handler-help-202910422.html">выводит</a>.</p>
+<p>Мне посоветовали найти работающаю версию ядра с <code>btrfs</code> в <code>um</code> и
+забисектить это дело. Бисект “не самой популярной” архитектуры - дело
+непростое. Результат или не собирался
+или падал и без попытки использования <code>btrfs</code>. Сначала я думал, что
+такие ситуации - редкость, и просто скипал (<code>git bisect skip</code>) кривые
+состояния, но начиная с какого-то момента я не мог ничего собрать, а
+оставалось <code>3000</code> ревизий.</p>
+<p>Я понял, что попал и начал <code>bisect</code> заново. Перед этим я выгреб все
+коммиты, относяшиеся к <code>um</code>, чтобы заставить работать каждое состояние
+ядра:</p>
+<pre><code>linux-2.6 $ git log --oneline --abbrev-commit --no-merges v2.6.36..v2.6.37 -- arch/um/
+
+69e83da uml: disable winch irq before freeing handler data
+451a3c2 BKL: remove extraneous #include &lt;smp_lock.h&gt;
+8818b67 um: fix ptrace build error
+0a3d763 ptrace: cleanup arch_ptrace() on um
+9b05a69 ptrace: change signature of arch_ptrace()
+be76d81 um: migrate from __do_IRQ() to generic_handle_irq()
+aa5fb4d uml: fix CONFIG_STATIC_LINK=y build failure with newer glibc
+d911202 uml: define CONFIG_NO_DMA
+ece0e2b mm: remove pte_*map_nested()
+dbec921 um: fix IRQ flag handling naming
+6915e04 um: remove PAGE_SIZE alignment in linker script causing kernel segfault.
+482db6d um: fix global timer issue when using CONFIG_NO_HZ
+9a181c5 uml: kill big kernel lock
+6038f37 llseek: automatically add .llseek fop
+d1ea13c genirq: Cleanup irq_chip-&gt;typename leftovers
+838a2e5 kbuild: migrate all arch to the kconfig mainmenu upgrade</code></pre>
+<p>Их не так много, но было подозрение, что один из них и является
+виновником. Некоторые коммиты фиксили зависания (<code>NO_HZ</code>), некоторые -
+вылеты на старте (<code>__do_IRQ</code>), некоторые - сборку из-за переименований
+(<code>NO_DMA</code>, <code>ptrace</code>, <code>IRQ</code>).</p>
+<p>В этот раз я довольно быстро забисектил до <a href="http://git.kernel.org/?p=linux/kernel/git/torvalds/linux-2.6.git;a=commitdiff;h=59daa7">коммита с
+<code>memcpy</code></a>!
+(плавно перешли к теме).</p>
+<p>Учитывая, что сейчас почти <code>2.6.39</code>, а коммит аж из бородатого
+<code>2.6.37</code>, то надо полагать, что <code>memcpy</code> работает. Вывод один -
+<code>btrfs</code> неправильно его использует.</p>
+<p>На свете не так много способов лохануться с <code>memcpy</code>. Я предположил
+самый популярный: область источника и назначения перекрываются. А как
+это проверить?</p>
+<p>Сначала я думал пропатчить сам <code>memcpy</code> или написть для <code>um</code> свою
+реализацию (это легко сделать для конкретной архитектуры), но почему-то
+забил на это.</p>
+<p>Вместо этого написал свою <code>memcpy_debug</code> и с помощью <code>sed</code> заменил
+все <code>memcpy</code> в <code>fs/btrfs/</code> на свою:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;linux/kernel.h&gt;</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;memcpy_debug.h&quot;</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
@@ -166,7 +190,8 @@ ARCH=um <a href="http://www.spinics.net/lists/mm-commits/msg83315.html">не с�
 <span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>    WARN_ON<span class="op">(</span>delta <span class="op">&lt;</span> size<span class="op">);</span></span>
 <span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> memcpy<span class="op">(</span>dst<span class="op">,</span> src<span class="op">,</span> size<span class="op">);</span></span>
 <span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Использовал <strong>WARN_ON</strong>, так как <strong>BUG_ON</strong> Richard еще не пофиксил :]. Я сразу нашел проблемное место:</p>
+<p>Использовал <code>WARN_ON</code>, так как <code>BUG_ON</code> Richard еще не пофиксил.
+Я сразу нашел проблемное место:</p>
 <pre><code>memcpy overlap detected: memcpy(dst=0000000070654e8a, src=0000000070654ea9, size=171) [delta=31]
 ------------[ cut here ]------------
 WARNING: at /home/slyfox/linux-2.6/fs/btrfs/memcpy_debug.c:18 btrfs_memcpy+0x52/0x68()
@@ -188,19 +213,27 @@ Call Trace:
 7064bc08:  [&lt;600de73f&gt;] btrfs_create+0xf2/0x1c0
 7064bc18:  [&lt;6007ccff&gt;] generic_permission+0x57/0x9d
 7064bc68:  [&lt;6007cf60&gt;] vfs_create+0x6a/0x75</code></pre>
-<p>Как мы видим, сначала вызывается какая-то там <strong>memmove_extent_buffer</strong>, а из нее <strong>memcpy_extent_buffer</strong>.</p>
-<p>Даже не зная, что такое <strong>extent</strong>, можно догадаться (экспериментально доказано, что можно),
-что где-то в ‘<a href>memmove</a>’ неправильно определяется пересечение областей и вызывается <strong>memcpy_</strong> на
-перекрывающиеся области. И пока никто не опомнился я это дело быстро зафиксил и заслал патч :].</p>
-<p>Фиксы на все 3 проблемы уже почти у Линуса.
-В одном из них <a href="http://git.kernel.org/?p=linux/kernel/git/mason/btrfs-unstable.git;a=commitdiff;h=3387206f26e1b48703e810175b98611a4fd8e8ea">я - автор \o/</a> ! :]</p>
-<p>Проблема неправильного использования <strong>memcpy</strong> - серьезная штука. Я бы не хотел потерять данные из-за
-какой-то микрооптимизации <strong>memmove</strong> в <strong>memcpy</strong>. Думаю добавить в ядро отключаемую на стадии компиляции
-возможность проверки перекрытия областей в саму <strong>memcpy</strong> (секция <strong>Kernel hacking</strong> в <strong>menuconfig</strong>).</p>
-<p>Самое смешное, что я начал копаться в <strong>usermode linux</strong> не из-за того, что у меня было повреждение данных,
-а потому, что я неправильно пропатчил <strong>btrfs-progs</strong> и создавал заведомо сломанные файловые системы, которые
-валили ядро (правда не сразу, а после того, как я их заполню).</p>
-<p>Но проблема с <strong>memcpy</strong> повторялась и на нормальных <strong>btrfs-progs</strong>. Кругом случайности.</p>
+<p>Как мы видим, сначала вызывается какая-то там <code>memmove_extent_buffer</code>,
+а из нее <code>memcpy_extent_buffer</code>.</p>
+<p>Даже не зная, что такое <code>extent</code>, можно догадаться (экспериментально
+доказано, что можно), что где-то в <code>memmove</code> неправильно
+определяется пересечение областей и вызывается <code>memcpy</code> на
+перекрывающиеся области. И пока никто не опомнился я это дело быстро
+зафиксил и заслал патч.</p>
+<p>Фиксы на все 3 проблемы уже почти у Линуса. В одном из них
+<a href="http://git.kernel.org/?p=linux/kernel/git/mason/btrfs-unstable.git;a=commitdiff;h=3387206f26e1b48703e810175b98611a4fd8e8ea">я - автор</a>!</p>
+<p>Проблема неправильного использования <code>memcpy</code> - серьезная штука. Я бы
+не хотел потерять данные из-за какой-то микрооптимизации <code>memmove</code> в
+<code>memcpy</code>. Думаю добавить в ядро отключаемую на стадии компиляции
+возможность проверки перекрытия областей в саму <code>memcpy</code> (секция
+<code>Kernel hacking</code> в <code>menuconfig</code>).</p>
+<p>Самое смешное, что я начал копаться в <code>usermode linux</code> не из-за того,
+что у меня было повреждение данных, а потому, что я неправильно
+пропатчил <code>btrfs-progs</code> и создавал заведомо сломанные файловые
+системы, которые валили ядро (правда не сразу, а после того, как я их
+заполню).</p>
+<p>Но проблема с <code>memcpy</code> повторялась и на нормальных <code>btrfs-progs</code>.
+Кругом случайности.</p>
         </div>
     </body>
 </html>

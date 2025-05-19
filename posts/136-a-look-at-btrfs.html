@@ -29,107 +29,121 @@
                 <div class="info">March  3, 2011</div>
             
 
-            <p>Решил сегодня посмотреть на <a href="http://ru.wikipedia.org/wiki/Btrfs">btrfs</a> от компании <strong>Oracle</strong>. В статье
-описано много плюшек, но я ее начал читать только сейчас, когда начал
-писать пост :].</p>
-<p>Первое, что меня привлекло в ней - это высокая скорость доступа к данным
-и относительная простота внтурненнего устройства.</p>
-<p>Я только потом узнал, что <strong>btrfs</strong> очень эффективно хранит маленькие файлы и
-старается сжимать данные с помощью <strong>zlib</strong> и <strong>lzo</strong>.</p>
-<!--more-->
-<p>Решил я ее испробовать, когда наткнулся на описание исправленного
-<a href="https://bugs.gentoo.org/353907">бага</a> в недавно вышедшем ядре
-<a href="http://kernelnewbies.org/Linux_2_6_38">2.6.38</a>.</p>
-<p><a href="http://hackie.blog.tut.by/2009/03/25/gentoo-usrportage-tmp-tmpfs/">Времена</a>
-немного изменились. Теперь я держу не только системный каталог ебилдов,
-но и еще <strong>cvs</strong> дерево <strong>portage</strong> (так называемый <strong>gentoo-x86</strong> tree),
-чтобы вносить в него изменения.</p>
-<p>Обновление <strong>gentoo-x86</strong> (<strong>cvs update</strong>) у меня занимало 40 минут, причем бОльшую часть времени
-занимает чтение огромного числа файлов: в каждом каталоге находится подкаталог <strong>CVS</strong>,
-а в нем 3 файла:</p>
+            <p>Решил сегодня посмотреть на <a href="http://ru.wikipedia.org/wiki/Btrfs">btrfs</a>
+от компании <code>Oracle</code>. В статье описано много плюшек, но я ее начал
+читать только сейчас, когда начал писать пост :) Первое, что меня
+привлекло в ней - это высокая скорость доступа к данным и относительная
+простота внтурненнего устройства. Я только потом узнал, что <code>btrfs</code>
+очень эффективно хранит маленькие файлы и старается сжимать данные с
+помощью <code>zlib</code> и <code>lzo</code>. Решил я ее испробовать, когда наткнулся на
+описание исправленного <a href="https://bugs.gentoo.org/353907">бага</a> в недавно
+вышедшем ядре <a href="http://kernelnewbies.org/Linux_2_6_38">2.6.38</a>.</p>
+<p>Я держу не только системный каталог ебилдов,
+но и еще <code>cvs</code> дерево <code>portage</code> (так называемый <code>gentoo-x86</code>
+tree), чтобы вносить в него изменения.</p>
+<p>Обновление <code>gentoo-x86</code> (<code>cvs update</code>) у меня занимало 40 минут,
+причем бОльшую часть времени занимает чтение огромного числа файлов: в
+каждом каталоге находится подкаталог <code>CVS</code>, а в нем 3 файла:</p>
 <ul>
-<li><strong>CVS/Entries</strong></li>
-<li><strong>CVS/Root</strong></li>
-<li><strong>CVS/Repository</strong>.</li>
+<li><code>CVS/Entries</code></li>
+<li><code>CVS/Root</code></li>
+<li><code>CVS/Repository</code></li>
 </ul>
-<p>Каталогов в <strong>gentoo-x86</strong> (не включая подкаталоги <strong>CVS</strong>):</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> find <span class="at">-type</span> d <span class="kw">|</span> <span class="fu">grep</span> <span class="at">-v</span> CVS <span class="kw">|</span> <span class="fu">wc</span> <span class="at">-l</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">21594</span></span></code></pre></div>
-<p>Итого при <strong>cvs update</strong> нужно прочитать минимум ~60000 файлов с диска.</p>
-<p>Самое интересное, что эти 3 файла одинаковы во всех каталогах <strong>CVS</strong>. Если бы файловая
-система поддерживала <a href="http://ru.wikipedia.org/wiki/Дедупликация_данных">дедупликацию</a>,
-то эти 3 файла прочитались бы с диска 1 раз! (поддержка дедупликации планируется в <strong>btrfs</strong>).</p>
-<p><strong>btrfs</strong> поддерживает копирование-при-записи (<strong>COW</strong>), так что я мог бы вручную заменить
-все копии этих файлов на один удалением файла <strong>CVS/Root</strong> и копированием
-файла с этого же раздела <strong>btrfs</strong> из другого места (для этого нужна утилита <strong>cp</strong> из
-<strong>coreutils-8.10</strong> или выше). Это еще предстоит попробовать.</p>
-<p>Эксперимент я начал с малого: создал блочное устройство на 2GB и записал туда
-<strong>gentoo-x86</strong>:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> dd if=/dev/zero of=btrfs.image bs=<span class="va">$((</span><span class="dv">1024</span> <span class="op">*</span> <span class="dv">1024</span><span class="va">))</span> count=2048</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> losetup /dev/loop0 btrfs.image</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> mkfs.btrfs <span class="at">-LBTRFS_TESTIE</span> /dev/loop0</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> mount /dev/loop0 ut/</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cp <span class="at">-r</span> .../gentoo-x86 ut/</span></code></pre></div>
-<p>Это заняло больше 30 минут. Думаю, что бОльшаю часть времени тратилась на чтение файлов
-со страшно фрагментированной <strong>ext4</strong>. Пока это дело копировалось я изучал команды утилиты
-<strong>btrfs</strong>. У нее <strong>apt</strong> (или <strong>git</strong>)-подобный интерфейс:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> btrfs</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Usage:</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="ex">btrfs</span> filesystem show [<span class="op">&lt;</span>uuid<span class="op">&gt;|&lt;</span>label<span class="op">&gt;</span>]</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>        <span class="ex">Show</span> the info of a btrfs filesystem. If no <span class="op">&lt;</span>uuid<span class="op">&gt;</span> or <span class="op">&lt;</span>label<span class="op">&gt;</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        <span class="ex">is</span> passed, info of all the btrfs filesystem are shown.</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="ex">btrfs</span> filesystem df <span class="op">&lt;</span>path<span class="op">&gt;</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        <span class="ex">Show</span> space usage information for a mount point</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="co"># много-много еще всего</span></span></code></pre></div>
+<p>Каталогов в <code>gentoo-x86</code> (не включая подкаталоги <code>CVS</code>):</p>
+<pre><code>$ find -type d | grep -v CVS | wc -l
+21594</code></pre>
+<p>Итого при <code>cvs update</code> нужно прочитать минимум ~<code>60000</code> файлов с диска.</p>
+<p>Самое интересное, что эти 3 файла одинаковы во всех каталогах <code>CVS</code>.
+Если бы файловая система поддерживала
+<a href="http://ru.wikipedia.org/wiki/Дедупликация_данных">дедупликацию</a>, то эти
+3 файла прочитались бы с диска 1 раз! (поддержка дедупликации
+планируется в <code>btrfs</code>).</p>
+<p><code>btrfs</code> поддерживает копирование-при-записи (<code>CoW</code>), так что я мог
+бы вручную заменить все копии этих файлов на один удалением файла
+<code>CVS/Root</code> и копированием файла с этого же раздела <code>btrfs</code> из
+другого места (для этого нужна утилита <code>cp</code> из <code>coreutils-8.10</code> или
+выше). Это еще предстоит попробовать.</p>
+<p>Эксперимент я начал с малого: создал блочное устройство на <code>2GB</code> и
+записал туда <code>gentoo-x86</code>:</p>
+<pre><code>$ dd if=/dev/zero of=btrfs.image bs=$((1024 * 1024)) count=2048
+$ losetup /dev/loop0 btrfs.image
+$ mkfs.btrfs -LBTRFS_TESTIE /dev/loop0
+$ mount /dev/loop0 ut/
+$ cp -r .../gentoo-x86 ut/</code></pre>
+<p>Это заняло больше 30 минут. Думаю, что бОльшаю часть времени тратилась
+на чтение файлов со страшно фрагментированной <code>ext4</code>. Пока это дело
+копировалось я изучал команды утилиты <code>btrfs</code>. У нее <code>apt</code> (или
+<code>git</code>)-подобный интерфейс:</p>
+<pre><code>$ btrfs
+Usage:
+    btrfs filesystem show [&lt;uuid&gt;|&lt;label&gt;]
+        Show the info of a btrfs filesystem. If no &lt;uuid&gt; or &lt;label&gt;
+        is passed, info of all the btrfs filesystem are shown.
+    btrfs filesystem df &lt;path&gt;
+        Show space usage information for a mount point
+# много-много еще всего</code></pre>
 <p>Я попробовал такие штуки:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> btrfs filesystem defrag ut/</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> btrfs filesystem balance ut/</span></code></pre></div>
-<p>Как оказалось, <strong>defrag</strong> дефрагментирует <strong>один</strong> файл (или метаданные каталога),
-так что придется запускать defrag на все файлы раздела, если нужна полная дефрагментация.</p>
-<p>Кстати, их <a href="http://btrfs.wiki.kernel.org/">домашняя страница</a> содержит много полезной
-информации.</p>
-<p>Дождавшись копирования я решил сменить владельца <strong>ut/gentoo-x86</strong> на себя:</p>
+<pre><code>$ btrfs filesystem defrag ut/
+$ btrfs filesystem balance ut/</code></pre>
+<p>Как оказалось, <code>defrag</code> дефрагментирует <strong>один</strong> файл (или метаданные
+каталога), так что придется запускать <code>defrag</code> на все файлы раздела
+индивидуально, если нужна полная дефрагментация.
+<a href="http://btrfs.wiki.kernel.org/">Домашняя страница</a> содержит много
+полезной информации.</p>
+<p>Дождавшись копирования я решил сменить владельца <code>ut/gentoo-x86</code> на
+себя:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> chown <span class="at">-R</span> slyfox:users ut/</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Segmentation</span> Fault</span></code></pre></div>
-<p>Нехорошо. В <strong>dmesg</strong> светился <strong>OOps</strong> ядра. Я заселился на <strong>IRC</strong> канал <strong>#btrfs</strong> на <strong>freenode</strong>.
-Там Carey Underwood сказал мне, что это неизвестные баг ядра и я его
+<p>Нехорошо. В <code>dmesg</code> светился <code>OOps</code> ядра. Я заселился на <code>IRC</code>
+канал <code>#btrfs</code> на <code>freenode</code>. Там Carey Underwood сказал мне, что
+это неизвестный баг ядра и я его
 <a href="http://thread.gmane.org/gmane.comp.file-systems.btrfs/9647">зарепортил</a>.</p>
-<p>Carey также рассказал, что это отсутствие обработки нехватки места на диске в ядре.
-Интересно, что <strong>gentoo-x86</strong> весит примерно 170MB “чистого веса” (без учета внутренней фрагментации)
-и 848MB на <strong>ext4</strong> (с учетом фрагментации) (на самом деле чуть больше, так как не учитывется
-место в таблице инодов - это порядка 170000 * 256 = ~44MB). То есть в btrfs куда-то девался еще 1 GB.</p>
-<p>Carey пояснил, что в <strong>btrfs</strong> блоки под данные и метаданные выделяются очень большие (порядка 1 GB),
-и скорее всего у меня один из этих типов блоков, а новый выделиться не смог. Это не чувствуется на
-файловых системах размером больше 10GB, но на моей игрушке еще как. <strong>btrfs</strong> имеет режим, когда
-метаданные и данные используют одни и те же блоки: так называемый <strong>—-mixed</strong>.</p>
-<p>Он предложил мне попробовать <a href="http://kerneltrap.org/mailarchive/linux-btrfs/2010/10/27/6885910">патч</a>
-в <strong>btrfs-progs</strong>, который позволяет создавать <strong>mixed</strong> файлухи. Заодно я решил попробовать <strong>lzo</strong>
-компрессию, а не <strong>zlib</strong> (умолчальную).</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> mkfs.btrfs <span class="at">-LBTRFS_TESTIE</span> <span class="at">--mixed</span> /dev/loop0</span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> mount <span class="at">-o</span> compress=lzo image.btrfs ut/</span></code></pre></div>
+<p>Carey также рассказал, что это отсутствие обработки нехватки места на
+диске в ядре. Интересно, что <code>gentoo-x86</code> весит примерно <code>170MB</code>
+“чистого веса” (без учета внутренней фрагментации) и <code>848MB</code> на <code>ext4</code>
+(с учетом фрагментации) (на самом деле чуть больше, так как не
+учитывется место в таблице инодов - это порядка <code>170000 * 256 = ~44MB</code>).
+То есть в <code>btrfs</code> куда-то девался еще <code>1GB</code>.</p>
+<p>Carey пояснил, что в <code>btrfs</code> блоки под данные и метаданные выделяются
+очень большие (порядка <code>1GB</code>), и скорее всего у меня один из этих типов
+блоков, а новый выделиться не смог. Это не чувствуется на файловых
+системах размером больше <code>10GB</code>, но на моей игрушке еще как. <code>btrfs</code>
+имеет режим, когда метаданные и данные используют одни и те же блоки:
+так называемый <code>--mixed</code>.</p>
+<p>Он предложил мне попробовать
+<a href="http://kerneltrap.org/mailarchive/linux-btrfs/2010/10/27/6885910">патч</a>
+в <code>btrfs-progs</code>, который позволяет создавать <code>mixed</code> файлухи. Заодно
+я решил попробовать <code>lzo</code> компрессию, а не <code>zlib</code> (умолчальную).</p>
+<pre><code>$ mkfs.btrfs -LBTRFS_TESTIE --mixed /dev/loop0
+$ mount -o compress=lzo image.btrfs ut/</code></pre>
 <p>После этого я без проблем залил туда:</p>
 <ul>
-<li>gentoo-x86 (177MB “чистых”)</li>
-<li>/usr/portage (199MB “чистых”)</li>
-<li>исходник linux-2.6.36-gentoo-r5 (380MB “чистых”)</li>
-<li>исходник и промежуточные бинарники linux-2.6.38 (1300MB “чистых”)</li>
+<li><code>gentoo-x86</code> (<code>177MB</code> “чистых”)</li>
+<li><code>/usr/portage</code> (<code>199MB</code> “чистых”)</li>
+<li>исходник <code>linux-2.6.36-gentoo-r5</code> (<code>380MB</code> “чистых”)</li>
+<li>исходник и промежуточные бинарники <code>linux-2.6.38</code> (<code>1300MB</code> “чистых”)</li>
 </ul>
-<p>Это чуть-чуть больше 2GB. <strong>df</strong> и <strong>btrfs fi df ut/</strong> говорили,
-что свободно еще 300MB.</p>
-<p>После этого я успешно сменил владельца. Обновление <strong>gentoo-x86</strong> с <strong>cvs</strong>
-заняло 16 минут. Раза в три быстрее, чем на фрагментированной <strong>ext4</strong>.</p>
-<p>Сконвертировал свой 4GB раздел с 300000 файлов на винчестере
-чтобы попробовать <strong>btrfs</strong> на реальном железе:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> df <span class="at">-h</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Файловая</span> система      Разм  Исп  Дост  Исп% смонтирована на</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">/dev/sda10</span>            4,5G  752M  3,7G  17% /mnt/portage <span class="co"># уже btrfs</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">/dev/loop1</span>            4,2G  2,1G  1,9G  52% /mnt/ut      <span class="co"># образ ext4 (создан dd if=/dev/sda10 of=...)</span></span></code></pre></div>
-<p>Раздел <strong>btrfs</strong> больше на 300MB за счет того, что <strong>btrfs</strong> не создает таблицы инодов, а хранит
-иноды как и данные в выделяемых блоках. При создании <strong>ext4</strong> я зарезервировал таблицу на 1.1 млн инодов.
-Каждый элемент “весит” 256 байт. Это и есть наши 300MB (<strong>gentoo-x86</strong> меньше на <strong>btrfs</strong>).</p>
-<p>Очень рекомендую почитать их <a href="https://btrfs.wiki.kernel.org/index.php/Main_Page">wiki</a>.
-там есть такие штуки, как создание именованных слепков файловой системы. Их можно очень прикольно
-использовать как бэкапы или как отдельные файловые системы.</p>
+<p>Это чуть-чуть больше <code>2GB</code>. <code>df</code> и <code>btrfs fi df ut/</code> говорили, что
+свободно еще <code>300MB</code>.</p>
+<p>После этого я успешно сменил владельца. Обновление <code>gentoo-x86</code> с
+<code>cvs</code> заняло 16 минут. Раза в три быстрее, чем на фрагментированной
+<code>ext4</code>.</p>
+<p>Сконвертировал свой <code>4GB</code> раздел с <code>300000</code> файлов на винчестере чтобы
+попробовать <code>btrfs</code> на реальном железе:</p>
+<pre><code>$ df -h
+Файловая система      Разм  Исп  Дост  Исп% смонтирована на
+/dev/sda10            4,5G  752M  3,7G  17% /mnt/portage # уже btrfs
+/dev/loop1            4,2G  2,1G  1,9G  52% /mnt/ut      # образ ext4 (создан dd if=/dev/sda10 of=...)</code></pre>
+<p>Раздел <code>btrfs</code> больше на <code>300MB</code> за счет того, что <code>btrfs</code> не создает
+таблицы инодов, а хранит иноды как и данные в выделяемых блоках. При
+создании <code>ext4</code> я зарезервировал таблицу на <code>1.1</code> млн инодов. Каждый
+элемент “весит” 256 байт. Это и есть наши <code>300MB</code> (<code>gentoo-x86</code> меньше
+на <code>btrfs</code>).</p>
+<p>Очень рекомендую почитать их
+<a href="https://btrfs.wiki.kernel.org/index.php/Main_Page">wiki</a>. там есть
+такие штуки, как создание именованных слепков файловой системы. Их можно
+очень прикольно использовать как бэкапы или как отдельные файловые
+системы.</p>
         </div>
     </body>
 </html>

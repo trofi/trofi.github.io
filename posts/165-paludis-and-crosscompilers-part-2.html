@@ -30,48 +30,52 @@
             
 
             <p>Я думал, что собирать остальные кросскомпиляторы так же просто, как и
-<a href="http://hackie.blog.tut.by/2010/11/24/paludis-and-crosscompilers/">arm</a>
-кросскомпилятор. Ан нет! <strong>paludis</strong> запас нам несколько подводных граблей.</p>
-<!--more-->
-<p>Казалось бы, чего проще - собрать <strong>powerpc64-unknown-linux-gnu</strong> <strong>toolchain</strong>.
-По аналогии с предыдущим доком создаем группу <strong>cross-powerpc64-unknown-linux-gnu</strong>
-и собираем всё в том же порядке. Но при сборке реальной <strong>glibc</strong> нас ожидает проблема:
-в <strong>gcc</strong> просачиваются <strong>CFLAGS</strong> нашего <strong>host</strong> компилятора. <strong>WTF?</strong>.</p>
-<p>Между <strong>emerge</strong> и <strong>paludis</strong> есть одно очень серьезное отличие:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode C"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="dv">22</span><span class="op">:</span><span class="dv">0</span><span class="er">8</span> <span class="op">&lt;</span> ciaranm<span class="op">&gt;</span> you might find that this is one of those situations</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>                 where it works with portage because por tage randomly</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>                 doesn<span class="ch">'t</span><span class="er"> </span><span class="ch">'</span>export<span class="ch">' </span><span class="er">certain variables, and just has them</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>                 as globals</span></code></pre></div>
-<p>Казалось бы, подумаешь какая-то переменная попадает в окружение дочерним процессам.
-Оказывается, в <strong>gcc</strong> (с виду <strong>gentoo</strong> специфично) есть скрытая фича: протаскивание <strong>CFLAGS</strong>
-в <strong>gcc</strong> через переменные среды!:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> x86_64-pc-linux-gnu-gcc a.c <span class="at">-o</span> a</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> file a</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="ex">a:</span> ELF 64-bit LSB executable, x86-64, version 1 <span class="er">(</span><span class="ex">SYSV</span><span class="kw">)</span><span class="ex">,</span> dynamically linked <span class="er">(</span><span class="ex">uses</span> shared libs<span class="kw">)</span><span class="ex">,</span> for GNU/Linux 2.6.9, not stripped</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="co"># всё хорошо</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ABI=n32 CFLAGS_n32=-mabi=n32 x86_64-pc-linux-gnu-gcc a.c <span class="at">-o</span> a</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="ex">a.c:1:0:</span> error: unknown ABI <span class="er">(</span><span class="ex">n32</span><span class="kw">)</span> <span class="cf">for</span> <span class="ex">-mabi=</span> switch</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="co"># сюрприз!</span></span></code></pre></div>
-<p>Всё бы хорошо, но <strong>ABI</strong> - переменная, которая попадает в ебилды из <strong>profiles/</strong>
-и <strong>paludis</strong> ее экспортирует, а <strong>emerge</strong> - нет. В итоге все программы собираются
-чуть по-разному.</p>
-<p>В прошлый раз я это “починил” это не понимая выставив <strong>ABI=cross</strong>,</p>
+<a href="../posts/127-paludis-and-crosscompilers.html"><code>arm</code></a>
+кросскомпилятор. Ан нет! <code>paludis</code> запас нам несколько подводных
+граблей.</p>
+<p>Казалось бы, чего проще - собрать <code>powerpc64-unknown-linux-gnu</code>
+<code>toolchain</code>. По аналогии с предыдущим доком создаем группу
+<code>cross-powerpc64-unknown-linux-gnu</code> и собираем всё в том же порядке.
+Но при сборке реальной <code>glibc</code> нас ожидает проблема: в <code>gcc</code>
+просачиваются <code>CFLAGS</code> нашего <code>host</code> компилятора.</p>
+<p>Между <code>emerge</code> и <code>paludis</code> есть одно очень серьезное отличие:</p>
+<pre><code>22:08 &lt; ciaranm&gt; you might find that this is one of those situations
+                 where it works with portage because por tage randomly
+                 doesn't 'export' certain variables, and just has them
+                 as globals</code></pre>
+<p>Казалось бы, подумаешь какая-то переменная попадает в окружение дочерним
+процессам. Оказывается, в <code>gcc</code> (с виду <code>gentoo</code> специфично) есть
+скрытая фича: протаскивание <code>CFLAGS</code> в <code>gcc</code> через переменные
+среды!:</p>
+<pre><code>$ x86_64-pc-linux-gnu-gcc a.c -o a
+$ file a
+    a: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.9, not stripped
+# всё хорошо
+#
+$ ABI=n32 CFLAGS_n32=-mabi=n32 x86_64-pc-linux-gnu-gcc a.c -o a
+    a.c:1:0: error: unknown ABI (n32) for -mabi= switch
+# сюрприз!</code></pre>
+<p>Всё бы хорошо, но <code>ABI</code> - переменная, которая попадает в ебилды из
+<code>profiles/</code> и <code>paludis</code> ее экспортирует, а <code>emerge</code> - нет. В итоге
+все программы собираются чуть по-разному.</p>
+<p>В прошлый раз я это “починил” это не понимая выставив <code>ABI=cross</code>,</p>
 <p>Теперь рассмотрим чего еще не хватает.</p>
-<p>Иногда <strong>eclass/multilib.eclass</strong> таки выставляет нужный <strong>ABI</strong> при сборке:</p>
+<p>Иногда <code>eclass/multilib.eclass</code> таки выставляет нужный <code>ABI</code> при
+сборке:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">multilib_toolchain_setup()</span> <span class="kw">{</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="bu">local</span> <span class="va">v</span> <span class="va">vv</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">export</span> <span class="va">ABI</span><span class="op">=</span><span class="va">$1</span></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span></code></pre></div>
-<p>Но эта функция никогда не вызывается для самих <strong>toolchain</strong> пакетов, так как там
-в каждой фазе (например, в <strong>src_compile</strong>) фигурирует сразу пачка <strong>ABI</strong> одновременно
-(host <strong>ABI</strong>, и несколько target <strong>ABI</strong>).</p>
-<p>Единственная мелочь, которой нам не хватает для сборки <strong>cross</strong> <strong>multilib</strong>
-компилятора - это список <strong>ABI</strong>, которые мы хотим видеть в результате;
-и <strong>ABI</strong> кросскомпилятора по умолчанию.</p>
-<p>Этим занимаются 2 переменные: <strong>MULTILIB_ABIS</strong> и <strong>DEFAULT_ABI</strong> (обе выставляются в <strong>profiles/</strong>,
-так что они просачиваются в наше окружение из хост системы).</p>
-<p>Так что теперь <strong>bashrc.cross</strong> у меня теперь выглядит так:</p>
+<p>Но эта функция никогда не вызывается для самих <code>toolchain</code> пакетов,
+так как там в каждой фазе (например, в <code>src_compile</code>) фигурирует сразу
+пачка <code>ABI</code> одновременно (host <code>ABI</code>, и несколько target <code>ABI</code>).</p>
+<p>Единственная мелочь, которой нам не хватает для сборки <code>cross</code>
+<code>multilib</code> компилятора - это список <code>ABI</code>, которые мы хотим видеть в
+результате; и <code>ABI</code> кросскомпилятора по умолчанию.</p>
+<p>Этим занимаются 2 переменные: <code>MULTILIB_ABIS</code> и <code>DEFAULT_ABI</code> (обе
+выставляются в <code>profiles/</code>, так что они просачиваются в наше окружение
+из хост системы).</p>
+<p>Так что теперь <code>bashrc.cross</code> у меня теперь выглядит так:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> <span class="st">&quot;</span><span class="va">${CATEGORY}</span><span class="st">&quot;</span> <span class="kw">in</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="ss">cross-</span><span class="pp">*</span><span class="kw">)</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>        <span class="co"># cross-build</span></span>
@@ -128,37 +132,39 @@
 <span id="cb4-54"><a href="#cb4-54" aria-hidden="true" tabindex="-1"></a>        <span class="cf">esac</span></span>
 <span id="cb4-55"><a href="#cb4-55" aria-hidden="true" tabindex="-1"></a>    <span class="cf">;;</span></span>
 <span id="cb4-56"><a href="#cb4-56" aria-hidden="true" tabindex="-1"></a><span class="cf">esac</span></span></code></pre></div>
-<p>Тут мы видим прикольный пример: кросскомпилятор на <strong>x86_64</strong> <strong>host</strong> в <strong>x86_64</strong> <strong>target</strong>:</p>
+<p>Тут мы видим прикольный пример: кросскомпилятор на <code>x86_64</code> <code>host</code> в
+<code>x86_64</code> <code>target</code>:</p>
 <ul>
-<li><strong>host</strong> компилятор: <strong>x86_64-pc-linux-gnu</strong></li>
-<li><strong>target</strong> компилятор: <strong>x86_64-unknown-linux-gnu</strong></li>
+<li><code>host</code> компилятор: <code>x86_64-pc-linux-gnu</code></li>
+<li><code>target</code> компилятор: <code>x86_64-unknown-linux-gnu</code></li>
 </ul>
-<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># target compiler</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> x86_64-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> file a</span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="ex">a:</span> ELF 32-bit LSB executable, x86-64, version 1 <span class="er">(</span><span class="ex">SYSV</span><span class="kw">)</span><span class="ex">,</span> dynamically linked <span class="er">(</span><span class="ex">uses</span> shared libs<span class="kw">)</span><span class="ex">,</span> for GNU/Linux 2.6.35, not stripped</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="co"># host compiler</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> x86_64-pc-linux-gnu-gcc a.c <span class="at">-o</span> a</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> file a</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="ex">a:</span> ELF 64-bit LSB executable, x86-64, version 1 <span class="er">(</span><span class="ex">SYSV</span><span class="kw">)</span><span class="ex">,</span> dynamically linked <span class="er">(</span><span class="ex">uses</span> shared libs<span class="kw">)</span><span class="ex">,</span> for GNU/Linux 2.6.9, not stripped</span></code></pre></div>
-<p>Чего я насобирал пока изучал как в <strong>gentoo</strong> всё это дело собирается:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc-config <span class="at">-l</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[1]</span> alpha-unknown-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[2]</span> armv5tel-softfloat-linux-gnueabi-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[3]</span> armv7a-unknown-linux-gnueabi-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[4]</span> ia64-unknown-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[5]</span> mingw32-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[6]</span> mips64-unknown-linux-gnu-4.6.2 <span class="pp">*</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[7]</span> powerpc64-unknown-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[8]</span> s390x-unknown-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[9]</span> sparc64-unknown-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[10]</span> sparc-unknown-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[11]</span> x86_64-pc-linux-gnu-4.5.3 <span class="pp">*</span></span>
-<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[12]</span> x86_64-pc-linux-gnu-4.6.2</span>
-<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>  <span class="ex">[13]</span> x86_64-unknown-linux-gnu-4.6.2 <span class="pp">*</span></span></code></pre></div>
-<p>И все работают :]</p>
-<p>Если ооооочень хочется установить <strong>SYMLINK_LIB=yes</strong>, то нужно подфиксить <strong>src_install</strong>
-<strong>glibc</strong>, иначе он сломает хостовый <strong>/lib</strong> (<strong>vapier</strong> грозился пофиксить это сам):</p>
+<pre><code># target compiler
+$ x86_64-unknown-linux-gnu-gcc a.c -o a
+$ file a
+    a: ELF 32-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.35, not stripped
+# host compiler
+$ x86_64-pc-linux-gnu-gcc a.c -o a
+$ file a
+    a: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.9, not stripped</code></pre>
+<p>Чего я насобирал пока изучал как в <code>gentoo</code> всё это дело собирается:</p>
+<pre><code>$ gcc-config -l
+  [1] alpha-unknown-linux-gnu-4.5.3 *
+  [2] armv5tel-softfloat-linux-gnueabi-4.5.3 *
+  [3] armv7a-unknown-linux-gnueabi-4.5.3 *
+  [4] ia64-unknown-linux-gnu-4.5.3 *
+  [5] mingw32-4.5.3 *
+  [6] mips64-unknown-linux-gnu-4.6.2 *
+  [7] powerpc64-unknown-linux-gnu-4.5.3 *
+  [8] s390x-unknown-linux-gnu-4.5.3 *
+  [9] sparc64-unknown-linux-gnu-4.5.3 *
+  [10] sparc-unknown-linux-gnu-4.5.3 *
+  [11] x86_64-pc-linux-gnu-4.5.3 *
+  [12] x86_64-pc-linux-gnu-4.6.2
+  [13] x86_64-unknown-linux-gnu-4.6.2 *</code></pre>
+<p>И все работают!</p>
+<p>Если ооооочень хочется установить <code>SYMLINK_LIB=yes</code>, то нужно
+подфиксить <code>src_install</code> <code>glibc</code>, иначе он сломает хостовый <code>/lib</code>
+(<code>vapier</code> грозился пофиксить это сам):</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>RCS file: /var/cvsroot/gentoo-x86/sys-libs/glibc/files/eblits/src_install.eblit,v</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>retrieving revision 1.19</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">diff -u -u -r1.19 src_install.eblit</span></span>

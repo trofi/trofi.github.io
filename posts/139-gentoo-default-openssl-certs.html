@@ -29,17 +29,18 @@
                 <div class="info">May  3, 2011</div>
             
 
-            <p>Некоторые программы в <strong>gentoo</strong> (<strong>apache</strong>, <strong>postfix</strong>) требуют наличия
-более-менее правильных <strong>SSL</strong> сертификатов. Ебилды этих пакетов занимаются
-автогенерацей таких сертификатов, которые потом хранятся в <strong>/etc/ssl/${PN}/</strong>.</p>
-<p>Генерируются они один раз и содержат всякую ерунду в информации о владельце сертификата.</p>
-<p>На одной из старых машин у меня истёк срок действия <strong>SSL</strong> сертификата и как следствие
-отвалился <strong>HTTPS</strong>. <strong>emerge -1 apache</strong> не помог. Я решил немного разобраться как
-(пере)генерить сертификаты.</p>
-<!--more-->
-<p>Для начала найдем, кто же и когда генерит эти сертификаты. Берем ебилд <strong>apache</strong>:
-<strong>${PORTDIR}/www-servers/apache/apache-2.2.17.ebuild</strong> -&gt; <strong>inherit apache-2</strong> -&gt;
-<strong>${PORTDIR}/eclass/apache-2.eclass</strong>:</p>
+            <p>Некоторые программы в <code>gentoo</code> (<code>apache</code>, <code>postfix</code>) требуют
+наличия более-менее правильных <code>SSL</code> сертификатов. Ебилды этих пакетов
+занимаются автогенерацей таких сертификатов, которые потом хранятся в
+<code>/etc/ssl/${PN}/</code>.</p>
+<p>Генерируются они один раз и содержат всякую ерунду в информации о
+владельце сертификата.</p>
+<p>На одной из старых машин у меня истёк срок действия <code>SSL</code> сертификата
+и как следствие отвалился <code>HTTPS</code>. <code>emerge -1 apache</code> не помог. Я
+решил немного разобраться как (пере)генерить сертификаты.</p>
+<p>Для начала найдем, кто же и когда генерит эти сертификаты. Берем ебилд
+<code>apache</code>: <code>${PORTDIR}/www-servers/apache/apache-2.2.17.ebuild</code> <code>-&gt;</code>
+<code>inherit apache-2</code> <code>-&gt;</code> <code>${PORTDIR}/eclass/apache-2.eclass</code>:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">inherit</span> ... ssl-cert</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">apache-2_pkg_postinst()</span> <span class="kw">{</span></span>
@@ -47,13 +48,11 @@
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    <span class="va">SSL_ORGANIZATION</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_ORGANIZATION</span><span class="op">:-</span>Apache HTTP Server<span class="va">}</span><span class="st">&quot;</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    <span class="ex">install_cert</span> /etc/ssl/apache2/server</span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span></code></pre></div>
-<p>Всё просто: если файла <strong>server.pem</strong> нет, то сертификаты генерятся. Итак,
-решение для самых ленивых:</p>
-<blockquote>
-<p>удалить файлы <strong>rm /etc/ssl/apache2/</strong>* и пересобрать <strong>emerge -1 apache</strong>.</p>
-</blockquote>
-<p>Теперь подробнее изучим функцию <strong>install_cert</strong> из <strong>ssl-cert.eclass</strong>.
-Оказывается, мы можем поизменять большинство параметров в <strong>gen_cnf</strong>:</p>
+<p>Всё просто: если файла <code>server.pem</code> нет, то сертификаты генерятся.
+Итак, решение для самых ленивых: удалить файлы <code>rm /etc/ssl/apache2/*</code>
+и пересобрать <code>emerge -1 apache</code>.</p>
+<p>Теперь подробнее изучим функцию <code>install_cert</code> из <code>ssl-cert.eclass</code>.
+Оказывается, мы можем поизменять большинство параметров в <code>gen_cnf</code>:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># These can be overridden in the ebuild</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_DAYS</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_DAYS</span><span class="op">:-</span>730<span class="va">}</span><span class="st">&quot;</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_BITS</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_BITS</span><span class="op">:-</span>1024<span class="va">}</span><span class="st">&quot;</span></span>
@@ -64,9 +63,10 @@
 <span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_UNIT</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_UNIT</span><span class="op">:-</span>For Testing Purposes Only<span class="va">}</span><span class="st">&quot;</span></span>
 <span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_COMMONNAME</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_COMMONNAME</span><span class="op">:-</span>localhost<span class="va">}</span><span class="st">&quot;</span></span>
 <span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="va">SSL_EMAIL</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${SSL_EMAIL</span><span class="op">:-</span>root@localhost<span class="va">}</span><span class="st">&quot;</span></span></code></pre></div>
-<p>Так что можно выставить какие-то из этих переменных прямо в <strong>/etc/make.conf</strong>!
-Ставим <strong>SSL_DAYS</strong> побольше и больше не паримся.</p>
-<p>Чтобы получить чуть большую гибкость для генерации сертификатов напишем микроскрипт:</p>
+<p>Так что можно выставить какие-то из этих переменных прямо в
+<code>/etc/make.conf</code>! Ставим <code>SSL_DAYS</code> побольше и больше не паримся.</p>
+<p>Чтобы получить чуть большую гибкость для генерации сертификатов напишем
+микроскрипт:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/bash</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> /etc/make.conf</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co"># эмулируем окружение, создаваемое 'ebuild.sh'</span></span>
@@ -89,11 +89,11 @@
 <span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="co"># магия!</span></span>
 <span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="ex">install_cert</span> ./test-certs/server</span>
 <span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="at">-rf</span> <span class="at">--</span> <span class="st">&quot;</span><span class="va">${T}</span><span class="st">&quot;</span></span></code></pre></div>
-<p><strong>“$PORTDIR/eclass/ssl-cert.eclass”</strong> лучше скопировать куда-нибудь
-и немного его подправить. Можно, например, задать:</p>
+<p><code>$PORTDIR/eclass/ssl-cert.eclass</code> лучше скопировать куда-нибудь и
+немного его подправить. Можно, например, задать:</p>
 <ul>
-<li>более вменяемые источники энтропии (<strong>SSL_RANDOM</strong> в <strong>gen_cnf</strong>)</li>
-<li>умолчальный конфиг <strong>/etc/ssl/openssl.conf</strong></li>
+<li>более вменяемые источники энтропии (<code>SSL_RANDOM</code> в <code>gen_cnf</code>)</li>
+<li>умолчальный конфиг <code>/etc/ssl/openssl.conf</code></li>
 <li>что-нибудь еще</li>
 </ul>
         </div>
