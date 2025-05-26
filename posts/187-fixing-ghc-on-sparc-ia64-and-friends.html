@@ -29,69 +29,71 @@
                 <div class="info">September 13, 2014</div>
             
 
-            <p>The <strong>ghc-7.8.1</strong> <a href="http://gentoohaskell.wordpress.com/2014/02/08/7-8-1-rc1-gentoo-experience/">release</a> was the first release
-where <strong>ghc</strong> binary (and tools like <strong>ghc-pkg</strong>, <strong>hpc</strong>, <strong>hsc2hs</strong>, etc.)
-was dynamically linked against haskell libraries shipped with <strong>ghc</strong>.</p>
-<p>At that time:</p>
+            <p>The <code>ghc-7.8.1</code>
+<a href="http://gentoohaskell.wordpress.com/2014/02/08/7-8-1-rc1-gentoo-experience/">release</a>
+was the first release where <code>ghc</code> binary (and tools like <code>ghc-pkg</code>,
+<code>hpc</code>, <code>hsc2hs</code>, etc.) was dynamically linked against <code>haskell</code>
+libraries shipped with <code>ghc</code>. At that time all the below crashed when
+trying to use dynamic linking in <code>ghc-7.8</code>:</p>
 <ul>
-<li><strong>ia64</strong> (unreported, not easy to build :]),</li>
-<li><strong>sparc</strong> (<a href="https://ghc.haskell.org/trac/ghc/ticket/8857">#8857</a>),</li>
-<li><strong>ppc</strong> (<a href="https://ghc.haskell.org/trac/ghc/ticket/8024">#8024</a>)</li>
+<li><code>ia64</code> (unreported, not easy to build),</li>
+<li><code>sparc</code> (<a href="https://ghc.haskell.org/trac/ghc/ticket/8857">#8857</a>),</li>
+<li><code>ppc</code> (<a href="https://ghc.haskell.org/trac/ghc/ticket/8024">#8024</a>)</li>
 </ul>
-<p>all crashed when trying to use dynamic linking in <strong>ghc-7.8</strong>.</p>
 <p>Having <a href="https://ghc.haskell.org/trac/ghc/ticket/8748">upstreamed</a>
-simplest build fixes for unreg arches I foolishly hoped all other
+simplest build fixes for unregisterised arches I foolishly hoped all other
 architectures would Just Work, but fun stuff only started to happen.</p>
-<p>To know all the gory details read on! :]</p>
-<!--more-->
-<h1 id="amd64-bugs">amd64 bugs:</h1>
+<h2 id="amd64-bugs"><code>amd64</code> bugs</h2>
 <p>Being bitten by <a href="https://ghc.haskell.org/trac/ghc/ticket/8748">#8748</a>
-before trying real exotics like <strong>sparc</strong> I first decided to
-check how good (or bad) <strong>UNREG</strong> <strong>amd64</strong> build was.</p>
-<p>To get a feeling about state of some platform
-you only need to build ghc and run regression tests:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./configure</span> <span class="at">--enable-unregisterised</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> fulltest <span class="co"># run regtest</span></span></code></pre></div>
-<p>There was about 200 tests of 4000 broken (which is quite nice, but not ideal).
-The first thing caught my eye was broken arithmetics in rare cases
-like <a href="https://git.haskell.org/ghc.git/blob/master:/testsuite/tests/lib/integer/integerConversions.hs">integerConversions</a>.</p>
-<p>Tests gave incorrect results for code like</p>
+before trying real exotics like <code>sparc</code> I first decided to check how
+good (or bad) <code>UNREG</code> <code>amd64</code> build was.
+To get a feeling about state of some platform you only need to build
+<code>ghc</code> and run regression tests:</p>
+<pre><code>./configure --enable-unregisterised
+make
+make fulltest # run regtest</code></pre>
+<p>There was about 200 tests of 4000 broken (which is quite nice, but not
+ideal). The first thing caught my eye was broken arithmetic in rare
+cases like
+<a href="https://git.haskell.org/ghc.git/blob/master:/testsuite/tests/lib/integer/integerConversions.hs"><code>integerConversions</code></a>.
+Tests gave incorrect results for code like:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">Prelude</span><span class="op">&gt;</span> <span class="dv">4</span> <span class="op">-</span> <span class="dv">2</span><span class="op">^</span><span class="dv">64</span> <span class="op">==</span> <span class="dv">0</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">True</span></span></code></pre></div>
-<p>Thinking about it as The Root Cause of all <strong>SIGSEGV</strong>s I have ever seen
-I’ve started trimming bits down to minimal <strong>.cmm</strong> snippet.</p>
-<p>And got this:</p>
+<p>Thinking about it as The Root Cause of all <code>SIGSEGV</code>s I have ever seen
+I’ve started trimming bits down to minimal <code>.cmm</code> snippet. And got this:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>CInt a <span class="op">=</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> <span class="op">(</span>a <span class="op">==</span> <span class="op">-</span><span class="dv">1</span><span class="op">)</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="pp"># </span><span class="er">returns False</span></span></code></pre></div>
 <p>At that stage exploring generated C code is trivial which gave:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>StgWord64 a <span class="op">=</span> <span class="op">(</span>StgWord32<span class="op">)</span><span class="bn">0xFFFFffffFFFFffff</span><span class="bu">u</span><span class="op">;</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="cf">return</span> <span class="op">(</span>a <span class="op">==</span> <span class="bn">0xFFFFffffFFFFffff</span><span class="bu">u</span><span class="op">)</span></span></code></pre></div>
-<p>The bug here is in pretty-printing 32-bit constant, which was <a href="https://git.haskell.org/ghc.git/commitdiff/43f1b2ecd1960fa7377cf55a2b97c66059a701ef">easy to fix</a>
+<p>The bug here is in pretty-printing 32-bit constant, which was <a href="https://git.haskell.org/ghc.git/commitdiff/43f1b2ecd1960fa7377cf55a2b97c66059a701ef">easy to
+fix</a>
 with Reid’s help.</p>
-<h1 id="sparc-bug">sparc bug:</h1>
-<p>But integer-literals fix didn’t help dynamic binaries on <strong>sparc</strong> and I moved to explore
-on that box.</p>
-<p>The immediate symptom on <strong>sparc</strong> was a <strong>SIGSEGV</strong> somewhere before
-program’s <strong>main()</strong> entry point. And that was very weird.</p>
-<p>I expected C part of haskell runtime to run first and crash later.
-My plan was to break on <strong>main()</strong> and step-by-step get basic understanding
-on what was going on.</p>
-<p>Thus I tried to update <strong>binutils</strong>, <strong>gcc</strong> and <strong>glibc</strong> first in hope
-of some toolchain bug.</p>
-<p>No luck, the bug persisted in exactly the same form.</p>
+<h2 id="sparc-bug"><code>sparc</code> bug</h2>
+<p>But integer-literals fix didn’t help dynamic binaries on <code>sparc</code> and
+I moved to explore on that box.
+The immediate symptom on <code>sparc</code> was a <code>SIGSEGV</code> somewhere before
+program’s <code>main()</code> entry point. And that was very weird.
+I expected C part of <code>haskell</code> runtime to run first and crash later. My
+plan was to break on <code>main()</code> and step-by-step get basic understanding
+on what was going on.
+Thus I tried to update <code>binutils</code>, <code>gcc</code> and <code>glibc</code> first in hope
+of some toolchain bug. No luck, the bug persisted in exactly the same
+form.</p>
 <p>Backtrace of core dump suggested crash was happening somewhere in
-<strong>foreignExportStablePtr</strong> function, which gets registered
-at binary (or library) load time <a href="https://git.haskell.org/ghc.git/blob/master:/compiler/deSugar/DsForeign.lhs#l667">before</a> your <strong>main()</strong> entry point.
-That <strong>__attribute__((constructor));</strong> makes the magic happen.</p>
-<p>For such haskell code</p>
+<code>foreignExportStablePtr</code> function, which gets registered at binary (or
+library) load time
+<a href="https://git.haskell.org/ghc.git/blob/master:/compiler/deSugar/DsForeign.lhs#l667">before</a>
+your <code>main()</code> entry point. That <code>__attribute__((constructor));</code>
+makes the magic happen.</p>
+<p>For such <code>haskell</code> code</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">module</span> <span class="dt">M</span> <span class="kw">where</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Foreign.C.Types</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>foreign export ccall<span class="ot"> f ::</span> <span class="dt">CInt</span> <span class="ot">-&gt;</span> <span class="dt">CInt</span></span>
 <span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ot">f ::</span> <span class="dt">CInt</span> <span class="ot">-&gt;</span> <span class="dt">CInt</span></span>
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>f n <span class="ot">=</span> n <span class="op">+</span> <span class="dv">1</span></span></code></pre></div>
-<p><strong>ghc</strong> basically generates the following stub:</p>
+<p><code>ghc</code> basically generates the following stub:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> StgClosure M_zdfstableZZC0ZZCmainZZCMZZCf_closure<span class="op">;</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>HsInt32 f<span class="op">(</span>HsInt32 a1<span class="op">)</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -110,68 +112,69 @@ That <strong>__attribute__((constructor));</strong> makes the magic happen.</p>
 <span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> stginit_export_M_zdfstableZZC0ZZCmainZZCMZZCf<span class="op">()</span> __attribute__<span class="op">((</span>constructor<span class="op">));</span></span>
 <span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> stginit_export_M_zdfstableZZC0ZZCmainZZCMZZCf<span class="op">()</span></span>
 <span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a><span class="op">{</span>foreignExportStablePtr<span class="op">((</span>StgPtr<span class="op">)</span> <span class="op">&amp;</span>M_zdfstableZZC0ZZCmainZZCMZZCf_closure<span class="op">);}</span></span></code></pre></div>
-<h1 id="sparc-solution">sparc solution:</h1>
-<p>Having smaller program it’s once againt simpler to explore the breakage.</p>
-<p><strong>RISC</strong> CPUs are fun creatures.</p>
-<p>To feel all the delight of looking at the <strong>sparc</strong> assembly I propose to look at
-the generated code for the following C snippet:</p>
+<h2 id="sparc-solution"><code>sparc</code> solution</h2>
+<p>Having smaller program it’s once against simpler to explore the
+breakage. <code>RISC</code>-style CPUs are fun creatures. To feel all the delight
+of looking at the <code>sparc</code> assembly I propose to look at the generated
+code for the following C snippet:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">unsigned</span> unt f<span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="bn">0x1234ABCD</span><span class="op">;</span></span>
 <span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><strong>i386</strong> easily puts a value into a register:</p>
+<p><code>i386</code> easily puts a value into a register:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>movl <span class="op">$</span><span class="bn">0</span>x1234ABCD<span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span></code></pre></div>
-<p>while <strong>sparc32</strong> has hard time:</p>
+<p>while <code>sparc32</code> has hard time:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>sethi <span class="op">%</span>hi<span class="op">(</span><span class="bn">0x1234A800</span><span class="op">),</span> <span class="op">%</span>o0</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span>    <span class="op">%</span>o0<span class="op">,</span> <span class="bn">0x3CD</span><span class="op">,</span> <span class="op">%</span>o0</span></code></pre></div>
-<p>You can’t encode 32-bit immediate in a 32-bit instruction
-containing a tuple of <strong>(opcode, dest-reg, imm)</strong>.
-Opcode usually takes 5 bits, register 5 bits (32 regs) and imm gets only 22 bits.
-On 2-operand instructions <strong>(opcode, src-reg, imm)</strong> we get even less.</p>
-<p>Thus <strong>sparc32</strong> had to add special instruction to their ISA setting high bits for a
-given reg (<strong>o0</strong> in our case).</p>
-<p>Things are even worse for <strong>sparc64</strong> and <strong>ppc64</strong> where instructions are
-32-bit, but registers are 64-bit wide.</p>
-<p>x86<span>64</span> easily puts a 64-bit value into a register:</p>
+<p>You can’t encode 32-bit immediate in a 32-bit instruction containing a
+tuple of <code>(opcode, dest-reg, imm)</code>. Opcode usually takes 5 bits,
+register 5 bits (32 <code>regs</code>) and <code>imm</code> gets only 22 bits. On 2-operand
+instructions <code>(opcode, src-reg, imm)</code> we get even less.</p>
+<p>Thus <code>sparc32</code> had to add special instruction to their ISA setting
+high bits for a given reg (<code>o0</code> in our case).
+Things are even worse for <code>sparc64</code> and <code>ppc64</code> where instructions
+are 32-bit, but registers are 64-bit wide.</p>
+<p><code>x86_64</code> easily puts a 64-bit value into a register:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>movabs <span class="op">$</span><span class="bn">0</span>x1234ABCD5678DCBA<span class="op">,</span> <span class="op">%</span><span class="kw">rax</span></span></code></pre></div>
-<p>while sparc64 does something completely awful:</p>
+<p>while <code>sparc64</code> does something very verbose:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>sethi   <span class="op">%</span>hi<span class="op">(</span><span class="bn">0x1234a800</span><span class="op">),</span> <span class="op">%</span>o0</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>sethi   <span class="op">%</span>hi<span class="op">(</span><span class="bn">0x5678dc00</span><span class="op">),</span> <span class="op">%</span>g1</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span>      <span class="op">%</span>o0<span class="op">,</span> <span class="bn">0x3CD</span><span class="op">,</span> <span class="op">%</span>o0</span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span>      <span class="op">%</span>g1<span class="op">,</span> <span class="bn">0xBA</span><span class="op">,</span> <span class="op">%</span>g1</span>
 <span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>sllx    <span class="op">%</span>o0<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="op">%</span>o0</span>
 <span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span>     <span class="op">%</span>o0<span class="op">,</span> <span class="op">%</span>g1<span class="op">,</span> <span class="op">%</span>o0</span></code></pre></div>
-<p>The above is important because sometimes
-those constants are not known at compile (and assembly)
-time, but known only at link time.</p>
-<h1 id="ghcs-driver-pipeline">ghc’s driver pipeline</h1>
-<p>What ghc basically does when compiler <strong>.hs</strong> file on <strong>via-C</strong> (aka <strong>UNREG</strong>) arch
-is the following:</p>
+<p>The above is important because sometimes those constants are not known
+at compile (and assembly!) time, but known only at link time.</p>
+<h2 id="ghc-driver-pipeline"><code>ghc</code> driver pipeline</h2>
+<p>What <code>ghc</code> basically does when compiler <code>.hs</code> file on <code>-fvia-C</code> (aka
+<code>UNREG</code>) arch is the following:</p>
 <ol type="1">
-<li>.hs -&gt; … -&gt; .hc file (haskell-to-C pass)</li>
-<li>.hc -&gt; .s (haskell-to-asm pass)</li>
-<li>.s -&gt; .s (asm-to-asm mangling pass, no-op in <strong>UNREG</strong> mode)</li>
-<li>.s -&gt; .o (asm-to-object pass)</li>
+<li><code>.hs -&gt; ... -&gt; .hc</code> file (<code>haskell-to-C</code> pass)</li>
+<li><code>.hc -&gt; .s</code> (<code>haskell-to-asm</code> pass)</li>
+<li><code>.s -&gt; .s</code> (<code>asm-to-asm</code> mangling pass, no-op in <code>UNREG</code> mode)</li>
+<li><code>.s -&gt; .o</code> (<code>asm-to-object</code> pass)</li>
 </ol>
-<p>The bug was introduced into pipeline when <strong>-dynamic</strong> way was added to ghc
-(to build dynamic haskell libraries or position-independent executables).</p>
-<p>On many architectures libraries require position independent
-code layout (so called <strong>PIC</strong>). It’s controlled by <strong>-fpic</strong> / <strong>-fPIC</strong> set of <strong>gcc</strong> (and <strong>ghc</strong>) flags.</p>
-<p><strong>ghc</strong> passed <strong>-fPIC</strong> option to <strong>1.</strong> and <strong>2.</strong>,
-but not to <strong>4.</strong>(!) where assembler needs to generate
-either absolute or relative relocation types for the
-following asm snippet:</p>
+<p>The bug was introduced into pipeline when <code>-dynamic</code> way was added to
+<code>ghc</code> (to build dynamic <code>haskell</code> libraries or position-independent
+executables).</p>
+<p>On many architectures libraries require position independent code layout
+(so called <code>PIC</code>). It’s controlled by <code>-fpic</code> / <code>-fPIC</code> set of
+<code>gcc</code> (and <code>ghc</code>) flags.
+<code>ghc</code> passed <code>-fPIC</code> option to <code>[1.]</code> and <code>[2.]</code>, but not to
+<code>[4.]</code>(!) where assembler needs to generate either absolute or relative
+relocation types for the following asm snippet:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">; load GOT address into %l7</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>sethi   <span class="op">%</span>hi<span class="op">(</span>_GLOBAL_OFFSET_TABLE_<span class="op">-</span><span class="dv">8</span><span class="op">),</span> <span class="op">%</span>l7</span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span>     <span class="op">%</span>l7<span class="op">,</span> <span class="op">%</span>lo<span class="op">(</span>_GLOBAL_OFFSET_TABLE_<span class="op">-</span><span class="dv">4</span><span class="op">),</span> <span class="op">%</span>l7</span></code></pre></div>
-<p>The bug was easily <a href="https://git.haskell.org/ghc.git/commitdiff/a93ab43ab5f40cadbedea2f6342b93c245e91434">fixed</a> when identified.
-Now shared haskell libs work on <strong>sparc</strong>!</p>
-<h1 id="a-bit-more-on-sparcs-relocations">a bit more on sparc’s relocations</h1>
-<p>Sometimes there is many ways to generate PIC code even for a single given arch.
-On <strong>sparc</strong> for example there is at least:</p>
+<p>The bug was easily
+<a href="https://git.haskell.org/ghc.git/commitdiff/a93ab43ab5f40cadbedea2f6342b93c245e91434">fixed</a>
+when identified. Now shared <code>haskell</code> libraries work on <code>sparc</code>!</p>
+<h2 id="a-bit-more-on-sparc-relocations">a bit more on <code>sparc</code> relocations</h2>
+<p>Sometimes there is many ways to generate <code>PIC</code> code even for a single
+given arch. On <code>sparc</code> for example there is at least:</p>
 <ul>
-<li><strong>-fpic</strong> option (22-bit relocations)</li>
-<li><strong>-fPIC</strong> (32-bit relocations)</li>
+<li><code>-fpic</code> option (22-bit relocations)</li>
+<li><code>-fPIC</code> (32-bit relocations)</li>
 </ul>
 <p>If you are curious:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">int</span> g_i<span class="op">;</span></span>
@@ -179,7 +182,7 @@ On <strong>sparc</strong> for example there is at least:</p>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">&amp;</span>g_i<span class="op">;</span></span>
 <span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Generates the following assembly for <strong>-fpic</strong>:</p>
+<p>Generates the following assembly for <code>-fpic</code>:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">f:</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    save    <span class="op">%</span><span class="kw">sp</span><span class="op">,</span> <span class="op">-</span><span class="dv">96</span><span class="op">,</span> <span class="op">%</span><span class="kw">sp</span></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    sethi   <span class="op">%</span>hi<span class="op">(</span>_GLOBAL_OFFSET_TABLE_<span class="op">-</span><span class="dv">8</span><span class="op">),</span> <span class="op">%</span>l7</span>
@@ -191,7 +194,7 @@ On <strong>sparc</strong> for example there is at least:</p>
 <span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    <span class="pp">restore</span></span>
 <span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">jmp</span>     <span class="op">%</span>o7<span class="op">+</span><span class="dv">8</span></span>
 <span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>     <span class="bu">nop</span></span></code></pre></div>
-<p>and for <strong>-fPIC</strong>:</p>
+<p>and for <code>-fPIC</code>:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">f:</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    save    <span class="op">%</span><span class="kw">sp</span><span class="op">,</span> <span class="op">-</span><span class="dv">96</span><span class="op">,</span> <span class="op">%</span><span class="kw">sp</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    sethi   <span class="op">%</span>hi<span class="op">(</span>_GLOBAL_OFFSET_TABLE_<span class="op">-</span><span class="dv">8</span><span class="op">),</span> <span class="op">%</span>l7</span>
@@ -205,7 +208,7 @@ On <strong>sparc</strong> for example there is at least:</p>
 <span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="pp">restore</span></span>
 <span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">jmp</span>     <span class="op">%</span>o7<span class="op">+</span><span class="dv">8</span></span>
 <span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>     <span class="bu">nop</span></span></code></pre></div>
-<p>The difference here is what is used to access <strong>GOT</strong>:</p>
+<p>The difference here is what is used to access <code>GOT</code>:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">; -fpic: immediate offset in 'ld'</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>ld      <span class="op">[%</span>l7<span class="op">+</span>g_i<span class="op">],</span> <span class="op">%</span>g1</span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
@@ -213,22 +216,24 @@ On <strong>sparc</strong> for example there is at least:</p>
 <span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>sethi   <span class="op">%</span>gdop_hix22<span class="op">(</span>g_i<span class="op">),</span> <span class="op">%</span>g1</span>
 <span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="bu">xor</span>     <span class="op">%</span>g1<span class="op">,</span> <span class="op">%</span>gdop_lox10<span class="op">(</span>g_i<span class="op">),</span> <span class="op">%</span>g1</span>
 <span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>ld      <span class="op">[%</span>l7 <span class="op">+</span> <span class="op">%</span>g1<span class="op">],</span> <span class="op">%</span>g1<span class="op">,</span> <span class="op">%</span>gdop<span class="op">(</span>g_i<span class="op">)</span></span></code></pre></div>
-<h1 id="ia64-and-integer-gmp">ia64 and integer-gmp</h1>
-<p>Having dealt with <strong>sparc</strong> I’ve decided to have a look at <strong>ia64</strong>
-once again (i didn’t touch it much after <strong>ghc-7.4</strong>).</p>
-<p><strong>ghc</strong> on <strong>ia64</strong> has many problems. One of them is known as <strong>gprel</strong>
+<h2 id="ia64-and-integer-gmp"><code>ia64</code> and <code>integer-gmp</code></h2>
+<p>Having dealt with <code>sparc</code> I’ve decided to have a look at <code>ia64</code>
+once again (i didn’t touch it much after <code>ghc-7.4</code>).
+<code>ghc</code> on <code>ia64</code> has many problems. One of them is known as <code>gprel</code>
 <a href="https://gcc.gnu.org/ml/gcc/2011-01/msg00079.html">addressing overflow</a>.
-You just can’t link static <strong>ghc-7.6</strong> binary on <strong>ia64</strong>.</p>
-<p>Thus one of the ways to fix it is to get dynamic linking working (and a working ghci as a side effect).</p>
-<p>Luckily, <strong>sparc</strong> fix was enough to unbreak it!</p>
-<p>Another long-standing problem was non-working <strong>integer-gmp</strong> library
-(any call to that library resulted in <strong>SIGSEGV</strong>). The workaround
-was to use pure-haskell <strong>integer-simple</strong> library.</p>
-<p>It broke around <strong>ghc-7.0</strong> release and was not touched since.</p>
-<p>After some painful debugging (linking <strong>libghc</strong> takes 2 hours on <strong>ia64</strong>, bulding from scratch - 10 hours on 4-core box)
-I’ve found a cause: <strong>C</strong> codegen generates <strong>data</strong>-like prototypes for <strong>function</strong>-like objects.</p>
-<p>Consider the following snippet:</p>
-<div class="sourceCode" id="cb17"><pre class="sourceCode C"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// a.c</span></span>
+You just can’t link static <code>ghc-7.6</code> binary on <code>ia64</code>.
+Thus one of the ways to fix it is to get dynamic linking working (and a
+working <code>ghci</code> as a side effect).
+Luckily, <code>sparc</code> fix was enough to unbreak it!</p>
+<p>Another long-standing problem was non-working <code>integer-gmp</code> library
+(any call to that library resulted in <code>SIGSEGV</code>). The workaround was
+to use pure-<code>haskell</code> <code>integer-simple</code> library.
+It broke around <code>ghc-7.0</code> release and was not touched since.
+After some painful debugging (just linking <code>libghc</code> takes 2 hours on
+<code>ia64</code>, bulding from scratch - 10 hours on 4-core box) I’ve found a
+cause: <code>C</code> code generator generates <code>data</code>-like prototypes for
+<code>function</code>-like objects. Consider the following snippet:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// a.c</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{}</span></span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="co">// b.c</span></span>
 <span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
@@ -243,14 +248,18 @@ I’ve found a cause: <strong>C</strong> codegen generates <strong>data</strong>
 <span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span><span class="dt">void</span><span class="op">*)&amp;</span>f<span class="op">;</span></span>
 <span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>For most popular arches you would expect the same code to be generated
-for <strong>b.c</strong> and <strong>c.c</strong> files. But it’s not the case for <strong>ia64</strong>.
-Function pointers there are not pointers to code, but pointers to
-a structure called <strong>function descriptor</strong> (a structure of 2 “pointers”: a pointer to code and a new <strong>gp</strong> value).</p>
-<p>As usual once spotted the problem was easy to <a href="http://git.haskell.org/ghc.git/commitdiff/e18525fae273f4c1ad8d6cbe1dea4fc074cac721">fix</a>.</p>
-<p>You would not normally write code like <strong>c.c</strong>, but in this case it was a stupid bug.</p>
-<p>I have an idea to clean C codegen to a state when <strong>gcc</strong>’s <strong>LTO</strong> will be able to build <strong>ghc</strong>
-on amd64 and will be able to find such kinds of bugs at compile time.</p>
-<p>For curious here is how assembly looks for <strong>b.c</strong> on <strong>ia64</strong>:</p>
+for <code>b.c</code> and <code>c.c</code> files. But it’s not the case for <code>ia64</code>.
+Function pointers there are not pointers to code, but pointers to a
+structure called <strong>function descriptor</strong> (a structure of 2 “pointers”:
+a pointer to code and a new <code>gp</code> value).</p>
+<p>As usual once spotted the problem was easy to
+<a href="http://git.haskell.org/ghc.git/commitdiff/e18525fae273f4c1ad8d6cbe1dea4fc074cac721">fix</a>.</p>
+<p>You would not normally write code like <code>c.c</code>, but in this case it was
+a stupid bug.
+I have an idea to clean C code generator to a state when <code>gcc</code>'s <code>LTO</code>
+will be able to build <code>ghc</code> on <code>amd64</code> and will be able to find such
+kinds of bugs at compile/link time.</p>
+<p>For curious here is how assembly looks for <code>b.c</code> on <code>ia64</code>:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">g:</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    .mmi</span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
@@ -261,7 +270,7 @@ on amd64 and will be able to find such kinds of bugs at compile time.</p>
 <span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r8</span><span class="op">]</span></span>
 <span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
 <span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many <span class="dt">rp</span></span></code></pre></div>
-<p>and for <strong>c.c</strong>:</p>
+<p>and for <code>c.c</code>:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="fu">g:</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    .mmi</span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
@@ -272,15 +281,16 @@ on amd64 and will be able to find such kinds of bugs at compile time.</p>
 <span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    ld8<span class="op">.</span>mov <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r8</span><span class="op">],</span> f<span class="op">#</span></span>
 <span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
 <span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many <span class="dt">rp</span></span></code></pre></div>
-<p>Here <strong>f#</strong> and @fptr(f#) are different objects
-with different access rules. @fptr for example needs one more dereference
-to be called/compared/whatever.</p>
-<h1 id="how-ive-spent-an-august">how I’ve spent an august</h1>
-<p>What works better now in <strong>ghc-HEAD</strong></p>
+<p>Here <code>f#</code> and <code>@fptr(f#)</code> are different objects with different access
+rules. <code>@fptr</code> for example needs one more dereference to be
+called/compared/whatever.</p>
+<h2 id="how-ive-spent-an-august">how I’ve spent an august</h2>
+<p>What works better now in <code>ghc-HEAD</code></p>
 <ul>
-<li>64-bit <strong>UNREG</strong> arches make less mistakes in integer operations</li>
-<li>shared libraries (and <strong>ghci</strong>) now do work at least on <strong>sparc</strong> and <strong>ia64</strong> (i hope on <strong>ppc</strong> as well)</li>
-<li><strong>integer-gmp</strong> now works on <strong>ia64</strong></li>
+<li>64-bit <code>UNREG</code> arches make less mistakes in integer operations</li>
+<li>shared libraries (and <code>ghci</code>) now do work at least on <code>sparc</code> and
+<code>ia64</code> (i hope on <code>ppc</code> as well)</li>
+<li><code>integer-gmp</code> now works on <code>ia64</code></li>
 </ul>
 <p>Have fun!</p>
         </div>

@@ -29,34 +29,38 @@
                 <div class="info">December 16, 2015</div>
             
 
-            <p>Once upon a time (actually the day before yesterday) i dropped an eye
-at <strong>freenode/#gentoo-dev</strong> IRC channel and noticed an unusual question:</p>
+            <p>Once upon a time (actually the day before yesterday) I dropped an eye at
+<code>freenode/#gentoo-dev</code> IRC channel and noticed an unusual question:</p>
 <pre><code>21:18 &lt;@_AxS_&gt; gcc internals issue..  does anyone happen to know if gcc-4.9 -O2 treats trampolines
                differently than gcc-4.8 and previous? (as well as gcc-4.9 -O0) ?</code></pre>
-<p>I did not know much about trampolines besides they are gcc extension allowing you to write nested functions
-that can refer to variables outside the scope: <a href="https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html">a doc</a>.</p>
-<!--more-->
-<h1 id="the-problem">the problem</h1>
-<p><code>_AxS_</code> described an issue: <strong>grub-0.97</strong> happens to SIGSEGV
-when you run a ‘grub’ helper tool and try to exit from it’s shell.
-He also had a workaround to make grub work: build it with <strong>-O0</strong>
-(optimisations disabled).</p>
-<p><code>_AxS_</code>’s mystretous valgrind backtrace on a grub userspace binary looked like that:</p>
+<p>I did not know much about trampolines besides they are <code>gcc</code> extension
+allowing you to write nested functions that can refer to variables
+outside the scope: <a href="https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html">a
+doc</a>.</p>
+<h2 id="the-problem">the problem</h2>
+<p><code>_AxS_</code> described an issue: <code>grub-0.97</code> happens to <code>SIGSEGV</code> when you
+run a <code>grub</code> helper tool and try to exit from it’s shell. He also had
+a workaround to make grub work: build it with <code>-O0</code> (optimisations
+disabled).</p>
+<p><code>_AxS_</code> mysterious <code>valgrind</code> backtrace on a <code>grub</code> binary looked like
+that:</p>
 <pre><code>==13972== Process terminating with default action of signal 11 (SIGSEGV)
 ==13972==  Bad permissions for mapped region at address 0x1C
 ==13972==    at 0x1C: ???
 ==13972==    by 0x40D2782: (below main) (in /lib32/libc-2.21.so)</code></pre>
-<p>It looks like a very simple error jumping by NULL address + tiny offset.
-“Must be very easy to fix” was my thought and i’ve started digging :)</p>
-<h1 id="reproducing">reproducing</h1>
-<p>The first thing is to try to reproduce crash locally with debugging symbols enabled:</p>
+<p>It looks like a very simple error jumping by <code>NULL</code> address + tiny offset.
+“Must be very easy to fix” was my thought and I started digging.</p>
+<h2 id="reproducing">reproducing</h2>
+<p>The first thing is to try to reproduce crash locally with debugging
+symbols enabled:</p>
 <pre><code>grub-0.97/grub $ echo quit | ./grub
 Probing devices to guess BIOS drives. This may take a long time.
 Segmentation fault</code></pre>
-<p>Yay! I’m in the game! Next step is to try to get a symbolized version of valgrind output.</p>
-<h1 id="valgrind">valgrind</h1>
-<p>I was not so lucky as my libc uses too fresh instructions valgrind
-does not know about yet:</p>
+<p>Yay! I’m in the game! Next step is to try to get a symbolized version
+of <code>valgrind</code> output.</p>
+<h2 id="valgrind"><code>valgrind</code></h2>
+<p>I was not so lucky as my libc uses too fresh instructions <code>valgrind</code>does
+not know about yet:</p>
 <pre><code>Probing devices to guess BIOS drives. This may take a long time.
 vex x86-&gt;IR: unhandled instruction bytes: 0xC5 0xF8 0x77 0xE8
 ==19149== valgrind: Unrecognised instruction at address 0x412268f.
@@ -68,18 +72,20 @@ vex x86-&gt;IR: unhandled instruction bytes: 0xC5 0xF8 0x77 0xE8
 ==19149==    by 0x8060068: init_device_map (device.c:825)
 ==19149==    by 0x8049C2A: grub_stage2 (asmstub.c:237)
 ==19149==    by 0x8049860: main (main.c:268)</code></pre>
-<p><strong>C5 F8 77</strong> is an <strong>AVX2</strong> <strong>vzeroupper</strong> <a href="https://bugs.kde.org/show_bug.cgi?id=340849">valgrind needs an update</a>.</p>
+<p><code>C5 F8 77</code> is an <code>AVX2</code> <code>vzeroupper</code> <a href="https://bugs.kde.org/show_bug.cgi?id=340849"><code>valgrind</code> needs an
+update</a>.</p>
 <pre><code>[vzeroupper] Set the upper half of all YMM registers to zero.
              Used when switching between 128-bit use and 256-bit use.</code></pre>
-<p>That means i have to use other tools to see what happens at crash time.</p>
-<h1 id="ltrace">ltrace</h1>
-<p>To get an insight into what happened i’ve looked at function call trace.
-<strong>ltrace</strong> intercepts dynamic symbols (like libc symbols) program tries
-to call and outputs function names and parameters.</p>
-<p>You can add custom description of data structures into <strong>/etc/ltrace.conf</strong>
-(or <strong>~/.ltrace</strong>) to make things look even better. I have the following
-snippet to track <strong>GMP</strong> arithmetic i used to debug
-<a href="https://ghc.haskell.org/trac/ghc/ticket/10518">unrelated bug</a> in <strong>ghc</strong>:</p>
+<p>That means I have to use other tools to see what happens at crash time.</p>
+<h2 id="ltrace"><code>ltrace</code></h2>
+<p>To get an insight into what happened I’ve looked at function call
+trace. <code>ltrace</code> intercepts dynamic symbols (like <code>libc</code> symbols) program
+tries to call and outputs function names and parameters.</p>
+<p>You can add custom description of data structures into
+<code>/etc/ltrace.conf</code> (or <code>~/.ltrace</code>) to make things look even
+better. I have the following snippet to track <code>GMP</code> arithmetic i used
+to debug <a href="https://ghc.haskell.org/trac/ghc/ticket/10518">unrelated bug</a>
+in <code>ghc</code>:</p>
 <pre><code>; direct translation from gmp.h
 typedef mp_limb_t   = hex(ulong);
 typedef mp_bitcnt_t = ulong;
@@ -99,7 +105,7 @@ typedef mp_ptr    = void*;
 ;
 mp_limb_t __gmpn_lshift(mp_ptr, array(mp_limb_t, arg3)*, mp_size_t, uint);
 void __gmpn_copyi(mp_ptr, array(mp_limb_t, arg3)*, mp_size_t);</code></pre>
-<p>But back to grub:</p>
+<p>Back to <code>grub</code>:</p>
 <pre><code>$ echo quit | ltrace -olog ./grub
 ...
 __ctype_b_loc()                                                               = 0xf75656cc
@@ -109,8 +115,9 @@ endwin(0xf6bdb200, 128, 0xf6bcaf67, 0x805b3f7)                                = 
 __longjmp_chk(0x8071f60, 1, 0x8071b3c, 0x8049f26 &lt;no return ...&gt;
 --- SIGSEGV (Segmentation fault) ---
 +++ killed by SIGSEGV +++</code></pre>
-<p><strong>longjmp()</strong> needs a <strong>setjmp()</strong> call to store stack context to return to.
-A few of <strong>setjmp()</strong> calls were in the log trace somewhere in the beginning of a trace:</p>
+<p><code>longjmp()</code> needs a <code>setjmp()</code> call to store stack context to return
+to. A few of <code>setjmp()</code> calls were in the log trace somewhere in the
+beginning of a trace:</p>
 <pre><code>scrollok(0x988f3b8, 1, 0, 0x8049d82)                                          = 0
 keypad(0x988f3b8, 1, 0, 0x8049d82)                                            = 0
 wtimeout(0x988f3b8, 100, 0, 0x8049d82)                                        = 0x988f3b8
@@ -119,10 +126,11 @@ sync()                                                                        = 
 _setjmp(0x8071f60, 0, 0, 0)                                                   = 0
 _setjmp(0x807d340, 0, 0, 0)                                                   = 0
 _setjmp(0x807d440, 0xf6bcafb0, 0, 0x805d97d)                                  = 0</code></pre>
-<p><strong>setjmp()</strong> accepts a single parameter): a pointer to buffer where to store current context.</p>
-<h1 id="locating-crash-site">locating crash site</h1>
-<p>Resolving <strong>0x8071f60</strong> to a symbol to get an idea where it gets called from (<strong>gdb</strong> breakpoint
-would also do the trick):</p>
+<p><code>setjmp()</code> accepts a single parameter): a pointer to buffer where to
+store current context.</p>
+<h2 id="locating-crash-site">locating crash site</h2>
+<p>Resolving <code>0x8071f60</code> to a symbol to get an idea where it gets called
+from (<code>gdb</code> breakpoint would also do the trick):</p>
 <pre><code>$ gdb ./grub
 ...
 (gdb) disassemble 0x8071f60
@@ -130,7 +138,7 @@ Dump of assembler code for function env_for_exit:
    0x08071f60 &lt;+0&gt;:     add    %al,(%eax)
    0x08071f62 &lt;+2&gt;:     add    %al,(%eax)
    0x08071f64 &lt;+4&gt;:     add    %al,(%eax)</code></pre>
-<p>Looking up code that sets and restores <strong>env_for_exit</strong>:</p>
+<p>Looking up code that sets and restores <code>env_for_exit</code>:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * $ git grep -C40 env_for_exit</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co"> * grub/asmstub.c:</span></span>
@@ -213,21 +221,24 @@ Dump of assembler code for function env_for_exit:
 <span id="cb10-80"><a href="#cb10-80" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Exit from the GRUB shell.&quot;</span></span>
 <span id="cb10-81"><a href="#cb10-81" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
 <p>A low of stuff happens here.</p>
-<h1 id="gcc-passes">gcc passes</h1>
-<p>As we know from <code>_AxS_</code> <strong>-O0</strong> makes <strong>grub</strong> magically work.</p>
-<p>Checking again by rebuilding as <strong>-O1</strong> and <strong>-O0</strong> this single file <strong>grub/asmstub.c</strong>.
-(The rest is built with <strong>-O1</strong> to keep amount of changes at minimum).</p>
+<h2 id="gcc-passes"><code>gcc</code> passes</h2>
+<p>As we know from <code>_AxS_</code> <code>-O0</code> makes <code>grub</code> magically work.
+Checking again by rebuilding as <code>-O1</code> and <code>-O0</code> this single file
+<code>grub/asmstub.c</code>. (The rest is built with <code>-O1</code> to keep amount of
+changes at minimum).</p>
 <ul>
-<li>works with <strong>-O0</strong></li>
-<li>but <strong>SIGSEGV</strong>s with <strong>-O1</strong></li>
+<li>works with <code>-O0</code></li>
+<li>but <code>SIGSEGVs</code> with <code>-O1</code></li>
 </ul>
-<p><strong>gcc</strong>’s <strong>-O&lt;N&gt;</strong> levels are sets of indivitual (hopefully mostly orthogonal)
-optimisations. We can break <strong>-O1</strong> down and find which of passes broke things.</p>
+<p><code>gcc</code> <code>-O&lt;N&gt;</code> levels are sets of individual (hopefully mostly
+orthogonal) optimisations. We can break <code>-O1</code> down and find which of
+passes broke things.</p>
 <p>The following command dumps all individual passes:</p>
 <pre><code>$ gcc -Q --help=optimizers
 $ gcc -Q --help=optimizers | wc -l
 221</code></pre>
-<p>Now it’s time to find out the exact optimization pass(es) that renders code unusable.</p>
+<p>Now it’s time to find out the exact optimization pass(es) that renders
+code unusable.</p>
 <pre><code>$ gcc -m32 -Q -O0 --help=optimizers &gt; O0
 $ gcc -m32 -Q -O1 --help=optimizers &gt; O1
 $ diff -U0 O0 O1 | grep enabled
@@ -262,14 +273,14 @@ $ diff -U0 O0 O1 | grep enabled
 +  -ftree-slsr                          [enabled]
 +  -ftree-sra                           [enabled]
 +  -ftree-ter                           [enabled]</code></pre>
-<p>Picking a bunch of flags at a time i’ve distilled it down to
-a single flag:</p>
+<p>Picking a bunch of flags at a time I distilled it down to a single
+flag:</p>
 <ul>
-<li><strong>-O1</strong> - <strong>SIGSEGV</strong>s</li>
-<li><strong>-O1 -fno-combine-stack-adjustments</strong> - works!</li>
+<li><code>-O1</code> - <code>SIGSEGV</code>s</li>
+<li><code>-O1 -fno-combine-stack-adjustments</code> - works!</li>
 </ul>
-<h1 id="assembly-changes">assembly changes</h1>
-<p>Now let’s check code genertion difference:</p>
+<h2 id="assembly-changes">assembly changes</h2>
+<p>Now let’s check code generation difference:</p>
 <pre><code>$ x86_64-pc-linux-gnu-gcc -m32 -DHAVE_CONFIG_H &lt;...&gt; -O1                                -S -o asmstub-O1.S asmstub.c
 $ x86_64-pc-linux-gnu-gcc -m32 -DHAVE_CONFIG_H &lt;...&gt; -O1 -fno-combine-stack-adjustments -S -o asmstub-O1-fno.S asmstub.c
 $ diff -U10 asmstub-O1.S asmstub-O1-fno.S
@@ -311,34 +322,38 @@ $ diff -U10 asmstub-O1.S asmstub-O1-fno.S
         movl    $0, status.7386
         call    init_bios_info
         jmp     .L20</code></pre>
-<p>See what happens here? You might need to revisit <strong>doit()</strong> code snippet above
-in this post. Optimisation combines stack allocation at the very <strong>doit()</strong> start
-(before <strong>asm</strong> statement) and stack allocation right before <strong>setjmp()</strong> call.</p>
-<p>That <strong>%esp</strong> adjustment optimization happens as if there would be no <strong>#APP</strong> / <strong>#NOAPP</strong> guarded code.
-(<strong>#APP</strong> / <strong>#NOAPP</strong> wraps around code emitted by <strong>asm</strong> statements)
-But that asm statement overrides <strong>%esp</strong> value!</p>
+<p>See what happens here? You might need to revisit <code>doit()</code> code snippet
+above in this post. Optimization combines stack allocation at the very
+<code>doit()</code> start (before <code>asm</code> statement) and stack allocation right
+before <code>setjmp()</code> call.</p>
+<p>That <code>%esp</code> adjustment optimization happens as if there would be no
+<code>#APP</code> / <code>#NOAPP</code> guarded code. (<code>#APP</code> / <code>#NOAPP</code> wraps around
+code emitted by <code>asm</code> statements) But that <code>asm</code> statement overrides
+<code>%esp</code> value!</p>
 <p>(Exercise for the reader: what exactly breaks by this transformation?)</p>
-<h1 id="gcc-inline-assembly">gcc inline assembly</h1>
+<h2 id="gcc-inline-assembly"><code>gcc</code> inline assembly</h2>
 <p>Going back to original source snippet:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> doit <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Make sure our stack lives in the simulated memory area. */</span></span>
 <span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    asm <span class="dt">volatile</span> <span class="op">(</span><span class="st">&quot;movl </span><span class="sc">%%</span><span class="st">esp, %0</span><span class="sc">\n\t</span><span class="st">movl %1, </span><span class="sc">%%</span><span class="st">esp</span><span class="sc">\n</span><span class="st">&quot;</span></span>
 <span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>           <span class="op">:</span> <span class="st">&quot;=&amp;r&quot;</span> <span class="op">(</span>realstack<span class="op">)</span> <span class="op">:</span> <span class="st">&quot;r&quot;</span> <span class="op">(</span>simstack<span class="op">));</span></span></code></pre></div>
-<p>Some facts about that <strong>asm</strong> statement:</p>
+<p>Some facts about that <code>asm</code> statement:</p>
 <ul>
-<li>backups original <strong>%esp</strong> value and sets new value from <strong>realstack</strong></li>
-<li>list of output arguments (to expand <strong>%0</strong>)</li>
-<li>list of input arguments (to expand <strong>%1</strong>)</li>
+<li>backups original <code>%esp</code> value and sets new value from <code>realstack</code></li>
+<li>list of output arguments (to expand <code>%0</code>)</li>
+<li>list of input arguments (to expand <code>%1</code>)</li>
 </ul>
-<p>gcc does very limited parsing of asm string statement as gcc
-usually does not know of all instructions binutils supports
-(gcc basically searches for “%&lt;N&gt;” templates and substitutes for allocated operands).</p>
-<p>Thus programmer needs to specify explicit effect of written code.
-Effect gets derived only from input and output arguments but you can
-also specify unobvious effects like condition flags or arbitrary memory
-updates: <a href="http://ibiblio.org/gferg/ldp/GCC-Inline-Assembly-HOWTO.html#ss5.3">more details</a>.</p>
-<h1 id="the-fix">the fix</h1>
+<p><code>gcc</code> does very limited parsing of <code>asm</code> string statement as <code>gcc</code> usually
+does not know of all instructions <code>binutils</code> supports (<code>gcc</code> basically
+searches for <code>"%&lt;N&gt;"</code> templates and substitutes for allocated
+operands).</p>
+<p>Thus programmer needs to specify explicit effect of written code. Effect
+gets derived only from input and output arguments but you can also
+specify unobvious effects like condition flags or arbitrary memory
+updates: <a href="http://ibiblio.org/gferg/ldp/GCC-Inline-Assembly-HOWTO.html#ss5.3">more
+details</a>.</p>
+<h2 id="the-fix">the fix</h2>
 <p>Thus our fix is to update the assembly a bit:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/grub/asmstub.c b/grub/asmstub.c</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>index 6354806..44b056f 100644</span>
@@ -357,11 +372,13 @@ updates: <a href="http://ibiblio.org/gferg/ldp/GCC-Inline-Assembly-HOWTO.html#ss
 <span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="st">-      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack));</span></span>
 <span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="va">+      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack) : &quot;%esp&quot;);</span></span>
 <span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>     }</span></code></pre></div>
-<h1 id="fun-facts">fun facts</h1>
-<p>All these nested functions, <strong>setjmp()</strong>, <strong>longjmp()</strong> were only distractions
-hiding very old and simple code bug. Ancient <strong>grub-0.92</strong> from 2002
-(available <a href="ftp://alpha.gnu.org/gnu/grub/">here</a>) also had that flaw.</p>
-<p>The patch is already <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-boot/grub/files/grub-0.97-Add-esp-to-list-of-clobbered-registers.patch">in gentoo</a>.</p>
+<h2 id="fun-facts">fun facts</h2>
+<p>All these nested functions, <code>setjmp()</code>, <code>longjmp()</code> were only
+distractions hiding very old and simple code bug. Ancient <code>grub-0.92</code>
+from 2002 (available <a href="ftp://alpha.gnu.org/gnu/grub/">here</a>) also had
+that flaw.</p>
+<p>The patch is already <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-boot/grub/files/grub-0.97-Add-esp-to-list-of-clobbered-registers.patch">in
+<code>gentoo</code></a>.</p>
 <p>The smarter compilers the funnier life :)</p>
         </div>
     </body>

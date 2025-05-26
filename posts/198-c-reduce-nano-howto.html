@@ -29,15 +29,15 @@
                 <div class="info">March  5, 2017</div>
             
 
-            <p>What is c-reduce? The <a href="http://embed.cs.utah.edu/creduce/">home page</a> gives
-very nice explanation:</p>
+            <p>What is <code>c-reduce</code>? The <a href="http://embed.cs.utah.edu/creduce/">home page</a>
+gives very nice explanation:</p>
 <pre><code>C-Reduce is a tool that takes a large C, C++, or OpenCL file that has a property of interest
 (such as triggering a compiler bug) and automatically produces a much smaller C/C++ file that
 has the same property. It is intended for use by people who discover and report bugs in compilers
 and other tools that process source code.</code></pre>
-<p>Yesterday Amynka shared an interesting guile build
-failure: <a href="https://bugs.gentoo.org/show_bug.cgi?id=610052">bug #610052</a></p>
-<p>The build error is of rare and cryptic sort:</p>
+<p>Yesterday <code>Amynka</code> shared an interesting guile build failure: <a href="https://bugs.gentoo.org/610052">bug
+#610052</a>
+The build error is of rare and cryptic sort:</p>
 <pre><code>../libguile/guile-snarf -o vm.x vm.c -DHAVE_CONFIG_H -DBUILDING_LIBGUILE=1 -I.. -I.. -I../lib -I../lib -I/usr/lib64/libffi-3.2.1/include  -I/var/tmp/portage/dev-scheme/guile-2.0.14/work/guile-2.0.14  -march=native -mtune=native -Os -pipe -ggdb
 ...
 libtool: compile:  gcc -DHAVE_CONFIG_H -DBUILDING_LIBGUILE=1 -I.. -I.. -I../lib -I../lib -I/usr/lib64/libffi-3.2.1/include -I/var/tmp/portage/dev-scheme/guile-2.0.14/work/guile-2.0.14 -pthread -Wall -Wmissing-prototypes -Wdeclaration-after-statement -Wpointer-arith -Wswitch-enum -fno-strict-aliasing -fwrapv -fvisibility=hidden -march=native -mtune=native -Os -pipe -ggdb -c vm.c  -fPIC -DPIC -o .libs/libguile_2.0_la-vm.o
@@ -51,82 +51,91 @@ vm.c:666:19: internal compiler error: SSA corruption
 Please submit a full bug report,
 with preprocessed source if appropriate.
 See &lt;https://bugs.gentoo.org/&gt; for instructions.</code></pre>
-<p><strong>internal compiler error: SSA corruption</strong> says the thing we see is a <strong>GCC</strong> bug.</p>
-<p>User provided plenty information like:</p>
+<p><code>internal compiler error: SSA corruption</code> says the thing we see is a
+<code>GCC</code> bug. User provided plenty information like:</p>
 <ul>
-<li>gcc version: 4.9.4</li>
-<li>CPU: AMD A10 7850K Radeon R7</li>
-<li>CFLAGS=”-march=native -mtune=native -Os -pipe -ggdb”</li>
+<li><code>gcc</code> version: <code>4.9.4</code></li>
+<li>CPU: <code>AMD A10 7850K Radeon R7</code></li>
+<li><code>CFLAGS="-march=native -mtune=native -Os -pipe -ggdb"</code></li>
 </ul>
-<p>I’ve tried to reproduce it on <strong>i7-2700K</strong> CPU and did not succeed.
-<strong>-march=native</strong> is a flag that picks instructions
-available on currently running CPU model+GCC version.</p>
-<p>To find out what <strong>AMD A10 7850K</strong> translates to I’ve looked
-at available <strong>-march=</strong> options in <strong>man gcc</strong>.</p>
-<p>That is a huge list even for x86<span>64</span>. I had to pick from an extensive <strong>AMD</strong> subset (starts at <strong>-march=k6</strong>).
-Something like <strong>-march=amdfam10</strong> or later (<strong>-march=bdver1</strong>, <strong>-march=bdver2</strong>, etc.)
-looked like a good match. I chose <strong>-march=bdver2</strong> mostly at random :)</p>
+<p>I’ve tried to reproduce it on <code>i7-2700K</code> CPU and did not succeed.
+<code>-march=native</code> is a flag that picks instructions available on
+currently running CPU model+<code>GCC</code> version.
+To find out what <code>AMD A10 7850K</code> translates to I’ve looked at
+available <code>-march=</code> options in <code>man gcc</code>.
+That is a huge list even for <code>x86_64</code>. I had to pick from an extensive
+<code>AMD</code> subset (starts at <code>-march=k6</code>). Something like
+<code>-march=amdfam10</code> or later (<code>-march=bdver1</code>, <code>-march=bdver2</code>,
+etc.) looked like a good match. I chose <code>-march=bdver2</code> mostly at
+random :)</p>
 <pre><code>bdver2
-    AMD Family 15h core based CPUs with x86-64 instruction set support.  (This supersets BMI, TBM, F16C, FMA, FMA4, AVX, XOP, LWP, AES, PCL_MUL, CX16, MMX, SSE,
-    SSE2, SSE3, SSE4A, SSSE3, SSE4.1, SSE4.2, ABM and 64-bit instruction set extensions.)</code></pre>
-<p>Reran build command changing <strong>-march=native</strong> to <strong>-march=bdver2</strong></p>
+    AMD Family 15h core based CPUs with x86-64 instruction set support.
+    (This supersets BMI, TBM, F16C, FMA, FMA4, AVX, XOP, LWP, AES,
+    PCL_MUL, CX16, MMX, SSE, SSE2, SSE3, SSE4A, SSSE3, SSE4.1, SSE4.2,
+    ABM and 64-bit instruction set extensions.)</code></pre>
+<p>Reran build command changing <code>-march=native</code> to <code>-march=bdver2</code></p>
 <pre><code>gcc -DHAVE_CONFIG_H -DBUILDING_LIBGUILE=1 -I.. -I.. -I../lib -I../lib -I/usr/lib64/libffi-3.2.1/include -I/var/tmp/portage/dev-scheme/guile-2.0.14/work/guile-2.0.14 -pthread -Wall -Wmissing-prototypes -Wdeclaration-after-statement -Wpointer-arith -Wswitch-enum -fno-strict-aliasing -fwrapv -fvisibility=hidden -march=bdver2 -mtune=bdver2 -Os -pipe -ggdb -c vm.c  -fPIC -DPIC -o .libs/libguile_2.0_la-vm.o</code></pre>
-<p>and got the same <strong>GCC</strong> crash \o/. Yay! Now we have something to look at.</p>
-<p><strong>vm.c</strong> relies on local (to <strong>guile</strong>) and system headers. It’s not clear what
-triggered the error, so I wanted to get a selfcontained example. <strong>GCC</strong> bug reporting manual <a href="https://gcc.gnu.org/bugs/">suggests</a>
-using <strong>-save-temps</strong> option to bundle everything required into a single file. Single files are
-easier to deal with.</p>
+<p>and got the same <code>GCC</code> crash. Yay! Now we have something to look
+at.</p>
+<p><code>vm.c</code> relies on local (to <code>guile</code>) and system headers. It’s not
+clear what triggered the error, so I wanted to get a self-contained
+example. <code>GCC</code> bug reporting manual
+<a href="https://gcc.gnu.org/bugs/">suggests</a> using <code>-save-temps</code> option to
+bundle everything required into a single file. Single files are easier
+to deal with.</p>
 <pre><code>gcc ...&lt;skip&gt;... -march=bdver2 -mtune=bdver2 -Os -pipe -ggdb -c vm.c  -fPIC -DPIC -o .libs/libguile_2.0_la-vm.o -save-temps</code></pre>
-<p>The result is stored in <strong>vm.i</strong>. We can shrink our compile command down to:</p>
+<p>The result is stored in <code>vm.i</code>. We can shrink our compile command down
+to:</p>
 <pre><code>gcc -march=bdver2 -mtune=bdver2 -Os -c vm.i</code></pre>
-<p><strong>vm.i</strong> file is 1052623 bytes long (like a book of decent size). Who knows what went wrong there.</p>
-<p>Googling for <strong>internal compiler error: SSA corruption</strong> revealed quite a few bugs
-related to <strong>SSA</strong> bugs. One of bugs hinted at <strong>c-reduce</strong> as a tool to shrink
-original <strong>C</strong> source files.</p>
-<p>I’ve decided to give it a try. <strong>c-reduce</strong> is very easy to use: we need to construct
-a wrapper script that has 2 exit codes:</p>
+<p><code>vm.i</code> file is <code>1052623</code> bytes long (a book of decent size). Who
+knows what went wrong there.
+Googling for <code>internal compiler error: SSA corruption</code> revealed quite
+a few bugs related to <code>SSA</code> bugs. One of bugs hinted at <code>c-reduce</code>
+as a tool to shrink original <code>C</code> source files.
+I’ve decided to give it a try. <code>c-reduce</code> is very easy to use: we
+need to construct a wrapper script that has 2 exit codes:</p>
 <ul>
-<li><strong>0</strong> - interesting case (or “bug is triggered” in our case)</li>
-<li><strong>1</strong> - uninteresting case (or “bug is gone”)</li>
+<li><code>0</code> - interesting case (or “bug is triggered” in our case)</li>
+<li><code>1</code> - uninteresting case (or “bug is gone”)</li>
 </ul>
 <div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat test.sh</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="va">LANG</span><span class="op">=</span>C <span class="ex">gcc-4.9.4</span> <span class="at">-march</span><span class="op">=</span>bdver2 <span class="at">-O1</span> <span class="at">-c</span> vm.i <span class="at">-o</span> vm.o <span class="op">&gt;</span>gcc_out.txt <span class="dv">2</span><span class="op">&gt;&amp;</span><span class="dv">1</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="fu">grep</span> <span class="st">'internal compiler error'</span> gcc_out.txt <span class="op">&gt;</span>/dev/null <span class="dv">2</span><span class="op">&gt;&amp;</span><span class="dv">1</span></span></code></pre></div>
 <p>That’s it! Let’s start the process:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> time creduce ./test.sh vm.i</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">===</span><span class="op">&lt;</span> 2043 <span class="op">&gt;</span>===</span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">running</span> 4 interestingness tests in parallel</span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="ex">===</span><span class="op">&lt;</span> pass_includes :: 0 <span class="op">&gt;</span>===</span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="ex">===</span><span class="op">&lt;</span> pass_unifdef :: 0 <span class="op">&gt;</span>===</span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="ex">===</span><span class="op">&lt;</span> pass_comments :: 0 <span class="op">&gt;</span>===</span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">0.0</span> %, 1052583 bytes<span class="kw">)</span></span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="ex">===</span><span class="op">&lt;</span> pass_blank :: 0 <span class="op">&gt;</span>===</span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">0.8</span> %, 1044718 bytes<span class="kw">)</span></span>
-<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">5.1</span> %, 998478 bytes<span class="kw">)</span></span>
-<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="ex">===</span><span class="op">&lt;</span> pass_clang_binsrch :: replace-function-def-with-decl <span class="op">&gt;</span>===</span>
-<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">6.4</span> %, 985456 bytes<span class="kw">)</span></span>
-<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">8.3</span> %, 965433 bytes<span class="kw">)</span></span>
-<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">8.7</span> %, 960939 bytes<span class="kw">)</span></span>
-<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
-<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span><span class="op">&lt;</span>takes a while<span class="op">&gt;</span>...</span>
-<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
-<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>      <span class="ex">********</span> /tmp/y/vm.i <span class="pp">********</span></span>
-<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a><span class="ex">*a</span><span class="kw">;</span></span>
-<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a><span class="fu">b()</span> <span class="kw">{</span></span>
-<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>  <span class="ex">char</span> <span class="pp">*</span>c<span class="kw">;</span></span>
-<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>  <span class="ex">static</span> d<span class="kw">;</span></span>
-<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>  <span class="fu">e()</span><span class="kw">;</span></span>
-<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>  <span class="ex">d</span> = c++<span class="kw">;</span></span>
-<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>  <span class="fu">f()</span><span class="kw">;</span></span>
-<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>  <span class="fu">_setjmp()</span><span class="kw">;</span></span>
-<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>  <span class="ex">goto</span> <span class="pp">*</span>a<span class="pp">[</span><span class="ss">*c</span><span class="pp">]</span><span class="kw">;</span></span>
-<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
-<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span>    7m53,030s</span>
-<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a><span class="ex">user</span>    19m0,687s</span>
-<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a><span class="ex">sys</span>     3m37,214s</span></code></pre></div>
-<p>The final result is stored in original <strong>vm.i</strong> file:</p>
+<pre><code>$ time creduce ./test.sh vm.i
+===&lt; 2043 &gt;===
+running 4 interestingness tests in parallel
+===&lt; pass_includes :: 0 &gt;===
+===&lt; pass_unifdef :: 0 &gt;===
+===&lt; pass_comments :: 0 &gt;===
+(0.0 %, 1052583 bytes)
+===&lt; pass_blank :: 0 &gt;===
+(0.8 %, 1044718 bytes)
+(5.1 %, 998478 bytes)
+===&lt; pass_clang_binsrch :: replace-function-def-with-decl &gt;===
+(6.4 %, 985456 bytes)
+(8.3 %, 965433 bytes)
+(8.7 %, 960939 bytes)
+...
+...&lt;takes a while&gt;...
+...
+      ******** /tmp/y/vm.i ********
+
+*a;
+b() {
+  char *c;
+  static d;
+  e();
+  d = c++;
+  f();
+  _setjmp();
+  goto *a[*c];
+}
+
+real    7m53,030s
+user    19m0,687s
+sys     3m37,214s</code></pre>
+<p>The final result is stored in original <code>vm.i</code> file:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="op">*</span>a<span class="op">;</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>b<span class="op">()</span> <span class="op">{</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> <span class="op">*</span>c<span class="op">;</span></span>
@@ -137,29 +146,34 @@ a wrapper script that has 2 exit codes:</p>
 <span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  _setjmp<span class="op">();</span></span>
 <span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  <span class="cf">goto</span> <span class="op">*</span>a<span class="op">[*</span>c<span class="op">];</span></span>
 <span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Only 88 bytes! Not the best piece of <strong>C</strong> ever written but still perfectly valid.
-And way better than original size-wise :)</p>
-<p>This code is portable as it does not contain any gcc version-specific intrinsics
-like <strong>__builtin_va_list</strong> or anything like that.</p>
-<p>Now we more or less know what to look for. <strong>GCC</strong> had a
-<a href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=57584">similar bug</a> where
-<strong>-O1 -ftree-vectorize</strong> was enough to trigger internal compiler error (aka <strong>ICE</strong>).</p>
-<p>Our case is even simpler. It’s not CPU model specific anymore:</p>
+<p>Only 88 bytes! Not the best piece of <code>C</code> ever written but still
+perfectly valid. And way better than original size-wise :)
+This code is portable as it does not contain any <code>gcc</code> version-specific
+intrinsics like <code>__builtin_va_list</code> or anything like that.
+Now we more or less know what to look for. <code>GCC</code> had a <a href="https://gcc.gnu.org/PR57584">similar
+bug</a> where <code>-O1 -ftree-vectorize</code> was
+enough to trigger internal compiler error (aka <code>ICE</code>).
+Our case is even simpler. It’s not CPU model specific anymore:</p>
 <pre><code>$ gcc-4.9.4 -c vm.i -O1
 ...
 Unable to coalesce ssa_names 2 and 9 which are marked as MUST COALESCE.
 c_2(ab) and  c_9(ab)</code></pre>
-<p>So, why wasn’t the original bug triggered on my <strong>-march=corei7-avx</strong> machine? I don’t know!
-Perhaps <strong>GCC</strong>’s intermediate representation slightly depends on target CPU model.</p>
-<p>None of <strong>gcc-5.4.0</strong> or <strong>gcc-6.3.0</strong> crash on that small snippet of code.
-The bug was likely fixed but not merged to <strong>gcc-4.9</strong> branch.
-<strong>gcc-4.9.4</strong> was <a href="https://gcc.gnu.org/ml/gcc/2016-07/msg00084.html">the final release</a> in <strong>4.9</strong> branch.</p>
+<p>So, why wasn’t the original bug triggered on my <code>-march=corei7-avx</code>
+machine? I don’t know! Perhaps <code>GCC</code> intermediate representation
+slightly depends on target CPU model.</p>
+<p>None of <code>gcc-5.4.0</code> or <code>gcc-6.3.0</code> crash on that small snippet of
+code. The bug was likely fixed but not merged to <code>gcc-4.9</code> branch.
+<code>gcc-4.9.4</code> was <a href="https://gcc.gnu.org/ml/gcc/2016-07/msg00084.html">the final
+release</a> in <code>4.9</code>
+branch.</p>
 <p>Random findings:</p>
 <ul>
-<li><strong>save-temps</strong> and <strong>c-reduce</strong> automates away large part of test simplification!
-We need to build similar tools for haskell. It’s quite tedious to do shrinking by hands.</li>
+<li><code>-save-temps</code> and <code>c-reduce</code> automates away large part of test
+simplification! We need to build similar tools for <code>haskell</code>. It’s
+quite tedious to do shrinking by hands.</li>
 <li>old compilers have scary bugs :)</li>
-<li>It is tricky to figure out what <strong>-march=native</strong> expands to. <strong>gcc -v</strong> can help you in that :)</li>
+<li>It is tricky to figure out what <code>-march=native</code> expands to. <code>gc -v</code>
+can help you in that :)</li>
 </ul>
 <p>Have fun!</p>
         </div>

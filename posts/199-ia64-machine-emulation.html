@@ -29,18 +29,23 @@
                 <div class="info">March 19, 2017</div>
             
 
-            <h1 id="tldr">TL;DR</h1>
-<p>There is a working <strong>ia64</strong> machine simulator: <a href="https://ski.sourceforge.net/">ski</a>.
-It can be used to test linux kernel on any host architecture. Or at least on x86<span>64</span> :)</p>
-<p><strong>ski</strong> also supports direct binary translation (in <strong>qemu-user</strong> style) but the simulated kernel is too old.
-Modern glibc requires a few recent system calls to make binary translation work. Adding missing syscalls
+            <h2 id="tldr">TL;DR</h2>
+<p>There is a working <code>ia64</code> machine simulator:
+<a href="https://ski.sourceforge.net/"><code>ski</code></a>. It can be used to test <code>linux</code>
+kernel on any host architecture. Or at least on <code>x86_64</code> :)
+<code>ski</code> also supports direct binary translation (in <code>qemu-user</code> style)
+but the simulated kernel is too old. Modern <code>glibc</code> requires a few recent
+system calls to make binary translation work. Adding missing syscalls
 should not be too hard. But I didn’t try yet :)</p>
-<h1 id="the-problem">The problem</h1>
-<p>Roughly a year ago I tweaked <a href="http://trofi.github.io/posts/189-glibc-on-ia64-or-how-relocations-bootstrap.html">gcc code generation</a>
-on <strong>ia64</strong> to handle local symbol references in a slightly more efficient way. All was well: I was able to restore <strong>ghc-7.10.3</strong> on <strong>ia64</strong>.</p>
-<p>But yesterday I got <a href="https://bugs.gentoo.org/601014">a report</a> that my patch breaks linux kernel
-startup on <strong>ia64</strong>. Uh-oh.</p>
-<p>The error did look very generic (not driver-specific):</p>
+<h2 id="the-problem">The problem</h2>
+<p>Roughly a year ago I tweaked <a href="../posts/189-glibc-on-ia64-or-how-relocations-bootstrap.html"><code>gcc</code> code
+generation</a>
+on <code>ia64</code> to handle local symbol references in a slightly more
+efficient way. All was well: I was able to restore <code>ghc-7.10.3</code> on
+<code>ia64</code>.
+But yesterday I got <a href="https://bugs.gentoo.org/601014">a report</a> that my
+patch breaks <code>linux</code> kernel startup on <code>ia64</code>. Uh-oh.
+The error did look very generic (not driver-specific):</p>
 <pre><code>:: Loading from mdadm: raid0: invalid slot number 1 for IMM64
  raid1: invalid slot number 1 for IMM64
  async_tx: invalid slot number 1 for IMM64
@@ -52,15 +57,18 @@ startup on <strong>ia64</strong>. Uh-oh.</p>
  jbd2: invalid slot number 1 for IMM64
  sunrpc: invalid slot number 1 for IMM64
  fuse: invalid slot number 1 for IMM64</code></pre>
-<p>Kernel fails to load some modules.</p>
-<p>Last time I looked at <a href="https://lkml.org/lkml/2011/12/14/324">a similar problem</a> in sparc land
-where kernel failed to boot early on <strong>sparc32</strong> if kernel was built with <strong>CFLAGS=-Os</strong>.
-In that case the most complex part was to understand how early relocations were fixed up at boot stage.
-The eventual fix was <a href="https://lkml.org/lkml/2011/12/14/348">trivial</a>.</p>
-<p>Back to <strong>ia64</strong>. I suspected it would be something similar as gcc patch did clearly change
-type of commonly used relocations. In this case these are not early relocations of kernel itself
-but <strong>ELF</strong> relocation processing of kernel modules (<strong>.ko</strong>) when they are loaded.</p>
-<p>Below is the snippet of linux kernel that generates the <strong>invalid slot number 1 for IMM64</strong> error:</p>
+<p>Kernel fails to load some modules.
+Last time I looked at <a href="https://lkml.org/lkml/2011/12/14/324">a similar
+problem</a> in <code>sparc</code> land where
+kernel failed to boot early on <code>sparc32</code> if kernel was built with
+<code>CFLAGS=-Os</code>. In that case the most complex part was to understand how
+early relocations were fixed up at boot stage. The eventual fix was
+<a href="https://lkml.org/lkml/2011/12/14/348">trivial</a>.</p>
+<p>Back to <code>ia64</code>. I suspected it would be something similar as <code>gcc</code> patch
+did clearly change type of commonly used relocations. In this case these
+are not early relocations of kernel itself but <code>ELF</code> relocation
+processing of kernel modules (<code>.ko</code>) when they are loaded.
+Below is the snippet of <code>linux</code> kernel that generates the <code>invalid slot number 1 for IMM64</code> error:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// from module.c:</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>apply_imm64 <span class="op">(</span><span class="kw">struct</span> module <span class="op">*</span>mod<span class="op">,</span> <span class="kw">struct</span> insn <span class="op">*</span>insn<span class="op">,</span> <span class="dt">uint64_t</span> val<span class="op">)</span></span>
@@ -90,19 +98,21 @@ but <strong>ELF</strong> relocation processing of kernel modules (<strong>.ko</s
 <span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>         <span class="op">|</span> <span class="op">((</span>val <span class="op">&amp;</span> <span class="bn">0x000000000000007f</span><span class="bu">UL</span><span class="op">)</span> <span class="op">&lt;&lt;</span> <span class="dv">13</span><span class="op">)</span> <span class="co">/* bit  0 -&gt; 13 */</span><span class="op">));</span></span>
 <span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    ia64_patch<span class="op">(</span>insn_addr <span class="op">+</span> <span class="dv">1</span><span class="op">,</span> <span class="bn">0x1ffffffffff</span><span class="bu">UL</span><span class="op">,</span> val <span class="op">&gt;&gt;</span> <span class="dv">22</span><span class="op">);</span></span>
 <span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><strong>apply_imm64</strong> does a straightforward thing: it applies new 64-bit immediate value
-into existing instruction at <strong>insns</strong> address.</p>
-<p>Both modules are worth looking at as a whole:</p>
+<p><code>apply_imm64</code> does a straightforward thing: it applies new 64-bit
+immediate value into existing instruction at <code>insns</code> address.
+Both modules are worth looking at as a whole:</p>
 <ul>
-<li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/module.c">module.c</a></li>
-<li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/patch.c">patch.c</a></li>
+<li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/module.c"><code>module.c</code></a></li>
+<li><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/patch.c"><code>patch.c</code></a></li>
 </ul>
-<p>Comparing to <strong>sparc32</strong> case this looks like a normal relocation handling. Stuffing <strong>imm64</strong> value into 128-bit
-instruction requires quite a bit of bit shift acrobatics :)</p>
-<p><strong>ia64_patch_imm64</strong> comment suggests function can handle <strong>slot=1</strong> and <strong>slot=2</strong> cases while
-<strong>apply_imm64</strong> only accepts <strong>slot=2</strong> case.</p>
-<p>Looking at past history of <strong>patch.c</strong> i found <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9c184a073bfd650cc791956d6ca79725bb682716">this commit</a>.
-It extends support for <strong>slot=1</strong> relocation in a trivial way:</p>
+<p>Comparing to <code>sparc32</code> case this looks like a normal relocation
+handling. Stuffing <code>imm64</code> value into 128-bit instruction requires
+quite a bit of bit shift acrobatics :)
+<code>ia64_patch_imm64</code> comment suggests function can handle <code>slot=1</code> and
+<code>slot=2</code> cases while <code>apply_imm64</code> only accepts <code>slot=2</code> case.
+Looking at past history of <code>patch.c</code> I found <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9c184a073bfd650cc791956d6ca79725bb682716">this
+commit</a>.
+It extends support for <code>slot=1</code> relocation in a trivial way:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/patch.c</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/patch.c</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -64,22 +64,30 @@ ia64_patch (u64 insn_addr, u64 mask, u64 val)</span></span>
@@ -123,16 +133,25 @@ It extends support for <strong>slot=1</strong> relocation in a trivial way:</p>
 <span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="st">-       ia64_patch(insn_addr - 1, 0x1ffffffffffUL, val &gt;&gt; 22);</span></span>
 <span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="va">+       ia64_patch(insn_addr + 1, 0x1ffffffffffUL, val &gt;&gt; 22);</span></span>
 <span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
-<p>The <a href="https://www.sourceware.org/bugzilla/show_bug.cgi?id=1433">bug</a> in commit message explains why the patch was needed.</p>
-<p>What happens there is:</p>
-<p><strong>ia64</strong> has 128-bit 3-tuple (or 3-slot) “instruction bundle” format: <strong>5 bundle tag bits + 3 instructions * 41-bit = 128 bits</strong>.
-41 bit is not enough to hold 64-bit immediate. Some 2-slot instructions allow to encode 64-bit immediate operand (for example <strong>mov r1=imm64</strong>).</p>
-<p>Sometimes linker needs to place a relocation for that <strong>imm64</strong> (say, when <strong>imm64</strong> value is an address). That relocation points to one of the instruction
-slots in instruction bundle as <strong>&lt;bundle_address&gt;+slot_number</strong>. In case of 2-slot instructions both <strong>&lt;bundle_address&gt;+1</strong> and <strong>&lt;bundle_address&gt;+2</strong>
-are valid references to <strong>imm64</strong> value described by relocation. It’s up to assembler which slot number to choose.</p>
-<p>But kernel used to handle only <strong>&lt;bundle_address&gt;+1</strong> case.</p>
-<p>Given that <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9c184a073bfd650cc791956d6ca79725bb682716">the patch</a>
-is in kernel tree since 2005 we can safely lift <strong>slot=1</strong> restriction from <strong>apply_imm64</strong> (and <strong>apply_imm60</strong> while at it):</p>
+<p>The <a href="https://www.sourceware.org/PR1433">bug</a> in
+commit message explains why the patch was needed.
+What happens there is:
+<code>ia64</code> has 128-bit 3-tuple (or 3-slot) “instruction bundle” format:
+<code>5 bundle tag bits + 3 instructions * 41-bit = 128 bits</code>. 41 bit is
+not enough to hold 64-bit immediate. Some 2-slot instructions allow to
+encode 64-bit immediate operand (for example <code>mov r1=imm64</code>).
+Sometimes linker needs to place a relocation for that <code>imm64</code> (say,
+when <code>imm64</code> value is an address). That relocation points to one of
+the instruction slots in instruction bundle as
+<code>&lt;bundle_address&gt;+slot_number</code>. In case of 2-slot instructions both
+<code>&lt;bundle_address&gt;+1</code> and <code>&lt;bundle_address&gt;+2</code> are valid
+references to <code>imm64</code> value described by relocation. It’s up to
+assembler which slot number to choose.
+But kernel used to handle only <code>&lt;bundle_address&gt;+1</code> case.
+Given that <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9c184a073bfd650cc791956d6ca79725bb682716">the
+patch</a>
+is in kernel tree since 2005 we can safely lift <code>slot=1</code> restriction
+from <code>apply_imm64</code> (and <code>apply_imm60</code> while at it):</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/module.c</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/module.c</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -153,7 +153,7 @@ slot (const struct insn *insn)</span></span>
@@ -154,30 +173,34 @@ is in kernel tree since 2005 we can safely lift <strong>slot=1</strong> restrict
 <span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>                       mod-&gt;name, slot(insn));</span>
 <span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>                return 0;</span></code></pre></div>
 <p>Sent the same patch <a href="https://lkml.org/lkml/2017/3/19/173">upstream</a>.</p>
-<h1 id="testing-the-patch">Testing the patch</h1>
-<p>That was the theory. But I didn’t have a spare machine to try a potentially bad kernel on. Normally I use <strong>qemu-system</strong>
-emulation like <strong>qemu-system-sparc</strong>. But <strong>ia64</strong> is one of those rare beasts that are not supported by qemu yet. I’ve found a bunch
-of <strong>qemu-ia64</strong> GSOC projects but none of them got to booting anything.</p>
-<p>I did encounter <strong>ski</strong> before but did not manage to start anything in it.</p>
-<p><strong>ski</strong> can do both full system emulation and userland emulation: <a href="https://web.archive.org/web/20200324132913/https://www.gelato.unsw.edu.au/IA64wiki/SkiSimulator">wiki page</a>.</p>
-<p><strong>ski</strong> is an old piece of software: it requires <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/app-emulation/ski/files">some fixes</a> for
-modern toolchain. But otherwise system emulation just works!</p>
-<p>Userland emulation is not so lucky. It does not know of syscalls
-added for the past 15 years into the linux kernel. Should not be too
-hard to add them. I didn’t try yet :)</p>
-<h1 id="ski-linux-boot-howto">ski linux boot howto</h1>
-<p>So is it hard to boot the kernel?</p>
-<p>Here is a step-by-step instruction to get <strong>ia64</strong> kernel booted:</p>
+<h2 id="testing-the-patch">Testing the patch</h2>
+<p>That was the theory. But I didn’t have a spare machine to try a
+potentially bad kernel on. Normally I use <code>qemu-system</code> emulation like
+<code>qemu-system-sparc</code>. But <code>ia64</code> is one of those rare beasts that are
+not supported by <code>qemu</code> yet. I’ve found a bunch of <code>qemu-ia64</code> <code>GSOC</code>
+projects but none of them got to booting anything.
+I did encounter <code>ski</code> before but did not manage to start anything in
+it.
+<code>ski</code> can do both full system emulation and userland emulation: <a href="https://web.archive.org/web/20200324132913/https://www.gelato.unsw.edu.au/IA64wiki/SkiSimulator">wiki
+page</a>.
+<code>ski</code> is an old piece of software: it requires <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/app-emulation/ski/files">some
+fixes</a>
+for modern toolchain. But otherwise system emulation just works!
+Userland emulation is not so lucky. It does not know of syscalls added
+for the past 15 years into the <code>linux</code> kernel. Should not be too hard to
+add them. I didn’t try yet :)</p>
+<h2 id="ski-linux-boot-howto"><code>ski</code> <code>linux</code> boot howto</h2>
+<p>So is it hard to boot the kernel?
+Here is a step-by-step instruction to get <code>ia64</code> kernel booted:</p>
 <ol type="1">
-<li>Build <strong>ski</strong>: <strong>emerge -1 ski</strong></li>
-<li>Build <strong>ia64</strong> crosscompiler: <strong>crossdev ia64-unknown-linux-gnu</strong></li>
-<li>Build <strong>ia64</strong> kernel:</li>
-</ol>
+<li><p>Build <code>ski</code>: <code>emerge -1 ski</code></p></li>
+<li><p>Build <code>ia64</code> cross-compiler: <code>crossdev ia64-unknown-linux-gnu</code></p></li>
+<li><p>Build <code>ia64</code> kernel:</p>
 <pre><code>$ make defconfig sim_config
-$ ARCH=ia64 CROSS_COMPILE=ia64-unknown-linux-gnu- make</code></pre>
-<ol start="4" type="1">
-<li>Build (for example) <strong>bash</strong> for <strong>ia64</strong>: <strong>ARCH=ia64 emerge-ia64-unknown-linux-gnu -1 bash</strong></li>
-<li>Prepare disk image (I rsynced my <strong>./root</strong> and <strong>/usr/ia64-unknown-linux-gnu</strong> as-is):</li>
+$ ARCH=ia64 CROSS_COMPILE=ia64-unknown-linux-gnu- make</code></pre></li>
+<li><p>Build (for example) <code>bash</code> for <code>ia64</code>: <code>ARCH=ia64     emerge-ia64-unknown-linux-gnu -1 bash</code></p></li>
+<li><p>Prepare disk image (I <code>rsync</code>ed my <code>./root</code> and
+<code>/usr/ia64-unknown-linux-gnu</code> as-is):</p></li>
 </ol>
 <div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cat make_img.sh</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
@@ -195,10 +218,11 @@ $ ARCH=ia64 CROSS_COMPILE=ia64-unknown-linux-gnu- make</code></pre>
 <span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./make_img.sh</span></code></pre></div>
 <ol start="6" type="1">
-<li>Boot the thing: <strong>bski arch/ia64/hp/sim/boot/bootloader vmlinux root=/dev/sda simscsi=./sd simeth=eth0 init=/bin/bash PATH=/bin rw</strong></li>
+<li>Boot the thing: <code>bski arch/ia64/hp/sim/boot/bootloader vmlinux     root=/dev/sda simscsi=./sd simeth=eth0 init=/bin/bash PATH=/bin rw</code></li>
 </ol>
 <p>Done!</p>
-<p>I did install a bunch of other tools there to load modules, format a btrfs filesystem and other toys.</p>
+<p>I did install a bunch of other tools there to load modules, format a
+<code>btrfs</code> filesystem and got other toys.</p>
 <pre><code>loading vmlinux...
 starting kernel...
 Linux version 4.11.0-rc2-00360-gbb62600ffd6e (slyfox@sf) (gcc version 5.4.0 (Gentoo 5.4.0-r3 p1.3, pie-0.6.5) ) #9 SMP PREEMPT Sat Mar 18 20:51:03 GMT 2017
@@ -231,16 +255,21 @@ cpu MHz    : 2.000
 itc MHz    : 2.000000
 BogoMIPS   : 1.22
 siblings   : 1</code></pre>
-<p>2 MHz is not the fastest box in the world but it runs userspace just fine.</p>
-<p>That’s it!</p>
-<p>So far btrfs seems to work on ia64. Looks like my fix is not that bad after all :)</p>
+<p>2 MHz is not the fastest box in the world but it runs user space just
+fine. That’s it!
+So far <code>btrfs</code> seems to work on <code>ia64</code>. Looks like my fix is not that bad
+after all :)</p>
 <p>Random facts:</p>
 <ul>
-<li><strong>ski</strong> needs minimal tweaking to boot up an <strong>ia64</strong> VM</li>
-<li><strong>ia64</strong> <strong>ISA</strong> in <strong>ski</strong> is complete enough to boot kernel and userspace</li>
-<li><strong>ia64</strong> simulation is very slow. I didn’t risk running <strong>gcc</strong> in a VM.</li>
-<li><strong>strace</strong> did not work in a VM. Don’t know why. I suspect incomplete breakpoint implementation.</li>
-<li><strong>ia64</strong> page size is 16K. It means btrfs filesystem formatted on <strong>ia64</strong> can’t be mounted on <strong>x86_64</strong>.</li>
+<li><code>ski</code> needs minimal tweaking to boot up an <code>ia64</code> VM</li>
+<li><code>ia64</code> <code>ISA</code> in <code>ski</code> is complete enough to boot kernel and
+user space</li>
+<li><code>ia64</code> simulation is very slow. I didn’t risk running <code>gcc</code> in a
+VM.</li>
+<li><code>strace</code> did not work in a VM. Don’t know why. I suspect incomplete
+breakpoint implementation.</li>
+<li><code>ia64</code> page size is <code>16K</code>. It means <code>btrfs</code> filesystem formatted on
+<code>ia64</code> can’t be mounted on <code>x86_64</code>.</li>
 </ul>
 <p>Have fun!</p>
         </div>

@@ -29,7 +29,7 @@
                 <div class="info">December 27, 2015</div>
             
 
-            <p>It was a rainy evening on <strong>#gentoo-ia64</strong> and suddenly</p>
+            <p>It was a rainy evening on <code>#gentoo-ia64</code> and suddenly</p>
 <pre><code>00:40 &lt; undersys&gt; trying out glibc 2.21 on my ia64 box
 00:41 &lt; undersys&gt; all compiles fine, gets to preinstall test and fails
 00:41 &lt; undersys&gt; &quot;simple run test (/usr/bin/cal) failed&quot; wat :C
@@ -37,26 +37,28 @@
 16:53 &lt; undersys&gt; /usr/portage/sys-libs/glibc/files/eblits/pkg_preinst.eblit:
           line 24: 17141 Segmentation fault
               LC_ALL=C ./ld-*.so --library-path . ${x} &gt; /dev/null</code></pre>
-<p>Brendan tried hard to get <strong>glibc</strong> building on <strong>ia64</strong> by picking various
-<strong>gcc versions</strong> (<strong>4.7</strong>, <strong>4.8</strong>, <strong>4.9</strong>) but no luck. Late stage of libc sanity check
-suggested resulting <strong>glibc</strong> is completely busted. Bug is known for a while as a
-<a href="https://bugs.gentoo.org/show_bug.cgi?id=503838">bug 503838</a>.</p>
-<!--more-->
-<h1 id="the-problem">the problem</h1>
-<p>I’ve tried to reproduce crash on one of <strong>ia64</strong> boxes:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> emerge <span class="at">-v1</span> =glibc-2.22-r1</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> Installing <span class="kw">(</span><span class="ex">1</span> of 1<span class="kw">)</span> <span class="ex">sys-libs/glibc-2.22-r1</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a> <span class="ex">*</span> Defaulting /etc/host.conf:multi to on</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="ex">/bound/portage/sys-libs/glibc/files/eblits/pkg_preinst.eblit:</span> line 24:</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  <span class="ex">6623</span> Segmentation fault      <span class="er">(</span><span class="ex">core</span> dumped<span class="kw">)</span> <span class="va">LC_ALL</span><span class="op">=</span>C <span class="ex">./ld-*.so</span> <span class="at">--library-path</span> . <span class="va">${x}</span> <span class="op">&gt;</span> /dev/null</span></code></pre></div>
-<p>Got the same thing!</p>
-<p>I think I’ve seen the same crash before but never bothered finding the actual cause of <strong>glibc</strong>
-failure. I always ignored it and kept using old <strong>glibc</strong> as I usually was up to something else
-when visited <strong>ia64</strong> (likely <strong>GHC</strong> binary rebuild).</p>
-<p>But not this time :)</p>
-<h1 id="reproducing">reproducing</h1>
-<p>The crash happened in <strong>pkg_preinst</strong> phase after a successful attempt to build the package:</p>
+<p>Brendan tried hard to get <code>glibc</code> building on <code>ia64</code> by picking
+various <code>gcc</code> versions (<code>4.7</code>, <code>4.8</code>, <code>4.9</code>) but no luck. Late
+stage of <code>libc</code> sanity check suggested resulting <code>glibc</code> is completely
+busted. Bug is known for a while as a
+<a href="https://bugs.gentoo.org/show_bug.cgi?id=503838">#503838</a>.</p>
+<h2 id="the-problem">the problem</h2>
+<p>I’ve tried to reproduce crash on one of <code>ia64</code> boxes:</p>
+<pre><code>$ emerge -v1 =glibc-2.22-r1
+...
+&gt;&gt;&gt; Installing (1 of 1) sys-libs/glibc-2.22-r1
+ * Defaulting /etc/host.conf:multi to on
+/bound/portage/sys-libs/glibc/files/eblits/pkg_preinst.eblit: line 24:
+  6623 Segmentation fault      (core dumped) LC_ALL=C ./ld-*.so --library-path . ${x} &gt; /dev/null</code></pre>
+<p>Got the same thing!
+I think I’ve seen the same crash before but never bothered finding the
+actual cause of <code>glibc</code> failure. I always ignored it and kept using
+old <code>glibc</code> as I usually was up to something else when visited
+<code>ia64</code> (likely <code>GHC</code> binary rebuild).
+But not this time :)</p>
+<h2 id="reproducing">reproducing</h2>
+<p>The crash happened in <code>pkg_preinst</code> phase after a successful attempt
+to build the package:</p>
 <pre><code>* ERROR: sys-libs/glibc-2.22-r1 failed (preinst phase):
 *   simple run test (/usr/bin/cal) failed
 *
@@ -70,7 +72,8 @@ when visited <strong>ia64</strong> (likely <strong>GHC</strong> binary rebuild).
 *              LC_ALL=C \
 *              ./ld-*.so --library-path . ${x} &gt; /dev/null \
 *                      || die &quot;simple run test (${x}) failed&quot;</code></pre>
-<p><strong>sys-libs/glibc/files/eblits/pkg_preinst.eblit</strong> tries to run the following code:</p>
+<p><code>sys-libs/glibc/files/eblits/pkg_preinst.eblit</code> tries to run the
+following code:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="bu">pushd</span> ../../image/lib <span class="co"># 'make install' places freshly built glibc here</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> x <span class="kw">in</span> cal date env free ls true uname uptime <span class="kw">;</span> <span class="cf">do</span></span>
@@ -80,9 +83,9 @@ when visited <strong>ia64</strong> (likely <strong>GHC</strong> binary rebuild).
 <span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>         <span class="kw">||</span> <span class="ex">die</span> <span class="st">&quot;simple run test (</span><span class="va">${x}</span><span class="st">) failed&quot;</span></span>
 <span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span></code></pre></div>
 <p>This code snippet picks commonly installed programs from user’s system
-and tries to run them under freshly built dynamic interpreter
-(as opposed to default <strong>/lib/ld-linux-ia64.so.2</strong>)
-And that new interpreter mysteriously crashes.</p>
+and tries to run them under freshly built dynamic interpreter (as
+opposed to default <code>/lib/ld-linux-ia64.so.2</code>). And new interpreter
+mysteriously crashes.</p>
 <p>We can try to reproduce crash right from a build directory:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> pwd</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">/var/tmp/portage/sys-libs/glibc-2.22-r1/work/build-ia64-ia64-unknown-linux-gnu-nptl</span></span>
@@ -99,9 +102,9 @@ And that new interpreter mysteriously crashes.</p>
 <span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="ex">13</span> 14 15 16 17 18 19</span>
 <span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="ex">20</span> 21 22 23 24 25 26</span>
 <span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="ex">27</span> 28 29 30 31</span></code></pre></div>
-<p>Old <strong>ld.so</strong> works, the new one doesn’t.</p>
+<p>Old <code>ld.so</code> still works, the new one doesn’t.</p>
 <h1 id="nailing-down-the-location">nailing down the location</h1>
-<p>Next step is to drop down into <strong>gdb</strong> and look at the crash:</p>
+<p>Next step is to drop down into <code>gdb</code> and look at the crash:</p>
 <pre><code># gdb -q --args elf/ld.so --library-path ../image/lib /usr/bin/cal
 (gdb) run
 Starting program: /var/tmp/portage/sys-libs/glibc-2.22-r1/work/build-ia64-ia64-unknown-linux-gnu-nptl/elf/ld.so --library-path ../image/lib /usr/bin/cal
@@ -125,8 +128,8 @@ Program received signal SIGSEGV, Segmentation fault.
 #0  0x200000080000b1f1 in elf_get_dynamic_info (temp=0x0, l=0x2000000800052ef8 &lt;_rtld_local+2456&gt;) at get-dynamic-info.h:70
 #1  _dl_start (arg=0x60000fffffffb2a0) at rtld.c:382
 #2  0x2000000800001a50 in _start ()</code></pre>
-<p><strong>gdb</strong> shows the exact line number where crash happens, that’s good.
-I tried to check disassembly to see if anything obvious stands up.</p>
+<p><code>gdb</code> shows the exact line number where crash happens, that’s good. I
+tried to check disassembly to see if anything obvious stands up.</p>
 <pre><code>(gdb) disassemble
 Dump of assembler code for function _dl_start:
     0x200000080000a800 &lt;+0&gt;:     [MMB]       alloc r51=ar.pfs,26,22,0
@@ -158,25 +161,41 @@ Dump of assembler code for function _dl_start:
     0x200000080000b731 &lt;+3889&gt;:              cmp.eq p7,p6=0,r14
     0x200000080000b732 &lt;+3890&gt;:              br.few 0x200000080000a940 &lt;_dl_start+320&gt;;;
 End of assembler dump.</code></pre>
-<p>All in all <strong>_dl_start</strong> disassembly was 720 lines long (15 pages of code). I was not able
-to easily find where <strong>r15</strong> register assignment happened. Basically I had no idea what i am looking at :)</p>
-<p>First off it’s worth understanding why disassembly shows us <strong>_dl_start()</strong> and not <strong>elf_get_dynamic_info()</strong>.</p>
-<p>Here is the annotated backtrace (click on the links! they are fun):</p>
+<p>All in all <code>_dl_start</code> disassembly was 720 lines long (15 pages of
+code). I was not able to easily find where <code>r15</code> register assignment
+happened. Basically I had no idea what I was looking at :)</p>
+<p>First off it’s worth understanding why disassembly shows us
+<code>_dl_start()</code> and not <code>elf_get_dynamic_info()</code>.</p>
+<p>Here is the annotated backtrace (click on the links! They are fun):</p>
 <ul>
-<li>#0 <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/get-dynamic-info.h;h=dc8359d36ac3d97fbb36821a9f8a2deb7ba541e5;hb=HEAD#l69">0x200000080000b1f1</a> in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/get-dynamic-info.h;h=dc8359d36ac3d97fbb36821a9f8a2deb7ba541e5;hb=HEAD#l28">elf_get_dynamic_info</a> (temp=0x0, l=0x2000000800052ef8 &lt;<span id="rtld_local2456">rtld_local+2456</span>&gt;) at <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/get-dynamic-info.h;h=dc8359d36ac3d97fbb36821a9f8a2deb7ba541e5;hb=HEAD#l69">get-dynamic-info.h:70</a></li>
-<li>#1 <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l336">_dl_start</a> (arg=0x60000fffffffb2a0) at <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l382">rtld.c:382</a></li>
-<li>#2 <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/ia64/dl-machine.h;h=57d761e48732cfa5de370e7022eef83ae74a9c65;hb=HEAD#l186">0x2000000800001a50</a> in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/ia64/dl-machine.h;h=57d761e48732cfa5de370e7022eef83ae74a9c65;hb=HEAD#l159">_start ()</a></li>
+<li>#0
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/get-dynamic-info.h;h=dc8359d36ac3d97fbb36821a9f8a2deb7ba541e5;hb=HEAD#l69">0x200000080000b1f1</a>
+in
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/get-dynamic-info.h;h=dc8359d36ac3d97fbb36821a9f8a2deb7ba541e5;hb=HEAD#l28">elf_get_dynamic_info</a>
+(temp=0x0, l=0x2000000800052ef8 &lt;_rtld_local+2456&gt;) at
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/get-dynamic-info.h;h=dc8359d36ac3d97fbb36821a9f8a2deb7ba541e5;hb=HEAD#l69">get-dynamic-info.h:70</a></li>
+<li>#1
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l336">_dl_start</a>
+(arg=0x60000fffffffb2a0) at
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l382">rtld.c:382</a></li>
+<li>#2
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/ia64/dl-machine.h;h=57d761e48732cfa5de370e7022eef83ae74a9c65;hb=HEAD#l186">0x2000000800001a50</a>
+in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/ia64/dl-machine.h;h=57d761e48732cfa5de370e7022eef83ae74a9c65;hb=HEAD#l159">_start
+()</a></li>
 </ul>
-<p>It is easy to trace the whole chain from the very <strong>_start</strong> (every dynamically linked program starts like that on <strong>ia64</strong>):</p>
+<p>It is easy to trace the whole chain from the very <code>_start</code> (every
+dynamically linked program starts like that on <code>ia64</code>):</p>
 <ul>
-<li><strong>_start</strong> (<strong>ld.so</strong> entry point) where very little happens:
+<li><code>_start</code> (<code>ld.so</code> entry point) where very little happens:
 <ul>
-<li>the module-base register <strong>gp</strong> (also known as <strong>r1</strong>) is being computed</li>
-<li>control is passed to <strong>_dl_start()</strong></li>
+<li>the module-base register <code>gp</code> (also known as <code>r1</code>) is being
+computed</li>
+<li>control is passed to <code>_dl_start()</code></li>
 </ul></li>
-<li><strong>_dl_start</strong> is C code entry point where <strong>ld.so</strong> own <strong>ELF</strong> header is being parsed:
+<li><code>_dl_start</code> is <code>C</code> code entry point where <code>ld.so</code> own <code>ELF</code>
+header is being parsed:
 <ul>
-<li><p><strong>bootstrap_map</strong> (dynamic linker context) is being initialised as:</p>
+<li><p><code>bootstrap_map</code> (dynamic linker context) is being initialized as:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> ElfW<span class="op">(</span>Addr<span class="op">)</span> _dl_start <span class="op">(</span><span class="dt">void</span> <span class="op">*</span>arg<span class="op">)</span> <span class="op">{</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">#include </span><span class="im">&quot;dynamic-link.h&quot;</span><span class="pp"> </span><span class="co">/* includes defintion of elf_get_dynamic_info() */</span></span>
@@ -190,13 +209,15 @@ to easily find where <strong>r15</strong> register assignment happened. Basicall
 <span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div></li>
 </ul></li>
 </ul>
-<p>Thus the <strong>elf_get_dynamic_info()</strong> is a local inline function:</p>
+<p>Thus the <code>elf_get_dynamic_info()</code> is a local inline function:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">auto</span> <span class="kw">inline</span> <span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> always_inline<span class="op">))</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>temp<span class="op">)</span> <span class="op">{</span> <span class="op">...</span></span></code></pre></div>
-<p>That’s it. The reason of unreadable <strong>_dl_start</strong> is excessive inlining.</p>
+<p>That’s it. The reason of unreadable <code>_dl_start</code> is excessive
+inlining.</p>
 <p>I undid the inline damage to make disassembly slightly more readable.
-Basically changed <strong>inline</strong> to <strong>noiline</strong> and moved out exact code bit that
-crashed to yet another <strong>noinline</strong> function <strong>elf_get_dynamic_info_addr_tag</strong>:</p>
+Basically changed <code>inline</code> to <code>noiline</code> and moved out exact code bit
+that crashed to yet another <code>noinline</code> function
+<code>elf_get_dynamic_info_addr_tag</code>:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- ../glibc-2.22/elf/get-dynamic-info.h.orig   2015-12-27 12:29:22.468333779 +0000</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ ../glibc-2.22/elf/get-dynamic-info.h        2015-12-27 12:33:43.124279949 +0000</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,100 +1,113 @@</span></span>
@@ -302,16 +323,19 @@ Dump of assembler code for function elf_get_dynamic_info_addr_tag:
    0x200000080000a8b1 &lt;+49&gt;:                nop.i 0x0
    0x200000080000a8b2 &lt;+50&gt;:                br.ret.sptk.many b0;;
 End of assembler dump.</code></pre>
-<p>12 instructions (4 of which are <strong>nop</strong>s) is more manageable.</p>
-<p>More readable but still is completely unclear. <strong>r32</strong> is the only used
-input register here (<strong>r33</strong> would be the second) while <strong>elf_get_dynamic_info_addr_tag()</strong>
-clearly has two arguments:</p>
+<p>12 instructions (4 of which are <code>nop</code> of sorts) is more manageable.</p>
+<p>More readable but still is completely unclear. <code>r32</code> is the only used
+input register here (<code>r33</code> would be the second) while
+<code>elf_get_dynamic_info_addr_tag()</code> clearly has two arguments:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span></code></pre></div>
-<p>At this point i’ve started looking at what exactly crashing code is supposed to do.</p>
-<h1 id="the-first-workaround">the first workaround</h1>
-<p><strong>_rtld_local</strong> is a whole linker context (<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l146">defined here</a>)
-of type <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/generic/ldsodefs.h;h=a8caf47bc378d3ec1ba2e4cd0219503faeeb5e76;hb=HEAD#l268">struct rtld_global</a> (slightly simplified):</p>
+<p>At this point I started looking at what exactly crashing code is
+supposed to do.</p>
+<h2 id="the-first-workaround">the first workaround</h2>
+<p><code>_rtld_local</code> is a whole linker context (<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l146">defined
+here</a>)
+of type <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/generic/ldsodefs.h;h=a8caf47bc378d3ec1ba2e4cd0219503faeeb5e76;hb=HEAD#l268"><code>struct rtld_global</code></a>
+(slightly simplified):</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> rtld_global</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> link_namespaces</span>
@@ -335,8 +359,9 @@ of type <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/generi
 <span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>                    <span class="op">+</span> DT_EXTRANUM <span class="op">+</span> DT_VALNUM <span class="op">+</span> DT_ADDRNUM<span class="op">];</span></span>
 <span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span></span>
 <span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The code crashed when tried to fill in <strong>_rtld_local._dl_rtld_map.l_info</strong> global variable.
-<strong>ld.so</strong> even succeded at previous step (inspecting values right after crash):</p>
+<p>The code crashed when tried to fill in
+<code>_rtld_local._dl_rtld_map.l_info</code> global variable. <code>ld.so</code> even
+succeeded at previous step (inspecting values right after crash):</p>
 <pre><code>(gdb) print _rtld_local._dl_rtld_map.l_info 
 $4 = {0x0 &lt;repeats 14 times&gt;, 0x200000080004e4a0, 0x0 &lt;repeats 62 times&gt;}
 (gdb) print _rtld_local._dl_rtld_map.l_info[14]-&gt;d_tag
@@ -344,8 +369,9 @@ $3 = 14 # DT_SONAME</code></pre>
 <p>but was not able to handle current section type:</p>
 <pre><code>(gdb) (gdb) print dyn-&gt;d_tag 
 $5 = 1879047925 # 0x6ffffef5</code></pre>
-<p>Looking at <strong>/usr/include/elf.h</strong> it’s a section of <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/elf.h;h=fbadda4377aae9ede65ac2fcc795fbbd79d1a78c;hb=HEAD#l767">DT_GNU_HASH type</a>.</p>
-<p>What kinds of dynamic sections does <strong>ld.so</strong> have?</p>
+<p>Looking at <code>/usr/include/elf.h</code> it’s a section of <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/elf.h;h=fbadda4377aae9ede65ac2fcc795fbbd79d1a78c;hb=HEAD#l767"><code>DT_GNU_HASH</code>
+type</a>.</p>
+<p>What kinds of dynamic sections does <code>ld.so</code> have?</p>
 <pre><code># readelf -d elf/ld.so
 Dynamic section at offset 0x3e4a0 contains 21 entries:
   Tag        Type                         Name/Value
@@ -370,10 +396,10 @@ Dynamic section at offset 0x3e4a0 contains 21 entries:
  0x000000006ffffff0 (VERSYM)             0xc88
  0x000000006ffffff9 (RELACOUNT)          17
  0x0000000000000000 (NULL)               0x0</code></pre>
-<p><strong>ld.so</strong> managed to load <strong>SONAME</strong> (first) section and failed at <strong>GNU_HASH</strong> (second).
-What if we drop <strong>GHU_HASH</strong> from <strong>ld.so</strong> image?</p>
-<p>Tried to relink it with default <strong>sysv</strong> hash style.</p>
-<p>The default command to link <strong>ld.so</strong> is:</p>
+<p><code>ld.so</code> managed to load <code>SONAME</code> (first) section and failed at
+<code>GNU_HASH</code> (second). What if we drop <code>GHU_HASH</code> from <code>ld.so</code>
+image? Tried to relink it with default <code>sysv</code> hash style.
+The default command to link <code>ld.so</code> is:</p>
 <pre><code># ia64-unknown-linux-gnu-gcc \
     -Wl,-O1 -Wl,--as-needed \
     \
@@ -389,7 +415,7 @@ What if we drop <strong>GHU_HASH</strong> from <strong>ld.so</strong> image?</p>
     -Wl,--version-script=ld.map \
     -Wl,-soname=ld-linux-ia64.so.2 \
     -Wl,-defsym=_begin=0</code></pre>
-<p>I’ve changed <strong>-Wl,--hash-style=gnu</strong> to <strong>-Wl,--hash-style=sysv</strong>:</p>
+<p>I changed <code>-Wl,--hash-style=gnu</code> to <code>-Wl,--hash-style=sysv</code>:</p>
 <pre><code># ia64-unknown-linux-gnu-gcc \
     -Wl,-O1 -Wl,--as-needed \
     \
@@ -405,7 +431,7 @@ What if we drop <strong>GHU_HASH</strong> from <strong>ld.so</strong> image?</p>
     -Wl,--version-script=ld.map \
     -Wl,-soname=ld-linux-ia64.so.2 \
     -Wl,-defsym=_begin=0</code></pre>
-<p>And behold! Resulting <strong>ld.so</strong> can load simple binaries:</p>
+<p>And behold! Resulting <code>ld.so</code> can load simple binaries:</p>
 <pre><code># elf/ld.so.new --library-path ../image/lib /usr/bin/cal
     December 2015
 Su Mo Tu We Th Fr Sa
@@ -417,15 +443,16 @@ Su Mo Tu We Th Fr Sa
 
 # readelf -d /usr/bin/cal | grep GNU_HASH
   0x000000006ffffef5 (GNU_HASH)           0x4000000000000270</code></pre>
-<p>Even if these binaries contain <strong>GNU_HASH</strong> themselves. That is unexpected.</p>
-<p>Thus the first workaround to get working <strong>glibc</strong> working on <strong>ia64</strong> is by tweaking <strong>LDFLAGS</strong>:</p>
+<p>Even if these binaries contain <code>GNU_HASH</code> themselves. That is
+unexpected.</p>
+<p>Thus the first workaround to get working <code>glibc</code> working on <code>ia64</code>
+is by tweaking <code>LDFLAGS</code>:</p>
 <pre><code>LDFLAGS=&quot;-Wl,--hash-style=sysv&quot; emerge -av sys-libs/glibc</code></pre>
 <h1 id="down-the-rabbit-hole">down the rabbit hole</h1>
-<p>But why does <strong>SIGSEGV</strong> happen in the first place?
-Who is at fault here?</p>
-<p>The primary suspects are <strong>gcc</strong>, <strong>glibc</strong> and <strong>binutils</strong>.</p>
-<p>What is the difference between <strong>SONAME</strong> and <strong>GNU_HASH</strong> sections?
-All the faulty code does is storing pointer to <strong>ElfW(Dyn)</strong>:</p>
+<p>But why does <code>SIGSEGV</code> happen in the first place? Who is at fault
+here? The primary suspects are <code>gcc</code>, <code>glibc</code> and <code>binutils</code>.</p>
+<p>What is the difference between <code>SONAME</code> and <code>GNU_HASH</code> sections? All
+the faulty code does is storing pointer to <code>ElfW(Dyn)</code>:</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -435,7 +462,8 @@ All the faulty code does is storing pointer to <strong>ElfW(Dyn)</strong>:</p>
 <span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>       <span class="op">+</span> DT_VERSIONTAGNUM <span class="op">+</span> DT_EXTRANUM <span class="op">+</span> DT_VALNUM<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
 <span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>I spent some time trying to write simple example to reproduce the crash.
-No matter how hard I tried all samples work just fine. The best approximation is:</p>
+No matter how hard I tried all samples work just fine. The best
+approximation is:</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> dyn_t <span class="op">{</span></span>
@@ -473,7 +501,8 @@ No matter how hard I tried all samples work just fine. The best approximation is
 <span id="cb22-35"><a href="#cb22-35" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb22-36"><a href="#cb22-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _l<span class="op">.</span>p<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb22-37"><a href="#cb22-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>When built as <strong>-O2 -fPIC</strong> it generates very similar asm for function <strong>f</strong> (immediate around <strong>addl r14</strong> is the only deviation):</p>
+<p>When built as <code>-O2 -fPIC</code> it generates very similar <code>asm</code> for function
+<code>f</code> (immediate around <code>addl r14</code> is the only deviation):</p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>$ objdump <span class="op">-</span>r <span class="op">-</span>d a</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>...</span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>&lt;f<span class="op">.</span>constprop<span class="op">.</span><span class="dv">0</span><span class="op">&gt;:</span></span>
@@ -490,7 +519,7 @@ No matter how hard I tried all samples work just fine. The best approximation is
 <span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>       00 00 00 02 00 80                   <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span></span>
 <span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>       08 00 84 00                         br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0<span class="co">;;</span></span>
 <span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>...</span></code></pre></div>
-<p>gcc’s dump is slightly more readable:</p>
+<p><code>gcc</code> dump is slightly more readable:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>$ ia64<span class="op">-</span>unknown<span class="op">-</span>linux<span class="op">-</span>gnu<span class="op">-</span>gcc <span class="op">-</span>O2 <span class="op">-</span>S a<span class="op">.</span>c <span class="op">-</span>o a<span class="op">.</span>S</span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>...</span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="fu">f.constprop.0:</span></span>
@@ -518,11 +547,14 @@ No matter how hard I tried all samples work just fine. The best approximation is
 <span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
 <span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many <span class="dt">rp</span></span>
 <span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>.endp f<span class="op">.</span>constprop<span class="op">.</span><span class="dv">0</span><span class="op">#</span></span></code></pre></div>
-<p>At line <strong>adds r14 = 992, r14</strong> register <strong>r14</strong> should contain absolute address of <strong>_l#+15032385536+992</strong>.
-But where that huge number comes from, why we don’t see it in objdump?</p>
-<p>The magic is in <strong>ld8.mov r14 = [r14], _l#+15032385536</strong> line. It instructs assembly to
-load this (absolute) addres somewhere from <strong>ltoffx(_l#+15032385536) + r1</strong> (aka <strong>-1316 + r1</strong>).</p>
-<p>I returned to broken <strong>ld.so</strong> and checked how this same relocation looks:</p>
+<p>At line <code>adds r14 = 992, r14</code> register <code>r14</code> should contain absolute
+address of <code>_l#+15032385536+992</code>. But where that huge number comes
+from, why we don’t see it in <code>objdump</code>?</p>
+<p>The magic is in <code>ld8.mov r14 = [r14], _l#+15032385536</code> line. It
+instructs assembly to load this (absolute) address somewhere from
+<code>ltoffx(_l#+15032385536) + r1</code> (aka <code>-1316 + r1</code>).</p>
+<p>I returned to broken <code>ld.so</code> and checked how this same relocation
+looks:</p>
 <pre><code># gdb -q elf/ld.so
 Reading symbols from elf/ld.so...done.
 (gdb) run
@@ -556,15 +588,19 @@ $1 = (void *) 0x3800527e0
 
 # objdump -R elf/ld.so | fgrep 3800527e0
 00000000000526b0 REL64LSB          *ABS*+0x00000003800527e0</code></pre>
-<p>This actually is an absolute relocation (contains absolute address). I did not expect
-such things to be present in <strong>PIC</strong> mode. Such relocations work for normal binaries but don’t
-for <strong>ld.so</strong> for a simple reason: <strong>ld.so</strong> did not adjust any relocations yet.</p>
-<p>ld’s own section info is read at <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l382">rtld.c:382</a>
-and relocations are applied later at <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l397">rtld.c:397</a>.</p>
-<p><strong>SONAME</strong> section does not use <strong>R_IA64_REL64LSB</strong> relocation while <strong>GNU_HASH</strong> does.
-It explains the crash but does not explain why generated code is different.</p>
-<h1 id="the-cause">the cause</h1>
-<p>The answer is in the method how <strong>gcc</strong> optimises the following code:</p>
+<p>This actually is an absolute relocation (contains absolute address). I
+did not expect such things to be present in <code>PIC</code> mode. Such
+relocations work for normal binaries but don’t for <code>ld.so</code> for a
+simple reason: <code>ld.so</code> did not adjust any relocations yet.</p>
+<p><code>ld.so</code> own section info is read at
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l382">rtld.c:382</a>
+and relocations are applied later at
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l397">rtld.c:397</a>.</p>
+<p><code>SONAME</code> section does not use <code>R_IA64_REL64LSB</code> relocation while
+<code>GNU_HASH</code> does. It explains the crash but does not explain why
+generated code is different.</p>
+<h2 id="the-cause">the cause</h2>
+<p>The answer is in the method how <code>gcc</code> optimises the following code:</p>
 <div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(&amp;</span>_rtld_local<span class="op">.</span>_dl_rtld_map<span class="op">,</span> NULL<span class="op">);</span></span></code></pre></div>
 <p>Here is a lot of constants to expand:</p>
 <div class="sourceCode" id="cb27"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
@@ -577,9 +613,9 @@ It explains the crash but does not explain why generated code is different.</p>
 <span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// or</span></span>
 <span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// info[(0x6ffffeff - dyn-&gt;d_tag) + 66] = dyn;</span></span>
 <span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><strong>gcc</strong> infers that <strong>elf_get_dynamic_info_addr_tag()</strong> gets
-a constant <strong>_rtld_local._dl_rtld_map</strong> (aka <strong>_rtld_local+2456</strong>) as it’s first argument <strong>l</strong>
-and specialises function into 1-argument variant:</p>
+<p><code>gcc</code> infers that <code>elf_get_dynamic_info_addr_tag()</code> gets a constant
+<code>_rtld_local._dl_rtld_map</code> (aka <code>_rtld_local+2456</code>) as it’s
+first argument <code>l</code> and specialises function into 1-argument variant:</p>
 <div class="sourceCode" id="cb28"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
 <span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag_constprop <span class="op">(</span>ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
 <span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -588,12 +624,15 @@ and specialises function into 1-argument variant:</p>
 <span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>  p<span class="op">[-</span>dyn<span class="op">-&gt;</span>d_tag<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
 <span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>To compile that code <strong>gcc</strong> infers the following facts about <strong>p</strong>:</p>
+<p>To compile that code <code>gcc</code> infers the following facts about <code>p</code>:</p>
 <ul>
-<li>offset from <strong>_rtld_local</strong> to <strong>p</strong> exceeds 22-bit value (limit of <strong>addl &lt;imm22&gt;, gp</strong> instruction): (0x6ffffeff + 66) * 8 + 2520 = 0x3800003e0 = 0x380000000 + 992</li>
-<li><strong>gcc</strong> decides to push <strong>p</strong> address to <strong>.got</strong> and load it from there</li>
+<li>offset from <code>_rtld_local</code> to <code>p</code> exceeds 22-bit value (limit of
+<code>addl &lt;imm22&gt;, gp</code> instruction): <code>(0x6ffffeff + 66) * 8 + 2520 =   0x3800003e0 = 0x380000000 + 992</code></li>
+<li><code>gcc</code> decides to push <code>p</code> address to <code>.got</code> and load it from
+there</li>
 </ul>
-<p>The workaround to avoid <strong>.got</strong> reload is simple (but fragile): force <strong>gcc</strong> to compute final offset first:</p>
+<p>The workaround to avoid <code>.got</code> reload is simple (but fragile): force
+<code>gcc</code> to compute final offset first:</p>
 <div class="sourceCode" id="cb29"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
 <span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
 <span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -604,8 +643,8 @@ and specialises function into 1-argument variant:</p>
 <span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  info<span class="op">[</span>o<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
 <span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>I’ve tried it on a toy example first.
-Hack made <strong>gcc</strong> avoid <strong>ltoffx</strong> and use small <strong>gprel</strong> offset:</p>
+<p>I’ve tried it on a toy example first. Hack made <code>gcc</code> avoid
+<code>ltoffx</code> and use small <code>gprel</code> offset:</p>
 <div class="sourceCode" id="cb30"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">f.constprop.0:</span></span>
 <span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>    .prologue</span>
 <span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>    .body</span>
@@ -638,22 +677,30 @@ Hack made <strong>gcc</strong> avoid <strong>ltoffx</strong> and use small <stro
 <span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>   00 00 00 02 00 00                   <span class="bu">nop</span><span class="op">.</span>m <span class="bn">0x0</span></span>
 <span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>   00 00 04 00                         <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span></span></code></pre></div>
 <p>No memory loads, only a single store \o/.</p>
-<p>A workaround is sent to libc-alpha ML <a href="https://sourceware.org/ml/libc-alpha/2015-12/msg00556.html">for review</a>.</p>
-<h1 id="wrapping-up">wrapping up</h1>
+<p>A workaround is sent to <code>libc</code>-alpha ML <a href="https://sourceware.org/ml/libc-alpha/2015-12/msg00556.html">for
+review</a>.</p>
+<h2 id="wrapping-up">wrapping up</h2>
 <p>Random observations:</p>
 <ul>
-<li><p><strong>LDFLAGS=-Wl,--hash-style=sysv</strong> is a simple way to get modern <strong>glibc</strong> work on <strong>ia64</strong></p></li>
+<li><p><code>LDFLAGS=-Wl,--hash-style=sysv</code> is a simple way to get modern
+<code>glibc</code> work on <code>ia64</code></p></li>
 <li><p>uninlining things did not make bug disappear</p></li>
-<li><p>dynamic linkers are simple yet delicate at bootstrap phase when no relocations are adjusted</p></li>
-<li><p>bug does not happen on <strong>O1</strong> optimisation level (triggered by <strong>-fipa-cp</strong> knob)</p></li>
+<li><p>dynamic linkers are simple yet delicate at bootstrap phase when no
+relocations are adjusted</p></li>
+<li><p>bug does not happen on <code>-O1</code> optimization level (triggered by
+<code>-fipa-cp</code> knob)</p></li>
 <li><p>the workaround is weak and can break at any time in future</p></li>
-<li><p>perhaps <strong>gcc</strong> could be smarter to use <strong>MLX</strong> instruction to embed large offset:</p>
+<li><p>perhaps <code>gcc</code> could be smarter to use <code>MLX</code> instruction to embed
+large offset:</p>
 <div class="sourceCode" id="cb32"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>movl r32 <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>_l<span class="op">#+</span><span class="dv">15032385536</span><span class="op">)</span></span>
 <span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span>  r32 <span class="op">=</span> r32<span class="op">,</span> gp</span></code></pre></div>
-<p>But separate section for <strong>_l</strong> makes things more complicated.</p></li>
-<li><p>it took me a day to get <strong>-Wl,--hash-style=sysv</strong> workaroud and 6 days to figure out why it works</p></li>
-<li><p><strong>ld.so</strong> uses <strong>ELF</strong> relocations extensively and sets them up in C code</p></li>
-<li><p>gdb’s output is misleading for specialised functions (the argument order is flipped)</p></li>
+<p>But separate section for <code>_l</code> makes things more complicated.</p></li>
+<li><p>it took me a day to get <code>-Wl,--hash-style=sysv</code> workaround and 6
+days to figure out why it works</p></li>
+<li><p><code>ld.so</code> uses <code>ELF</code> relocations extensively and sets them up in C
+code</p></li>
+<li><p><code>gdb</code> output is misleading for specialised functions (the argument
+order is flipped)</p></li>
 </ul>
 <p>Have fun!</p>
         </div>

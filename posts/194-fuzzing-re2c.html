@@ -29,33 +29,34 @@
                 <div class="info">December  2, 2016</div>
             
 
-            <p>My dearest friend maintains <a href="http://re2c.org/">re2c</a> (The fast
-C lexer generator).</p>
-<p>Conceptually <strong>re2c</strong> is a simple tool:
-it accepts single source file in <strong>.re</strong> format and generates
-file in <strong>.c</strong> format.</p>
-<p>It usually works fine but occasionally (mostly in development branches)
-<strong>re2c</strong> fails to produce valid output. <a href="https://github.com/skvadrik/re2c/tree/master/re2c/test">Extensive test suite</a>
-is meant to cover past errors and complex lexers seen in the wild
-but it does not help testing new features and bizarre corner cases.</p>
-<p>One day inspired with <a href="http://quickfuzz.org/">QuickFuzz</a> I’ve decided
-to spend 30 minutes to write a fuzzer for <strong>re2c</strong>.</p>
-<p>I’ve started from very simple model: we’ll support only basic
-set of operations. The full list is:</p>
+            <p>My dearest friend maintains <a href="http://re2c.org/"><code>re2c</code></a> (The fast <code>c</code> lexer
+generator).</p>
+<p>Conceptually <code>re2c</code> is a simple tool: it accepts single source file in
+<code>.re</code> format and generates file in <code>.c</code> format.
+It usually works fine but occasionally (mostly in development branches)
+<code>re2c</code> fails to produce valid output. <a href="https://github.com/skvadrik/re2c/tree/master/re2c/test">Extensive test
+suite</a> is meant
+to cover past errors and complex lexers seen in the wild but it does not
+help testing new features and bizarre corner cases.</p>
+<p>One day inspired with <a href="http://quickfuzz.org/"><code>QuickFuzz</code></a> I’ve decided
+to spend 30 minutes to write a fuzzer for <code>re2c</code>.
+I started from very simple model: we’ll support only basic set of
+operations. The full list is:</p>
 <ul>
-<li>“a”</li>
-<li>“b”</li>
-<li>“(” … “)” (brackets)</li>
-<li>“*” (star)</li>
+<li><code>"a"</code></li>
+<li><code>"b"</code></li>
+<li><code>"(" ... ")"</code> (brackets)</li>
+<li><code>"*"</code> (star)</li>
 <li>concatenation</li>
-<li>“|” (alternative)</li>
+<li><code>"|"</code> (alternative)</li>
 </ul>
-<p>Haskell community has a wonderful <strong>QuickCheck</strong> library (<a href="http://www.cs.tufts.edu/~nr/cs257/archive/john-hughes/quick.pdf">paper</a>)
+<p>Haskell community has a wonderful <code>QuickCheck</code> library
+(<a href="http://www.cs.tufts.edu/~nr/cs257/archive/john-hughes/quick.pdf">paper</a>)
 to generate random instances of a given datatype. The only thing I need
-is to put these random instances into the file and run <strong>re2c</strong>
-selfvalidation on it. <strong>-S</strong> (<a href="http://re2c.org/manual/features/skeleton/skeleton.html">skeleton mode</a>)
-option generates a validator, not a normal lexer.</p>
-<!--more-->
+is to put these random instances into the file and run <code>re2c</code>
+self-validation on it. <code>-S</code> (<a href="http://re2c.org/manual/features/skeleton/skeleton.html">skeleton
+mode</a>) option
+generates a validator, not a normal lexer.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- qc_re2c.hs</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# LANGUAGE LambdaCase #-}</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -111,18 +112,22 @@ option generates a validator, not a normal lexer.</p>
 <span id="cb1-53"><a href="#cb1-53" aria-hidden="true" tabindex="-1"></a><span class="co">-- main = Q.quickCheck prop_test_re2c</span></span>
 <span id="cb1-54"><a href="#cb1-54" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> Q.quickCheckWith Q.stdArgs { Q.maxSuccess <span class="ot">=</span> <span class="dv">10000</span> } prop_test_re2c</span></code></pre></div>
 <p>Running the thing is easy:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> runhaskell qc_re2c.hs</span></code></pre></div>
+<pre><code>$ runhaskell qc_re2c.hs</code></pre>
 <p>It generates samples similar to the following:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*!re2c</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">((((&quot;b&quot;)*)*|((&quot;b&quot;)*)*))* {}</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">&quot;b&quot; {}</span></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">*/</span></span></code></pre></div>
-<p>We can extend fuzzer to support things like “[^abc]” (set negation), add more regex clauses and so on.</p>
+<p>We can extend fuzzer to support things like <code>"[^abc]"</code> (set
+negation), add more regex clauses and so on.</p>
 <p>Found issues so far:</p>
 <ul>
-<li><a href="https://github.com/skvadrik/re2c/commit/9e63260cebd72183c9401addbf21767edbe39176">something scary WRT comparison</a></li>
-<li><a href="https://github.com/skvadrik/re2c/commit/2db0433b08bbda2d872eeae26b159a0d5e2daf2a">something even scarier</a></li>
-<li><a href="https://github.com/skvadrik/re2c/commit/d07bc5ce04beb25e1a92600bb36141263b5714e7">this has nice test case</a></li>
+<li><a href="https://github.com/skvadrik/re2c/commit/9e63260cebd72183c9401addbf21767edbe39176">something scary around
+comparison</a></li>
+<li><a href="https://github.com/skvadrik/re2c/commit/2db0433b08bbda2d872eeae26b159a0d5e2daf2a">something even
+scarier</a></li>
+<li><a href="https://github.com/skvadrik/re2c/commit/d07bc5ce04beb25e1a92600bb36141263b5714e7">this has nice test
+case</a></li>
 </ul>
 <p>Now computer can write (and trim) code samples for you.</p>
 <p>Simple!</p>

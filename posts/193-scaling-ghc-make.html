@@ -29,215 +29,232 @@
                 <div class="info">October  1, 2016</div>
             
 
-            <p>Tl;DR: to speedup build of a haskell package use:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ghc <span class="at">--make</span> <span class="at">-j</span> +RTS <span class="at">-A256M</span> <span class="at">-qb0</span> <span class="at">-RTS</span> <span class="op">&lt;</span>your-args<span class="op">&gt;</span></span></code></pre></div>
-<p>Story mode:</p>
-<p>In the previous post I’ve shown a tiny hack on how to make
-sense out of ghc using <strong>perf</strong>. My actual goal was to get
-basic understanding on why <strong>ghc --make</strong> does not scale
-perfectly.</p>
-<p>The scalability problem is known as <a href="http://ghc.haskell.org/trac/ghc/ticket/9221">GHC trac #9221</a>.</p>
-<!--more-->
-<h1 id="why-ghc---make--j-scalability-matters">Why ghc --make -j scalability matters</h1>
-<p>I care about <strong>ghc --make</strong> speed because I build a lot
-of haskell packages as part of <a href="https://github.com/gentoo-haskell/gentoo-haskell/commits/master">gentoo-haskell</a>
+            <h2 id="tldr"><code>Tl;DR</code></h2>
+<p>To speed up build of a <code>haskell</code> package use:</p>
+<pre><code>$ ghc --make -j +RTS -A256M -qb0 -RTS &lt;your-args&gt;</code></pre>
+<h2 id="story-mode">Story mode</h2>
+<p>In the previous post I’ve shown a tiny hack on how to make sense out of
+<code>ghc</code> using <code>perf</code>. My actual goal was to get basic understanding on why
+<code>ghc --make</code> does not scale perfectly.</p>
+<p>The scalability problem is known as <a href="http://ghc.haskell.org/trac/ghc/ticket/9221"><code>GHC</code> trac
+#9221</a>.</p>
+<h2 id="why-ghc---make--j-scalability-matters">Why <code>ghc --make -j</code> scalability matters</h2>
+<p>I care about <code>ghc --make</code> speed because I build a lot of <code>haskell</code>
+packages as part of
+<a href="https://github.com/gentoo-haskell/gentoo-haskell/commits/master"><code>gentoo-haskell</code></a>
 overlay maintenance.</p>
 <p>My workflow to add or update a new package is simple:</p>
 <ul>
-<li>quickly build new version of package (or packages) against
-my existing haskell world (~1500 globally installed haskell
-packages) and run it’s tests</li>
-<li>install this new version in system and rebuild rest of
-haskell packages against it</li>
+<li>quickly build new version of package (or packages) against my existing
+<code>haskell</code> world (<code>~1500</code> globally installed <code>haskell</code> packages) and run
+its tests</li>
+<li>install this new version in system and rebuild rest of <code>haskell</code>
+packages against it</li>
 </ul>
 <p>Installation and rebuild usually happens overnight.</p>
-<p>Quick build is a relatively interactive phase. It fails frequently
-as packages require some tweaks along the way, like upper bound fixes
-or minor API changes.</p>
+<p>Quick build is a relatively interactive phase. It fails frequently as
+packages require some tweaks along the way, like upper bound fixes or
+minor API changes.</p>
 <p>I use various hacks to speed up quick builds:</p>
 <ul>
-<li>build with optimisations disabled: <strong>-O0</strong></li>
-<li>build in parallel <strong>ghc --make -j</strong> mode</li>
+<li>build with optimisations disabled: <code>-O0</code></li>
+<li>build in parallel <code>ghc --make -j</code> mode</li>
 </ul>
-<h1 id="the-sympthoms">The sympthoms</h1>
-<p>My machine is an x86<span>64</span> desktop (4x2 HT cores on a single die).
-Nothing fancy. Should be an easy target to get perfect parallelism.
-Right?</p>
-<p>At first I chose <strong>highlightling-kate</strong> package as it has
-at least 100 independent modules for various languages.</p>
-<p>The <strong>ghc –make -j&lt;N&gt;</strong> histogram looks like that:</p>
-<p><img src="https://ghc.haskell.org/trac/ghc/raw-attachment/ticket/9221/graph1.png" alt="image" /></p>
-<p>The problem is that even on my machine <strong>ghc --make -j3</strong>
-works better than <strong>ghc --make -j8</strong> and I could not get
-more than <strong>1.5x</strong> speedup. I’d like to see <strong>8x</strong> speedup.
-Or at least <strong>4x</strong> :)</p>
-<p>Another problem is quick performance degradation once you
-exceed number of cpus. Running <strong>ghc --make -j20</strong>
-on my machine makes things seriously worse: compilation time
-is longer than in non-parallel mode! That did not look good.</p>
-<h1 id="the-clues">The clues</h1>
-<p>So why are things so bad? And more importantly how would you
-diagnose similar issue in another haskell program? The problem
-looked like a nice thing to get basic experience in this area.</p>
-<p>In <a href="https://ghc.haskell.org/trac/ghc/ticket/9221#comment:9">comment #9</a>
-Gintas found one of the problems with large <strong>&lt;N&gt;</strong>
-but I was not able to understand his reasoning at that time as I knew
-too little about <strong>GHC</strong> runtime.</p>
-<p>Simon suggested larger heap sizes and allocation areas.
-I tried it and got better performance numbers! Best numbers were
-at <strong>-A 256M</strong>: <strong>2.5x</strong> speedup! But what is the real bottleneck here?
-How to estimate the number in general case?</p>
-<p>The bug contained a lot of speculation about lock contentions of sorts
+<h2 id="the-symptoms">The symptoms</h2>
+<p>My machine is a <code>x86_64</code> desktop (<code>4x2</code> HT cores on a single die). Nothing
+fancy. Should be an easy target to get perfect parallelism. Right?
+At first I chose <code>highlightling-kate</code> package as it has at least 100
+independent modules for various languages.
+The <code>ghc --make -j&lt;N&gt;</code> histogram looks like that:</p>
+<figure>
+<img src="https://ghc.haskell.org/trac/ghc/raw-attachment/ticket/9221/graph1.png" alt="image" />
+<figcaption aria-hidden="true">image</figcaption>
+</figure>
+<p>The problem is that even on my machine <code>ghc --make -j3</code> works better
+than <code>ghc --make -j8</code> and I could not get more than <code>1.5x</code> speedup.
+I’d like to see <code>8x</code> speedup. Or at least <code>4x</code> :)
+Another problem is quick performance degradation once you exceed number
+of <code>CPUs</code>. Running <code>ghc --make -j20</code> on my machine makes things
+seriously worse: compilation time is longer than in non-parallel mode!
+That did not look good.</p>
+<h2 id="the-clues">The clues</h2>
+<p>So why are things so bad? And more importantly how would you diagnose
+similar issue in another <code>haskell</code> program? The problem looked like a nice
+thing to get basic experience in this area.
+In <a href="https://ghc.haskell.org/trac/ghc/ticket/9221#comment:9">comment #9</a>
+Gintas found one of the problems with large <code>&lt;N&gt;</code> but I was not able
+to understand his reasoning at that time as I knew too little about
+<code>GHC</code> runtime.
+Simon suggested larger heap sizes and allocation areas. I tried it and
+got better performance numbers! Best numbers were at <code>-A 256M</code>:
+<code>2.5x</code> speedup! But what is the real bottleneck here? How to estimate
+the number in general case?
+The bug contained a lot of speculation about lock contentions of sorts
 but no simple cause of slowness.</p>
-<h1 id="down-the-rabbit-hole">Down the rabbit hole</h1>
-<p>I’ve decided to try to find out what happens there. Maybe someone
-else will have an <strong>AHA!</strong> moment and will fix things for everyone
-if I’ll manage to find out that useless <strong>sleep(1)</strong> somewhere :)</p>
-<h2 id="perf-take-1">perf, take 1</h2>
-<p>I tried to run <strong>perf record</strong> on my benchmark to figure out
-what happens with the process. <strong>perf</strong> suggested <strong>GHC</strong> did mostly
-<strong>sched_yield()</strong> which does not sound like a useful call.</p>
-<h2 id="threadscope-take-1">threadscope, take 1</h2>
-<p>Simon also suggested to try <strong>ThreadScope</strong> on <strong>GHC</strong> itself.
-In theory it’s quite simple. You need to relink <strong>ghc-stage2</strong>
-with <strong>-eventlog</strong> as:</p>
-<pre><code># mk/build.mk
-GhcStage2HcOpts += -rtsopts -eventlog</code></pre>
-<p>and run <strong>GHC</strong> with event logging enabled as
-<strong>ghc --make ... +RTS -l</strong>.</p>
-<p>Then running <strong>threadscope ghc-stage2.eventlog</strong> should show us
-nice graph of all sorts of interesting things. Or not.</p>
-<p>Alas <strong>threadscope</strong> crashed on generated eventlog file. I first
-thought it’s a threadscope bug and <a href="https://github.com/haskell/ThreadScope/issues/37">filed one</a>.</p>
-<p>After <strong>threadscope</strong> got a fix it still could not read
-my eventlog profiles. I’ve misattributed a bug to another
-<a href="https://ghc.haskell.org/trac/ghc/ticket/9003">ghc bug #9003</a>
-where <strong>GHC</strong> accidentally broke eventlog ABI by changing enum
-values for existing events in one of <strong>GHC</strong> releases.</p>
-<p>After <strong>bug #9003</strong> got fixed my dumps still did not render!
-I’ve filed third <a href="https://ghc.haskell.org/trac/ghc/ticket/9384">ghc bug #9384</a>
-which basically says that calling <strong>setNumCapabilities</strong> in your
-haskell program usually breaks your eventlog.</p>
-<p>I didn’t think of trying to fix it but in the process of
-finding the trigger I’ve found out the workaround: if you specify
-rts option <strong>-RTS -N&lt;N&gt;</strong> at program startup to the same value
-you try to <strong>setNumCapabilities</strong> it will work just fine:
-running <strong>ghc –make -j&lt;N&gt; +RTS -N&lt;N&gt; -l</strong> will not change
-<strong>GHC</strong> behaviour except it will produce readable eventlogs!</p>
-<p>I looked at the eventlog output and did not know what I
-should look at.</p>
-<p>Later Alexander Vershilov fixed that bug with <a href="https://git.haskell.org/ghc.git/commitdiff/2edb4a7bd5b892ddfac75d0b549d6682a0be5c02">2 lines of C code</a>.
-Tl;DR: <strong>GHC</strong> did not handle dynamic resize of number of
-capabilities. Thank you!</p>
-<h2 id="perf-take-2">perf, take 2</h2>
+<h2 id="down-the-rabbit-hole">Down the rabbit hole</h2>
+<p>I’ve decided to try to find out what happens there. Maybe someone else
+will have an <strong>AHA!</strong> moment and will fix things for everyone if I’ll
+manage to find out that useless <code>sleep(1)</code> somewhere :)</p>
+<h3 id="perf-take-1"><code>perf</code>, take 1</h3>
+<p>I tried to run <code>perf record</code> on my benchmark to figure out what
+happens with the process. <code>perf</code> suggested <code>GHC</code> did mostly
+<code>sched_yield()</code> which does not sound like a useful call.</p>
+<h3 id="threadscope-take-1"><code>threadscope</code>, take 1</h3>
+<p>Simon also suggested to try <code>ThreadScope</code> on <code>GHC</code> itself. In theory
+it’s quite simple. You need to relink <code>ghc-stage2</code> with <code>-eventlog</code>
+as:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co"># mk/build.mk</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">GhcStage2HcOpts</span> <span class="ch">+=</span><span class="st"> -rtsopts -eventlog</span></span></code></pre></div>
+<p>Run <code>GHC</code> with event logging enabled as <code>ghc --make ... +RTS -l</code>.
+Then running <code>threadscope ghc-stage2.eventlog</code> should show us nice
+graph of all sorts of interesting things.
+Alas <code>threadscope</code> crashed on generated <code>eventlog</code> file. I first thought
+it’s a <code>threadscope</code> bug and <a href="https://github.com/haskell/ThreadScope/issues/37">filed
+one</a>.
+After <code>threadscope</code> got a fix it still could not read my <code>eventlog</code>
+profiles. I’ve misattributed a bug to another <a href="https://ghc.haskell.org/trac/ghc/ticket/9003">ghc bug
+#9003</a> where <code>GHC</code>
+accidentally broke <code>eventlog</code> ABI by changing enum values for existing
+events in one of <code>GHC</code> releases.
+After <code>bug #9003</code> got fixed my dumps still did not render! I’ve filed
+third <a href="https://ghc.haskell.org/trac/ghc/ticket/9384"><code>ghc</code> bug #9384</a>
+which basically says that calling <code>setNumCapabilities</code> in your <code>haskell</code>
+program usually breaks your <code>eventlog</code>.
+I didn’t think of trying to fix it. In the process of finding the
+trigger I’ve found out the workaround: if you specify rts option <code>-RTS -N&lt;N&gt;</code> at program startup to the same value you try to
+<code>setNumCapabilities</code> it will work just fine! Running <code>ghc --make -j&lt;N&gt; +RTS -N&lt;N&gt; -l</code> will not change <code>GHC</code> behavior except it
+will produce readable <code>eventlogs</code>!
+I looked at the <code>eventlog</code> output and did not know what I should look at.</p>
+<p>Later Alexander Vershilov fixed that bug with <a href="https://git.haskell.org/ghc.git/commitdiff/2edb4a7bd5b892ddfac75d0b549d6682a0be5c02">2 lines of <code>C</code>
+code</a>.
+Tl;DR: <code>GHC</code> did not handle dynamic resize of number of capabilities.
+Thank you!</p>
+<h3 id="perf-take-2"><code>perf</code>, take 2</h3>
 <p>Half a year later many more things happened:</p>
 <ul>
-<li>Peter’s <strong>DWARF</strong> support for <strong>GHC</strong> landed and I’ve found a few bugs in it:
+<li>Peter’s <code>DWARF</code> support for <code>GHC</code> landed and I’ve found a few
+bugs in it:
 <ul>
-<li><a href="https://ghc.haskell.org/trac/ghc/ticket/10665#comment:3">ghc bug #10655</a>
-where <strong>-g</strong> breaks rewrite rules</li>
-<li><a href="https://ghc.haskell.org/trac/ghc/ticket/10667#comment:5">ghc bug #10667</a>
-where <strong>-g</strong> breaks <strong>GNU</strong> <strong>as</strong> and produces broken assembly file</li>
+<li><a href="https://ghc.haskell.org/trac/ghc/ticket/10665#comment:3"><code>ghc</code> bug
+#10655</a>
+where <code>-g</code> breaks rewrite rules</li>
+<li><a href="https://ghc.haskell.org/trac/ghc/ticket/10667#comment:5"><code>ghc</code> bug
+#10667</a>
+where <code>-g</code> breaks <code>GNU as</code> and produces broken assembly file</li>
 </ul></li>
-<li>I’ve mastered black magic of porting <strong>GHC</strong> to weird architectures: basically built unregisterised
-<strong>GHC</strong> on amd64 and made it pass most tests. Some details are in this <a href="http://trofi.github.io/posts/187-fixing-ghc-on-sparc-ia64-and-friends.html">blog post</a>.
+<li>I’ve mastered black magic of porting <code>GHC</code> to weird architectures:
+basically built unregisterised <code>GHC</code> on <code>amd64</code> and made it pass most
+tests. Some details are in this <a href="../posts/187-fixing-ghc-on-sparc-ia64-and-friends.html">blog
+post</a>.
 I’ve started Seeing Things!</li>
 </ul>
-<p>I’ve attempted to use <strong>perf</strong> and found out the reason why
-perf can’t disassemble haskell function and wrote another
-blog post on how to <a href="http://trofi.github.io/posts/192-perf-on-haskell-programs.html">make it see the code</a>
-(still needs more things to be upstreamed).</p>
-<p><strong>perf</strong> also suggested that one of most popular userspace functions
-being called was the <strong>stg_BLACKHOLE_info()</strong>.</p>
-<h2 id="ad-hoc-rts-patching">Ad-hoc rts patching</h2>
-<p>Blackholes are special kind of thunks that usually denote a
-thunk being evaluated by another haskell thread. When a normal
-(closure) thunk is being evaluated by a thread thunk could be
-updated at two points in time: either before (eager) or after
-(lazy) actual thunk evaluation.</p>
-<p>By default <strong>GHC</strong> uses lazy strategy (unless <strong>-feager-blackholing</strong>
-is used). That means the same thunk can be evaluated by multiple execution
-threads. But it is fine for a typical pure program.</p>
-<p>It’s not fine for sensitive things like <strong>unsafePerformIO</strong> thunks which
-are guaranteed to be evaluated once.</p>
-<p>For those sensitive thunks <strong>GHC</strong> uses blackholes: at enter closure type
-is atomically rewritten to <strong>BLACKHOLE</strong> thunk which points to a thread
-(<strong>TSO</strong>) that locks this thunk. When any other thread tries to enter blackhole
-it blocks on that thunk. When first thread finishes computation
-it rewrites a <strong>TSO</strong> pointed by blackhole to an actual result of computation
-and resumes second thread. Second thread picks result of evaluation
-and continues execution.</p>
-<p>Thus my assumption was that the main scalability problem was large
-amount of <strong>unsafePerformIO</strong> calls that causes high haskell thread
+<p>I’ve attempted to use <code>perf</code> and found out the reason why <code>perf</code> can’t
+disassemble <code>haskell</code> function and wrote another blog post on how to <a href="../posts/192-perf-on-haskell-programs.html">make
+it see the
+code</a>
+(still needs more things to be upstreamed).
+<code>perf</code> also suggested that one of most popular user space functions
+being called was the <code>stg_BLACKHOLE_info()</code>.</p>
+<h2 id="ad-hoc-rts-patching">Ad-hoc <code>rts</code> patching</h2>
+<p><code>Blackholes</code> are special kind of thunks that usually denote a thunk being
+evaluated by another <code>haskell</code> thread. When a normal (closure) thunk is
+being evaluated by a thread thunk could be updated at two points in
+time: either before (eager) or after (lazy) actual thunk evaluation.
+By default <code>GHC</code> uses lazy strategy (unless <code>-feager-blackholing</code> is
+used). That means the same thunk can be evaluated by multiple execution
+threads. But it is fine for a typical pure program.
+It’s not fine for sensitive things like <code>unsafePerformIO</code> thunks
+which are guaranteed to be evaluated once.
+For those sensitive thunks <code>GHC</code> uses <code>blackholes</code>: at enter closure
+type is atomically rewritten to <code>BLACKHOLE</code> thunk which points to a
+thread (<code>TSO</code>) that locks this thunk. When any other thread tries to
+enter <code>blackhole</code> it blocks on that thunk. When first thread finishes
+computation it rewrites a <code>TSO</code> pointed by <code>blackhole</code> to an actual
+result of computation and resumes second thread. Second thread picks
+result of evaluation and continues execution.
+Thus my assumption was that the main scalability problem was large
+amount of <code>unsafePerformIO</code> calls that causes high <code>haskell</code> thread
 rescheduling churn.</p>
-<p>I tried to modify <strong>cmm</strong> code to print an object pointed by blackhole
-but most of the time those are not <strong>TSO</strong> objects but <strong>I#</strong> (integers),
-labels and other things. <strong>GHC</strong> indeed uses <strong>unsafePerformIO</strong>
-for global unique string pool. Those <strong>I#</strong> are likely the sign of it (see <strong>mkSplitUniqSupply</strong>).</p>
-<p>I tried to recompile <strong>GHC</strong> with <strong>-feager-blackholing</strong> option enabled.
-<strong>GHC</strong> became slightly slower in single-threaded case (expected),
-slighty slower in multi-threaded case (unexpected) and did not degrade
-as fast as base case on large <strong>-j&lt;N&gt;</strong> (totally unexpected!).</p>
-<p>It means that <strong>GHC</strong> evaluates some expensive things more than once. How would
-we find which ones?</p>
-<p><strong>GHC</strong> needs to have something in rts or in eventlog
-to expose stats for:</p>
+<p>I tried to modify <code>cmm</code> code to print an object pointed by <code>blackhole</code>
+but most of the time those are not <code>TSO</code> objects but <code>I#</code>
+(integers), labels and other things. <code>GHC</code> indeed uses
+<code>unsafePerformIO</code> for global unique string pool. Those <code>I#</code> are
+likely the sign of it (see <code>mkSplitUniqSupply</code>).</p>
+<p>I tried to recompile <code>GHC</code> with <code>-feager-blackholing</code> option
+enabled. <code>GHC</code> became slightly slower in single-threaded case
+(expected), slightly slower in multi-threaded case (unexpected) and did
+not degrade as fast as base case on large <code>-j&lt;N&gt;</code> (totally
+unexpected!).
+It means that <code>GHC</code> evaluates some expensive things more than once.
+How would we find which ones? <code>GHC</code> needs to have something in <code>rts</code> or
+in <code>eventlog</code> to expose stats for:</p>
 <ul>
-<li>blackhole synchronization (who stalls other threads?)</li>
-<li>things needlessly evaluated more than once (what wastes cpu/heap?)</li>
+<li><code>blackhole</code> synchronization (who stalls other threads?)</li>
+<li>things needlessly evaluated more than once (what wastes CPU/heap?)</li>
 </ul>
-<h2 id="speeding-up-parallel-gc--qb0">speeding up parallel GC: -qb0</h2>
-<p>The more I tried to play with various <strong>GHC</strong> changes the more I
-realised my machine is not good enough to expose bottlenecks.
-I decided to pick a 24-core virtual machine and gave threadscope
-another chance.</p>
-<p>This time haskell threads were frequently stopped
-by garbage collector threads. And garbage collector CPU load was unevenly
-balanced across cores!</p>
-<p>I started reading a <a href="http://community.haskell.org/~simonmar/papers/parallel-gc.pdf">parallel GC paper by Simon</a>
-which describes in detail how things work.</p>
-<p>Basically there are two phases of parallel GC:</p>
+<h2 id="speeding-up-parallel-gc--qb0">speeding up parallel <code>GC</code>: <code>-qb0</code></h2>
+<p>The more I tried to play with various <code>GHC</code> changes the more I
+realized my machine is not good enough to expose bottlenecks. I decided
+to pick a 24-core virtual machine and gave <code>threadscope</code> another chance.
+This time <code>haskell</code> threads were frequently stopped by garbage collector
+threads. And garbage collector CPU load was unevenly balanced across
+cores!
+I started reading a <a href="http://community.haskell.org/~simonmar/papers/parallel-gc.pdf">parallel <code>GC</code> paper by
+Simon</a>
+which describes in detail how things work.
+Basically there are two phases of parallel GC:</p>
 <ul>
-<li>non-work-stealing phase when each GC thread scans it’s own Capability’s TSO stacks and allocation area (aka generation-0, g0, eden, nursery)</li>
-<li>work-stealing phase when each GC thread either processes it’s queue of from-space pointers and copies things to to-space
-or steals work from other threads’ queues</li>
+<li>non-work-stealing phase when each <code>GC</code> thread scans it’s own
+<code>Capability</code>’s <code>TSO</code> stacks and allocation area (aka generation-0, <code>g0</code>,
+<code>eden</code>, nursery)</li>
+<li>work-stealing phase when each <code>GC</code> thread either processes its queue
+of <code>from-space</code> pointers and copies things to <code>to-space</code> or steals work
+from other threads queues</li>
 </ul>
-<p><strong>GHC</strong> as a compiler does not take too much heap to compile a file.
-Having huge allocation area (<strong>-A256M</strong> in my case) is enough to compile an average file.
-Older generations (g1+) don’t have much to scan besause there is nothing to put there!</p>
-<p>It’s fun that <strong>+RTS -sstderr</strong> always showed me that
-GC parallelism number and I did not even notice it:</p>
+<p><code>GHC</code> as a compiler does not take too much heap to compile a file.
+Having huge allocation area (<code>-A256M</code> in my case) is enough to compile
+an average file. Older generations (<code>g1+</code>) don’t have much to scan
+because there is nothing to put there!
+It’s fun that <code>+RTS -sstderr</code> always showed me that <code>GC</code> parallelism
+number and I did not even notice it:</p>
 <pre><code>Parallel GC work balance: 22.34% (serial 0%, perfect 100%) # -qb1, default
 ...
 Parallel GC work balance: 74.48% (serial 0%, perfect 100%) # -qb0
 ...
 Parallel GC work balance: 80.03% (serial 0%, perfect 100%) # -qb0</code></pre>
-<p>The bottleneck is allocation area scan. <strong>GHC</strong>’s <strong>RTS</strong> happens to have a knob
-to enable work-stealing on g0. The option is <strong>-qb0</strong>.</p>
-<p>It was a magic knob that increased <strong>GHC</strong> parallelism from <strong>2.5x</strong> to <strong>7x</strong> speedup on 24-core VM!
-I’ve got similar effect on my 8-core desktop where speedup was from <strong>2.5x</strong> to <strong>3.5x</strong>.</p>
-<p>Two pictures building <strong>highlighting-kate</strong> on 24-core VM w/o and with <strong>-qb0</strong>:</p>
+<p>The bottleneck is allocation area scan. <code>GHC</code> <code>RTS</code> happens to
+have a knob to enable work-stealing on <code>g0</code>. The option is <code>-qb0</code>.
+It was a magic knob that increased <code>GHC</code> parallelism from <code>2.5x</code> to
+<code>7x</code> speed up on 24-core VM! I’ve got similar effect on my 8-CPU
+desktop where speedup was from <code>2.5x</code> to <code>3.5x</code>.
+Two pictures building <code>highlighting-kate</code> on 24-core VM without and with
+<code>-qb0</code>:</p>
 <ul>
-<li><a href="http://code.haskell.org/~slyfox/T9221/ghc-stage2.eventlog.N24.j24.png">-N24 -j24</a></li>
-<li><a href="http://code.haskell.org/~slyfox/T9221/ghc-stage2.eventlog.N24.j24.A256M.qb0.png">-N24 -j24 -A256M -qb0</a></li>
+<li><a href="http://code.haskell.org/~slyfox/T9221/ghc-stage2.eventlog.N24.j24.png"><code>-N24 -j24</code></a></li>
+<li><a href="http://code.haskell.org/~slyfox/T9221/ghc-stage2.eventlog.N24.j24.A256M.qb0.png"><code>-N24 -j24 -A256 -qb0</code></a></li>
 </ul>
-<p>20 seconds to 9 seconds shrink. First picture shows that <strong>GHC</strong> struggles to load
-half the cpus at peak. While second picture eats all 24 at peak and then tails
-on slow modules. GREEN - mutation cpu usage, ORANGE - GC cpu usage.</p>
-<p>It also became obvious that having more GC threads than available cpus always hurts performance.</p>
-<p>That’s what Gintas meant by <strong>setNumCapabilities</strong> discrepancy.
-The first fix <a href="https://git.haskell.org/ghc.git/commitdiff/9d175605e52fd0d85f2548896358d96ee441c7e4">was obvious</a>.</p>
-<p>It does not fix the normal case but at least does not make things worse
-when <strong>ghc --make -j&lt;N&gt;</strong> is higher than the number of cpus available.</p>
-<p>To improve normal case <strong>GHC</strong> now
-<a href="https://git.haskell.org/ghc.git/commitdiff/a5d26f26d33bc04f31eaff50b7d633444192b4cb">autotunes parallel scan based on allocation area size</a>.</p>
-<h2 id="multithreadng-vs.-multiprocessing">multithreadng vs. multiprocessing</h2>
-<p>Threadscope also showed that load imbalance on <strong>highlighting-kate</strong>
-is high due to uneven workload on haskell threads. Basically, not all highlighting
-modules are equal in size. Which is obvious in the hindsight. So much
-for a perfect benchmark :)</p>
-<p>I’ve written synthetic benchmark <strong>synth.bash</strong> which generates
-a lot of independent haskell sources of even size and measures it’s build time:</p>
+<p>20 seconds to 9 seconds shrink. First picture shows that <code>GHC</code>
+struggles to load half the CPUs at peak. While second picture eats all
+24 at peak and then tails on slow modules. <code>GREEN</code> - mutation CPU usage,
+<code>ORANGE</code> - <code>GC</code> CPU usage.
+It also became obvious that having more <code>GC</code> threads than available CPUs
+always hurts performance.
+That’s what Gintas meant by <code>setNumCapabilities</code> discrepancy. The
+first fix <a href="https://git.haskell.org/ghc.git/commitdiff/9d175605e52fd0d85f2548896358d96ee441c7e4">was
+obvious</a>.
+It does not fix the normal case but at least does not make things worse
+when <code>ghc --make -j&lt;N&gt;</code> is higher than the number of CPUs available.</p>
+<p>To improve normal case <code>GHC</code> now <a href="https://git.haskell.org/ghc.git/commitdiff/a5d26f26d33bc04f31eaff50b7d633444192b4cb">auto-tunes parallel scan based on
+allocation area
+size</a>.</p>
+<h2 id="multithreadng-vs.-multiprocessing">multithreadng vs. multiprocessing</h2>
+<p><code>Threadscope</code> also showed that load imbalance on <code>highlighting-kate</code> is
+high due to uneven workload on <code>haskell</code> threads. Basically, not all
+highlighting modules are equal in size. Which is obvious in the
+hindsight. So much for a perfect benchmark :)
+I’ve written synthetic benchmark <code>synth.bash</code> which generates a lot
+of independent <code>haskell</code> sources of even size and measures its build
+time:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/bash</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="va">MODULES</span><span class="op">=</span>128</span>
@@ -266,27 +283,27 @@ a lot of independent haskell sources of even size and measures it’s build time
 <span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>    <span class="at">-hide-all-packages</span> <span class="at">-package</span><span class="op">=</span>base <span class="dt">\</span></span>
 <span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">\</span></span>
 <span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>    <span class="at">--make</span> src/<span class="pp">*</span>.hs <span class="at">-j</span> +RTS <span class="at">-A256M</span> <span class="at">-RTS</span> <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
-<p>Nice to tweak numbers to adapt to small and large machines.
-It’s also interesting to compare with multiprocess <strong>GHC</strong> using the following <strong>Makefile</strong>:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode Makefile"><code class="sourceCode makefile"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">OBJECTS</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="kw">patsubst</span><span class="st"> %.hs</span><span class="kw">,</span><span class="st">%.o</span><span class="kw">,</span><span class="ch">$(</span><span class="kw">wildcard</span><span class="st"> src/*.hs</span><span class="ch">))</span></span>
+<p>Nice to tweak numbers to adapt to small and large machines. It’s also
+interesting to compare with multiprocess <code>GHC</code> using the following
+<code>Makefile</code>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">OBJECTS</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="kw">patsubst</span><span class="st"> %.hs</span><span class="kw">,</span><span class="st">%.o</span><span class="kw">,</span><span class="ch">$(</span><span class="kw">wildcard</span><span class="st"> src/*.hs</span><span class="ch">))</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> </span><span class="ch">$(</span><span class="dt">OBJECTS</span><span class="ch">)</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dv">src/%.o:</span><span class="dt"> src/%.hs</span></span>
 <span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="er">        </span>~/dev/git/ghc-perf/inplace/bin/ghc-stage2 -c +RTS -A256M -RTS <span class="ch">$&lt;</span> -o <span class="ch">$@</span></span>
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dv">clean:</span></span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">$(</span><span class="dt">RM</span><span class="ch">)</span> <span class="ch">$(</span><span class="dt">OBJECTS</span><span class="ch">)</span></span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="ot">.PHONY:</span><span class="dt"> clean</span></span></code></pre></div>
-<p>Note the difference: here we run separate <strong>ghc -c</strong> processes on
-each .hs file and let <strong>GNU make</strong> do the scheduling.</p>
-<p>This benchmark raises even more questions!
-It shows (<a href="https://ghc.haskell.org/trac/ghc/ticket/9221#comment:65">see comment #65</a>)
-that multiprocess compilation scales perfectly and is fastest at <strong>make -j&lt;N&gt;</strong> where N is the number of cpus.
-It’s even faster that <strong>ghc --make -j</strong> (both for 8-core and 24-core machines).</p>
-<p>It means there is still a few issues to understand here :)</p>
-<p>This benchmark also shows what best performance I should expect from <strong>GHC</strong>
-on these machines. Multiprocess (<strong>Makefile</strong>-based) benchmark is expected to have
-ideal scalability. If not it means bottleneck is somewhere outside <strong>GHC</strong>
-(kernel/RAM bandwidth/etc.).</p>
-<p>4x2 HT desktop:</p>
+<p>Note the difference: here we run separate <code>ghc -c</code> processes on each
+<code>.hs</code> file and let <code>GNU make</code> do the scheduling.
+This benchmark raises even more questions! It shows (<a href="https://ghc.haskell.org/trac/ghc/ticket/9221#comment:65">see comment
+#65</a>) that
+multiprocess compilation scales perfectly and is fastest at <code>make -j&lt;N&gt;</code> where <code>N</code> is the number of <code>CPUs</code>. It’s even faster that <code>ghc --make -j</code> (both for 8-CPU and 24-CPU machines).
+It means there is still a few issues to understand here :)
+This benchmark also shows what best performance I should expect from
+<code>GHC</code> on these machines. Multiprocess (<code>Makefile</code>-based) benchmark
+is expected to have ideal scalability. If not it means bottleneck is
+somewhere outside <code>GHC</code> (kernel/RAM bandwidth/etc.).</p>
+<p><code>4x2</code> HT desktop:</p>
 <pre><code>$ make clean; time make -j1
 real    1m2.561s
 user    0m56.523s
@@ -303,9 +320,9 @@ $ make clean; time make -j8
 real    0m15.964s
 user    1m52.058s
 sys     0m9.929s</code></pre>
-<p>It’s <strong>3.93x</strong> (almost exactly <strong>4x</strong>). Almost ideal
-saturation of 4 physical cores.</p>
-<p>12x2 HT VM:</p>
+<p>It’s <code>3.93x</code> (almost exactly <code>4x</code>). Almost ideal saturation of 4
+physical cores.</p>
+<p><code>12x2</code> HT VM:</p>
 <pre><code>$ make clean; time make -j1
 
 real    1m33.147s
@@ -323,22 +340,22 @@ $ make clean; time make -j24
 real    0m7.336s
 user    2m15.936s
 sys     0m19.004s</code></pre>
-<p>This is <strong>12.7x</strong> speedup. Better-than-ideal
-saturation of 12 physical cores.</p>
-<p>Note how confusing user time in <strong>-j1</strong> / <strong>-j12</strong> / <strong>-j24</strong> cases is.
-It claims CPU does twice as much work. But it
-shoud not as I throw the same amount of work
-at CPUs in all runs.</p>
-<p>It’s one of confusing parts about hyperthreading:
-operating system lies to you how much actual work
-was actually done.</p>
-<h2 id="perf-take-3">perf, take 3</h2>
-<p>Trying to slice and dice metrics reported by <strong>perf</strong> I tried to
-get an idea where the overhead appears in multithreaded case.</p>
-<p>I’ve noticed <strong>GHC</strong> works way faster when compiled with <strong>-fno-worker-wrapper -fno-spec-constr</strong> flags.</p>
-<p>It instantly sped <strong>GHC</strong> up by 10% on synth benchmark
-and made <strong>GHC</strong> bootstrap <a href="https://perf.haskell.org/ghc/#revision/a48de37dcca98e7d477040b0ed298bcd1b3ab303">5% faster</a>.</p>
-<p><strong>GHC</strong> managed to inflate tiny snippet:</p>
+<p>This is <code>12.7x</code> speedup. Better-than-ideal saturation of 12 physical
+cores.
+Note how confusing user time in <code>-j1</code> / <code>-j12</code> / <code>-j24</code> cases is.
+It claims CPU does twice as much work. But it should not as I throw the
+same amount of work at CPUs in all runs.
+It’s one of confusing parts about <code>hyperthreading</code>: operating system lies
+to you how much actual work was actually done.</p>
+<h2 id="perf-take-3"><code>perf</code>, take 3</h2>
+<p>Trying to slice and dice metrics reported by <code>perf</code> I tried to get an
+idea where the overhead appears in multi-threaded case.
+I’ve noticed <code>GHC</code> works way faster when compiled with
+<code>-fno-worker-wrapper -fno-spec-constr</code> flags.
+It instantly sped <code>GHC</code> up by 10% on synth benchmark and made <code>GHC</code>
+bootstrap <a href="https://perf.haskell.org/ghc/#revision/a48de37dcca98e7d477040b0ed298bcd1b3ab303">5%
+faster</a>.
+<code>GHC</code> managed to inflate tiny snippet:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ot">cmmExprNative ::</span> <span class="dt">ReferenceKind</span> <span class="ot">-&gt;</span> <span class="dt">CmmExpr</span> <span class="ot">-&gt;</span> <span class="dt">CmmOptM</span> <span class="dt">CmmExpr</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>cmmExprNative referenceKind expr <span class="ot">=</span> <span class="kw">do</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>     dflags <span class="ot">&lt;-</span> getDynFlags</span>
@@ -348,7 +365,7 @@ and made <strong>GHC</strong> bootstrap <a href="https://perf.haskell.org/ghc/#r
 <span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>        <span class="dt">CmmLit</span> (<span class="dt">CmmLabel</span> lbl)</span>
 <span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>           <span class="ot">-&gt;</span> <span class="kw">do</span></span>
 <span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>                cmmMakeDynamicReference dflags referenceKind lbl</span></code></pre></div>
-<p>into the followng code:</p>
+<p>into the following code:</p>
 <pre><code>_______
        │      cmmExprNative :: ReferenceKind -&gt; CmmExpr -&gt; CmmOptM CmmExpr
        │      cmmExprNative referenceKind expr = do
@@ -394,18 +411,18 @@ and made <strong>GHC</strong> bootstrap <a href="https://perf.haskell.org/ghc/#r
        │        mov    %rbx,-0x820(%r12)
        │        mov    0xb8(%rsp),%r14
 ... &lt;a few more pages of it&gt;</code></pre>
-<p>That appeared to be a bug of specialiser being too eager
-to move out as many strict fields from structs to separate
-function arguments (aka worker arguments) even if it means
-pulling out 180 arguments.</p>
-<p>Optimisation should be controlled by <strong>-fmax-worker-args=&lt;N&gt;</strong> flag
-but it got lost when demand analyzer was rewritten a few years ago.</p>
-<p>I’ve noticed it by accident when passing through
-<strong>DynFlags</strong> structure in <strong>GHC</strong>. Many of flags
-were unused (including <strong>-fmax-worker-args=&lt;N&gt;</strong>).</p>
-<p>That gave rise to <a href="https://ghc.haskell.org/trac/ghc/ticket/11565">ghc bug #11565</a>.</p>
+<p>That appeared to be a bug of specialiser being too eager to move out as
+many strict fields from structs to separate function arguments (aka
+worker arguments) even if it means pulling out 180 arguments.
+Optimization should be controlled by <code>-fmax-worker-args=&lt;N&gt;</code> flag
+but it got lost when demand analyzer was rewritten a few years ago.
+I’ve noticed it by accident when passing through <code>DynFlags</code> structure
+in <code>GHC</code>. Many of flags were unused (including <code>-fmax-worker-args=&lt;N&gt;</code>).</p>
+<p>That gave rise to <a href="https://ghc.haskell.org/trac/ghc/ticket/11565"><code>ghc</code> bug
+#11565</a>.</p>
 <h1 id="final-result">Final result</h1>
-<p>On my 8-core desktop final improvement is <strong>3.72x</strong> (22 seconds vs. 82 seonds):</p>
+<p>On my 8-CPU desktop final improvement is <code>3.72x</code> (22 seconds vs. 82
+seconds):</p>
 <pre><code>$ ./synth.bash -j1 +RTS -sstderr
 
  100,430,153,096 bytes allocated in the heap
@@ -476,32 +493,35 @@ gen[1].sync: 520393
 real    0m22.068s
 user    2m45.042s
 sys     0m4.318s</code></pre>
-<p>On 24-core VM speedup is around <strong>8x</strong> (9 seconds versus 75 seconds)</p>
-<p>This suggests GC takes only 12% of elapsed time in both cases.
-I’m not sure if 200M allocation difference could be attributed to
-throw-away work done by haskell threads.</p>
-<p>CPU MUT and GC time got <strong>2x</strong> increase. It’s not the throw-away work
-but hyperthreading artifact.</p>
+<p>On 24-CPU VM speedup is around <code>8x</code> (9 seconds versus 75 seconds)
+This suggests <code>GC</code> takes only 12% of elapsed time in both cases. I’m not
+sure if <code>200M</code> allocation difference could be attributed to throw-away
+work done by <code>haskell</code> threads.
+CPU <code>MUT</code> and <code>GC</code> time got <code>2x</code> increase. It’s not the throw-away work
+but a hyperthreading artifact.</p>
 <h1 id="conclusions">Conclusions</h1>
-<p>I have not solved the problem yet. And don’t fully understand it either!
-But I feel we are on the right track :)</p>
-<p>Some achievements:</p>
+<p>I have not solved the problem yet. And don’t fully understand it
+either! But I feel we are on the right track :)
+Some achievements:</p>
 <ul>
-<li><strong>ghc --make</strong> is slightly faster now!</li>
-<li>Now I (and you!) understand haskell runtime performance a bit better</li>
+<li><code>ghc --make</code> is slightly faster now!</li>
+<li>Now I (and you!) understand <code>haskell</code> runtime performance a bit better</li>
 <li>we’ve fixed a few seemingly unrelated bugs :)</li>
-<li><strong>eventlog</strong> works in programs calling <strong>setNumCapabilities</strong></li>
-<li><strong>threadscope</strong> can read <strong>GHC</strong> traces</li>
-<li>large <strong>-A</strong> size autotunes parallel <strong>GC</strong> parameters</li>
-<li><strong>ghc --make</strong> does not create more Capabilities than cpus available</li>
-<li>we’ve learned hyperthreading is tricky :)</li>
+<li><code>eventlog</code> works in programs calling <code>setNumCapabilities</code></li>
+<li><code>threadscope</code> can read <code>GHC</code> traces</li>
+<li>large <code>-A</code> size auto-tunes parallel <code>GC</code> parameters</li>
+<li><code>ghc --make</code> does not create more Capabilities than CPUs available</li>
+<li>we’ve learned <code>hyperthreading</code> is tricky :)</li>
 </ul>
-<p>How <strong>you</strong> can improve <strong>GHC</strong>:</p>
+<p>How <code>you</code> can improve <code>GHC</code>:</p>
 <ul>
-<li><strong>GHC</strong> is full of low-hanging performance improvements and they are easy to fix :)</li>
-<li>haskell profiling tools need an improvement to see where <strong>BLACKHOLES</strong> come from.
-(I suspect most of them come from <a href="https://github.com/ghc/ghc/blob/9306db051ff5835b453d55f32783d081ac79ec28/compiler/basicTypes/UniqSupply.hs#L77">mkSplitUniqSupply function</a>)</li>
-<li><strong>perf</strong> is still too hard to use on <strong>GHC</strong> programs</li>
+<li><code>GHC</code> is full of low-hanging performance improvements and they are
+easy to fix :)</li>
+<li><code>haskell</code> profiling tools need an improvement to see where
+<code>BLACKHOLES</code> come from. (I suspect most of them come from
+<a href="https://github.com/ghc/ghc/blob/9306db051ff5835b453d55f32783d081ac79ec28/compiler/basicTypes/UniqSupply.hs#L77"><code>mkSplitUniqSupply</code>
+function</a>)</li>
+<li><code>perf</code> is still too hard to use on <code>GHC</code>-built programs</li>
 </ul>
 <p>Have fun!</p>
         </div>

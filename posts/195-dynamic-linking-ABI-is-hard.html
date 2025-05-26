@@ -29,9 +29,9 @@
                 <div class="info">December  3, 2016</div>
             
 
-            <p>Today on <strong>#gentoo-haskell</strong> Ke shown an example of subtle
-ABI breakage. nettle library exports as part of it’s API
-<strong>NULL</strong>-terminated array of functions <strong>nettle_hashes</strong>:</p>
+            <p>Today on <code>#gentoo-haskell</code> <code>Ke</code> shown an example of subtle ABI breakage.
+<code>nettle</code> library exports as part of its API <code>NULL</code>-terminated array of
+functions <code>nettle_hashes</code>:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// in nettle-meta.h</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">const</span> <span class="kw">struct</span> nettle_hash <span class="op">*</span> <span class="dt">const</span> nettle_hashes<span class="op">[];</span></span></code></pre></div>
 <p>and defines that array as</p>
@@ -48,15 +48,17 @@ ABI breakage. nettle library exports as part of it’s API
 <span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span>nettle_sha512<span class="op">,</span></span>
 <span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    NULL</span>
 <span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
-<h1 id="quiz-question">Quiz question!</h1>
-<p>Will <strong>ABI</strong> change if we add or remove a few entries in array? (<a href="https://git.lysator.liu.se/nettle/nettle/commit/2a4acddcd8e004b0632b292f1a32d8ec86278a30">like this patch</a>)</p>
-<p>Would you expect existing binaries to start crashing after library upgrade on your system?</p>
-<!--more-->
-<p>TL;DR: yes, things will break.</p>
+<h2 id="quiz-question">Quiz question!</h2>
+<p>Will <code>ABI</code> change if we add or remove a few entries in array? (<a href="https://git.lysator.liu.se/nettle/nettle/commit/2a4acddcd8e004b0632b292f1a32d8ec86278a30">like
+in this
+patch</a>)</p>
+<p>Would you expect existing binaries to start crashing after library
+upgrade on your system?</p>
+<p><code>TL;DR</code>: yes, things will break.</p>
 <h1 id="tiny-trigger">Tiny trigger</h1>
-<p>To understand how exactly things break let’s dive into simpler
-example of a library exporting only constant strings and nothing else.</p>
-<p>Public library interface:</p>
+<p>To understand how exactly things break let’s dive into simpler example
+of a library exporting only constant strings and nothing else.
+Public library interface:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// l.h:</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">const</span> <span class="dt">char</span> s1<span class="op">[];</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">const</span> <span class="dt">char</span> s2<span class="op">[];</span></span></code></pre></div>
@@ -83,18 +85,18 @@ example of a library exporting only constant strings and nothing else.</p>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;s2='</span><span class="sc">%s</span><span class="st">'</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> s2<span class="op">);</span></span>
 <span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here we just print array values from executable. Nothing fancy.</p>
-<p>Now let’s try to do the following sequence of actions:</p>
+<p>Here we just print array values from executable. Nothing fancy.
+Now let’s try to do the following sequence of actions:</p>
 <ol type="1">
-<li>build a library in <strong>V1</strong> mode (shorter strings)</li>
-<li>build an executable against <strong>V1</strong> library</li>
-<li>run executable (linked against <strong>V1</strong>) against <strong>V1</strong> library</li>
-<li>build a library in <strong>V2</strong> mode (longer strings)</li>
-<li>run executable (linked against <strong>V1</strong>) against <strong>V2</strong> library</li>
-<li>build an executable against <strong>V2</strong></li>
-<li>run executable (linked against <strong>V2</strong>) against <strong>V2</strong> library</li>
+<li>build a library in <code>V1</code> mode (shorter strings)</li>
+<li>build an executable against <code>V1</code> library</li>
+<li>run executable (linked against <code>V1</code>) against <code>V1</code> library</li>
+<li>build a library in <code>V2</code> mode (longer strings)</li>
+<li>run executable (linked against <code>V1</code>) against <code>V2</code> library</li>
+<li>build an executable against <code>V2</code></li>
+<li>run executable (linked against <code>V2</code>) against <code>V2</code> library</li>
 </ol>
-<p>Doing <strong>1-3</strong> steps:</p>
+<p>Doing <code>1-3</code> steps:</p>
 <pre><code>$ gcc -O2 -DV1 -shared -fPIC l.c -o libl.so
 $ gcc -O2 exe.c -o exe -L. -ll '-Wl,-rpath=$ORIGIN'
 $ echo 'Runnig exe/V1'
@@ -103,7 +105,7 @@ $ ./exe
 s1='v1 s1'
 s2='v1 s2'
 $ cp exe exe-v1</code></pre>
-<p>No surprises here. Let’s update library to <strong>V2</strong> (steps <strong>4-5</strong>):</p>
+<p>No surprises here. Let’s update library to <code>V2</code> (steps <code>4-5</code>):</p>
 <pre><code>$ gcc -O2 -DV2 -shared -fPIC l.c -o libl.so
 $ echo 'Runnig exe/V2'
 Runnig exe/V2
@@ -112,8 +114,8 @@ $ ./exe
 ./exe: Symbol `s1' has different size in shared object, consider re-linking
 s1='v2 s1 '
 s2='v2 s2 v2 s1 '</code></pre>
-<p>Hah! Data corruption! <strong>glibc</strong>’s runtime dynamic linker even hints us
-to relink an executable. Let’s do that (steps <strong>6-7</strong>):</p>
+<p>Aha! Data corruption! <code>glibc</code> runtime dynamic linker even hints us
+to relink an executable. Let’s do that (steps <code>6-7</code>):</p>
 <pre><code>$ gcc -O2 exe.c -o exe -L. -ll '-Wl,-rpath=$ORIGIN'
 $ echo 'Runnig exe/V2 (relinked)'
 Runnig exe/V2 (relinked)
@@ -122,9 +124,10 @@ s1='v2 s1 &lt;V2 addition&gt;'
 s2='v2 s2 &lt;V2 addition&gt;'
 $ cp exe exe-v2</code></pre>
 <p>Recovered.</p>
-<h1 id="the-clues">The clues</h1>
-<p>So how could executable change when linked against <strong>V1</strong> and <strong>V2</strong> versions?
-The easiest way to see it is to dump all the ELF information we have:</p>
+<h2 id="the-clues">The clues</h2>
+<p>So how could executable change when linked against <code>V1</code> and <code>V2</code>
+versions? The easiest way to see it is to dump all the ELF information
+we have:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> readelf <span class="at">-a</span> exe-v1 <span class="op">&gt;</span> v1</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> readelf <span class="at">-a</span> exe-v2 <span class="op">&gt;</span> v2</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> diff <span class="at">-u</span> v1 v2</span></code></pre></div>
@@ -173,19 +176,21 @@ The easiest way to see it is to dump all the ELF information we have:</p>
 <span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a><span class="va">+    54: 0000000000601050    20 OBJECT  GLOBAL DEFAULT   24 s1</span></span></code></pre></div>
 <p>We see here a lot of interesting facts:</p>
 <ul>
-<li><strong>s1</strong> and <strong>s2</strong> symbols have known sizes</li>
-<li>the sizes change from 6 bytes (“v1 s1\0”) to 20 bytes (“v2 s1 &lt;V2 addition&gt;\0”)</li>
-<li>both <strong>s1</strong> and <strong>s2</strong> have mysterious <strong>R_X86_64_COPY</strong> relocation type</li>
-<li><strong>.bss</strong> section size increased for +40 bytes</li>
+<li><code>s1</code> and <code>s2</code> symbols have known sizes</li>
+<li>the sizes change from 6 bytes (<code>"v1 s1\0"</code>) to 20 bytes (<code>"v2 s1 &lt;V2   addition&gt;\0"</code>)</li>
+<li>both <code>s1</code> and <code>s2</code> have mysterious <code>R_X86_64_COPY</code> relocation
+type</li>
+<li><code>.bss</code> section size increased for +40 bytes</li>
 <li>LOAD read/write segment increased for +40 bytes</li>
 </ul>
-<p>It means array contents is copied from library <strong>.data</strong> section to an executable
-<strong>.bss</strong> section at each execution startup time.</p>
-<h1 id="why-does-it-behave-like-that">Why does it behave like that?</h1>
-<p>But why copy? Arrays might be huge in size and copying them would take a while.
-Why not just map the library and use it’s symbols?</p>
-<p>For that we need to understand what drives the process of binary generation.</p>
-<p>All starts from <strong>exe.c</strong> file being converted to the assembly form.
+<p>It means array contents is copied from library <code>.data</code> section to an
+executable <code>.bss</code> section at each execution startup time.</p>
+<h2 id="why-does-it-behave-like-that">Why does it behave like that?</h2>
+<p>But why copy? Arrays might be huge in size and copying them would take a
+while. Why not just map the library and use it’s symbols?
+For that we need to understand what drives the process of binary
+generation.
+All starts from <code>exe.c</code> file being converted to the assembly form.
 Let’s look at it:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">; gcc -O2 exe.c -S -o exe.S</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -223,7 +228,8 @@ Let’s look at it:</p>
 <span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>    .size   main<span class="op">,</span> <span class="op">.-</span>main</span>
 <span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>    .ident  <span class="st">&quot;GCC: (Gentoo 6.2.0-r1 p1.1) 6.2.0&quot;</span></span>
 <span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>note<span class="op">.</span>GNU<span class="op">-</span>stack<span class="op">,</span><span class="st">&quot;&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span></code></pre></div>
-<p>The relevant piece of code here is how <strong>s1</strong> gets propagated to <strong>printf</strong> call:</p>
+<p>The relevant piece of code here is how <code>s1</code> gets propagated to
+<code>printf</code> call:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">;</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    .<span class="dt">file</span>   <span class="st">&quot;exe.c&quot;</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>rodata<span class="op">.</span>str1<span class="op">.</span><span class="dv">1</span><span class="op">,</span><span class="st">&quot;aMS&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits<span class="op">,</span><span class="dv">1</span></span>
@@ -237,44 +243,51 @@ Let’s look at it:</p>
 <span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>    movl    <span class="op">$</span><span class="bn">1</span><span class="op">,</span> <span class="op">%</span><span class="kw">edi</span></span>
 <span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>    xorl    <span class="op">%</span><span class="kw">eax</span><span class="op">,</span> <span class="op">%</span><span class="kw">eax</span></span>
 <span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">call</span>    __printf_chk</span></code></pre></div>
-<p><strong>$s1</strong> is an absolute address to <strong>s1</strong> symbol. It is not known at <strong>exe</strong>
-link time as it’s storage is in external library. There is no indirection used.</p>
-<p>One way of adjusting this address is to use a relocation in code segment (also known at <strong>TEXTREL</strong>).
-But such relocations are unwelcome in linux systems. They have a few disadvantages:</p>
+<p><code>$s1</code> is an absolute address to <code>s1</code> symbol. It is not known at
+<code>exe</code> link time as it’s storage is in external library. There is no
+indirection used.</p>
+<p>One way of adjusting this address is to use a relocation in code segment
+(also known at <code>TEXTREL</code>). But such relocations are unwelcome in <code>linux</code>
+systems. They have a few disadvantages:</p>
 <ul>
-<li>[insecurity] <strong>.text</strong> sections that contain <strong>TEXTREL</strong>s need to be mapped with <strong>RWX</strong> permissions.</li>
-<li>[inefficiency] Fixing up these relocation has to be done before program takes control.
-Even if code will never be executed.</li>
-<li>[inefficiency] Each fixed relocation unshares code page where relocation was fixed up.</li>
+<li><code>insecurity</code>: <code>.text</code> sections that contain <code>TEXTREL</code>s need to be
+mapped with <code>RWX</code> permissions.</li>
+<li><code>inefficiency</code>: Fixing up these relocation has to be done before
+program takes control. Even if code will never be executed.</li>
+<li><code>inefficiency</code>: Each fixed relocation un-shares code page where
+relocation was fixed up increasing runtime memory footprint.</li>
 </ul>
-<p><strong>s1</strong> and <strong>s2</strong> object size is known at link time:
-<strong>ld</strong> accepts both <strong>exe.c</strong> and <strong>libl.so</strong> files to resolve all used symbols in final <strong>exe</strong>.
-Thus linker decides to provide storage for such data in <strong>exe</strong>’s own writable <strong>.bss</strong> section
-and generates special <strong>COPY</strong> relocations as if external data would be local to <strong>exe</strong>.</p>
-<p>When we update <strong>libl.so</strong> with new <strong>s1</strong> object size <strong>exe</strong> still contains
-<strong>COPY</strong> relocation of symbol <strong>s1</strong> of the old size. This leads to partial
-symbol copying at <strong>exe</strong> startup.</p>
-<p>In case of <strong>nettle</strong> that means <strong>NULL</strong>-terminated array will be copied only partially
-(missing 4 last elements including <strong>NULL</strong>) which causes occasional <strong>SIGSEGV</strong>s.</p>
-<h1 id="a-fun-workaround">A fun workaround</h1>
-<p>This absolute relocation problem is well known when writing shared libraries.
-Compiler has a special position independent mode (<strong>-fPIC</strong>) that generates
-non-absolute access to each symbol in the library.</p>
-<p>We can workaround the problem by building <strong>exe.c</strong> with <strong>-fPIC</strong>:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc <span class="at">-O2</span> <span class="at">-DV1</span> <span class="at">-shared</span> <span class="at">-fPIC</span> l.c <span class="at">-o</span> libl.so</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc <span class="at">-O2</span> <span class="at">-fPIC</span> exe.c <span class="at">-o</span> exe <span class="at">-L.</span> <span class="at">-ll</span> <span class="st">'-Wl,-rpath=$ORIGIN'</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo <span class="st">'Runnig exe/V1'</span></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Runnig</span> exe/V1</span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./exe</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="va">s1</span><span class="op">=</span><span class="st">'v1 s1'</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="va">s2</span><span class="op">=</span><span class="st">'v1 s2'</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gcc <span class="at">-O2</span> <span class="at">-DV2</span> <span class="at">-shared</span> <span class="at">-fPIC</span> l.c <span class="at">-o</span> libl.so</span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo <span class="st">'Runnig exe/V2'</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="ex">Runnig</span> exe/V2</span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./exe</span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="va">s1</span><span class="op">=</span><span class="st">'v2 s1 &lt;V2 addition&gt;'</span></span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="va">s2</span><span class="op">=</span><span class="st">'v2 s2 &lt;V2 addition&gt;'</span></span></code></pre></div>
-<p>It just works. Let’s look at the changes in generated code for <strong>exe.c</strong>:</p>
+<p><code>s1</code> and <code>s2</code> object size is known at link time: <code>ld</code> accepts both
+<code>exe.c</code> and <code>libl.so</code> files to resolve all used symbols in final
+<code>exe</code>. Thus linker decides to provide storage for such data in
+<code>exe</code>’s own writable <code>.bss</code> section and generates special <code>COPY</code>
+relocations as if external data would be local to <code>exe</code>.</p>
+<p>When we update <code>libl.so</code> with new <code>s1</code> object size <code>exe</code> still
+contains <code>COPY</code> relocation of symbol <code>s1</code> of the old size. This
+leads to partial symbol copying at <code>exe</code> startup.
+In case of <code>nettle</code> that means <code>NULL</code>-terminated array will be
+copied only partially (missing 4 last elements including <code>NULL</code>) which
+causes occasional <code>SIGSEGV</code>s.</p>
+<h2 id="a-fun-workaround">A fun workaround</h2>
+<p>This absolute relocation problem is well known when writing shared
+libraries. Compiler has a special position independent mode (<code>-fPIC</code>)
+that generates non-absolute access to each symbol in the library.</p>
+<p>We can workaround the problem by building <code>exe.c</code> with <code>-fPIC</code>:</p>
+<pre><code>$ gcc -O2 -DV1 -shared -fPIC l.c -o libl.so
+$ gcc -O2 -fPIC exe.c -o exe -L. -ll '-Wl,-rpath=$ORIGIN'
+$ echo 'Runnig exe/V1'
+Runnig exe/V1
+$ ./exe
+s1='v1 s1'
+s2='v1 s2'
+$ gcc -O2 -DV2 -shared -fPIC l.c -o libl.so
+$ echo 'Runnig exe/V2'
+Runnig exe/V2
+$ ./exe
+s1='v2 s1 &lt;V2 addition&gt;'
+s2='v2 s2 &lt;V2 addition&gt;'</code></pre>
+<p>It just works. Let’s look at the changes in generated code for
+<code>exe.c</code>:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">; gcc -fPIC -O2 exe.c -S -o exe-fPIC.S</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    .<span class="dt">file</span>   <span class="st">&quot;exe.c&quot;</span></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    .<span class="bu">section</span>        <span class="op">.</span>rodata<span class="op">.</span>str1<span class="op">.</span><span class="dv">1</span><span class="op">,</span><span class="st">&quot;aMS&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits<span class="op">,</span><span class="dv">1</span></span>
@@ -328,16 +341,20 @@ non-absolute access to each symbol in the library.</p>
 <span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -25 +25 @@</span></span>
 <span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="st">-       call    __printf_chk</span></span>
 <span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a><span class="va">+       call    __printf_chk@PLT</span></span></code></pre></div>
-<p>Access to <strong>s1</strong> is now done via separate global offset table (aka <strong>.got</strong>).
-This way we get another layer of indirection (memory dereference) and get
-our <strong>s1</strong> contents without copies.</p>
+<p>Access to <code>s1</code> is now done via separate global offset table (aka
+<code>.got</code>). This way we get another layer of indirection (memory
+dereference) and get our <code>s1</code> contents without copies.</p>
 <h1 id="a-few-takeaways">A few takeaways</h1>
 <ul>
-<li>Be careful when exporting any objects from libraries (arrays, structs, integral constants)</li>
-<li>Exporting a pointer (const char *) instead of an array (const char []) would be not so devastating</li>
+<li>Be careful when exporting any objects from libraries (arrays, structs,
+integral constants)</li>
+<li>Exporting a pointer (<code>const char *</code>) instead of an array (<code>const char   []</code>) would be not so devastating</li>
 <li>Dynamic linking is hard :)</li>
-<li>To learn more it’s worth reading Ulrich Drepper’s <a href="https://software.intel.com/sites/default/files/m/a/1/e/dsohowto.pdf">DSO howto</a></li>
-<li>Another good book is <a href="https://wh0rd.org/books/linkers-and-loaders/">Linkers and Loaders</a> by Jonh R. Levine.</li>
+<li>To learn more it’s worth reading Ulrich Drepper’s <a href="https://software.intel.com/sites/default/files/m/a/1/e/dsohowto.pdf"><code>DSO</code>
+howto</a></li>
+<li>Another good book is <a href="https://wh0rd.org/books/linkers-and-loaders/">Linkers and
+Loaders</a> by Jonh R.
+Levine.</li>
 </ul>
 <p>Have fun!</p>
         </div>

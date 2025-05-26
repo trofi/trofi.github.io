@@ -29,23 +29,25 @@
                 <div class="info">March 12, 2016</div>
             
 
-            <p>This all started from this <a href="https://ghc.haskell.org/trac/ghc/ticket/11395">ghc bug report</a>.</p>
-<p>The bug stated that on <strong>m68k</strong> ABI return values of <strong>int</strong>-type are passed in
-register <strong>%d0</strong> while <strong>void *</strong>-type are passed in register <strong>%a0</strong>.
-<strong>GHC</strong>’s <strong>C</strong> codegen was not using return types consistently.</p>
-<!--more-->
-<p>I had zero knowledge of <strong>m68k</strong> at that time. I only had a vague impression
-that CPU of this type is typically attached to ~1MB RAM or something. I expected
-it be 32-bit-ish or less :)</p>
-<p>Portability bugs are my favourite and I’ve started The Quest by building
-a <strong>C</strong> crosscompiler.</p>
-<p>Gentoo allows you to do it with <strong>crossdev</strong> script:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> crossdev <span class="at">-t</span> m68k-unknown-linux-gnu</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Done!</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> m68k-unknown-linux-gnu-gcc <span class="at">--version</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">m68k-unknown-linux-gnu-gcc</span> <span class="er">(</span><span class="ex">Gentoo</span> 5.3.0 p1.0, pie-0.6.5<span class="kw">)</span> <span class="ex">5.3.0</span></span></code></pre></div>
-<h1 id="the-assembly">the assembly</h1>
-<p>The <strong>m68k</strong> ISA is very simple. Smaller example from bug report:</p>
+            <p>This all started from this <a href="https://ghc.haskell.org/trac/ghc/ticket/11395"><code>ghc</code> bug
+report</a>.</p>
+<p>The bug stated that on <code>m68k</code> ABI return values of <code>int</code>-type are
+passed in register <code>%d0</code> while <code>void *</code>-type are passed in register
+<code>%a0</code>. <code>GHC</code> <code>c</code> code generation was not using return types
+consistently.</p>
+<p>I had zero knowledge of <code>m68k</code> at that time. I only had a vague
+impression that CPU of this type is typically attached to <code>~1MB</code> RAM or
+something. I expected the CPU to have 32 bit registers or less :)
+Portability bugs are my favorite and I’ve started The Quest by
+building a <code>c</code> cross-compiler. Gentoo allows you to do it with
+<code>crossdev</code> script:</p>
+<pre><code>$ crossdev -t m68k-unknown-linux-gnu
+# Done!
+
+$ m68k-unknown-linux-gnu-gcc --version
+m68k-unknown-linux-gnu-gcc (Gentoo 5.3.0 p1.0, pie-0.6.5) 5.3.0</code></pre>
+<h2 id="the-assembly">the assembly</h2>
+<p><code>m68k</code> ISA is very simple. Smaller example from bug report:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span>   f<span class="op">(</span><span class="dt">long</span>   a<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> a<span class="op">;</span> <span class="op">}</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> g<span class="op">(</span><span class="dt">void</span> <span class="op">*</span> p<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> p<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
 <div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a># m68k<span class="op">-</span>unknown<span class="op">-</span>linux<span class="op">-</span>gnu<span class="op">-</span>gcc <span class="op">-</span>S <span class="op">-</span>O2 <span class="op">-</span>fomit<span class="op">-</span>frame<span class="op">-</span>pointer a<span class="op">.</span>c</span>
@@ -56,153 +58,170 @@ a <strong>C</strong> crosscompiler.</p>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    move<span class="op">.</span>l <span class="dv">4</span><span class="op">(%</span><span class="kw">sp</span><span class="op">),%</span>a0</span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    move<span class="op">.</span>l <span class="op">%</span>a0<span class="op">,%</span>d0</span>
 <span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    rts</span></code></pre></div>
-<p>Real-world code example (just to get a feeling about patterns used by gcc):</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a># m68k<span class="op">-</span>unknown<span class="op">-</span>linux<span class="op">-</span>gnu<span class="op">-</span>objdump <span class="op">-</span>d <span class="op">/</span>usr<span class="op">/</span>m68k<span class="op">-</span>unknown<span class="op">-</span>linux<span class="op">-</span>gnu<span class="op">/</span>usr<span class="op">/</span>bin<span class="op">/</span>locale</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>80001754 &lt;.text<span class="op">&gt;:</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>80001754:       4e56 fff8       linkw <span class="op">%</span>fp<span class="op">,#-</span><span class="dv">8</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>80001758:       48e7 3f3c       moveml <span class="op">%</span>d2<span class="op">-%</span>d7<span class="op">/%</span>a2<span class="op">-%</span>a5<span class="op">,%</span>sp<span class="fu">@</span><span class="er">-</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>8000175c:       42b9 8000 96b0  clrl <span class="dv">800096</span><span class="er">b0</span> <span class="op">&lt;</span>stdout<span class="fu">@</span><span class="er">@</span>GLIBC_2<span class="op">.</span><span class="dv">0</span><span class="op">+</span><span class="bn">0x1c</span><span class="op">&gt;</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>80001762:       42b9 8000 96ac  clrl <span class="dv">800096</span><span class="er">ac</span> <span class="op">&lt;</span>stdout<span class="fu">@</span><span class="er">@</span>GLIBC_2<span class="op">.</span><span class="dv">0</span><span class="op">+</span><span class="bn">0x18</span><span class="op">&gt;</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>80001768:       4879 8000 4258  pea <span class="dv">80004258</span> <span class="op">&lt;</span>_IO_stdin_used<span class="fu">@</span><span class="er">@</span>Base<span class="op">+</span><span class="bn">0x178</span><span class="op">&gt;</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>8000176e:       42a7            clrl <span class="op">%</span>sp<span class="fu">@</span><span class="er">-</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>80001770:       45f9 8000 163c  <span class="bu">lea</span> <span class="dv">8000163</span><span class="er">c</span> <span class="op">&lt;</span>setlocale<span class="fu">@</span><span class="er">p</span>lt<span class="op">&gt;,%</span>a2</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>80001776:       4e92            jsr <span class="op">%</span>a2<span class="fu">@</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>80001778:       508f            addql <span class="op">#</span><span class="dv">8</span><span class="op">,%</span><span class="kw">sp</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>8000177a:       4a88            tstl <span class="op">%</span>a0</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>8000177c:       6700 02a2       beqw <span class="dv">80001</span><span class="er">a20</span> <span class="op">&lt;</span>calloc<span class="fu">@</span><span class="er">p</span>lt<span class="op">+</span><span class="bn">0x2e0</span><span class="op">&gt;</span></span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>80001780:       4879 8000 4258  pea <span class="dv">80004258</span> <span class="op">&lt;</span>_IO_stdin_used<span class="fu">@</span><span class="er">@</span>Base<span class="op">+</span><span class="bn">0x178</span><span class="op">&gt;</span></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>80001786:       4878 0005       pea <span class="dv">5</span> <span class="op">&lt;</span>strstr<span class="fu">@</span><span class="er">p</span>lt<span class="op">-</span><span class="bn">0x800011eb</span><span class="op">&gt;</span></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>8000178a:       4e92            jsr <span class="op">%</span>a2<span class="fu">@</span></span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>8000178c:       508f            addql <span class="op">#</span><span class="dv">8</span><span class="op">,%</span><span class="kw">sp</span></span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>8000178e:       4a88            tstl <span class="op">%</span>a0</span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>80001790:       6700 02cc       beqw <span class="dv">80001</span><span class="er">a5e</span> <span class="op">&lt;</span>calloc<span class="fu">@</span><span class="er">p</span>lt<span class="op">+</span><span class="bn">0x31e</span><span class="op">&gt;</span></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>80001794:       4879 8000 968c  pea <span class="dv">8000968</span><span class="er">c</span> <span class="op">&lt;</span>_libc_intl_domainname<span class="fu">@</span><span class="er">@</span>GLIBC_2<span class="op">.</span><span class="dv">0</span><span class="op">&gt;</span></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>8000179a:       4eb9 8000 131c  jsr <span class="dv">8000131</span><span class="er">c</span> <span class="op">&lt;</span>textdomain<span class="fu">@</span><span class="er">p</span>lt<span class="op">&gt;</span></span>
-<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>800017a0:       42a7            clrl <span class="op">%</span>sp<span class="fu">@</span><span class="er">-</span></span>
-<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>800017a2:       486e fff8       pea <span class="op">%</span>fp<span class="fu">@</span><span class="er">(</span><span class="op">-</span><span class="dv">8</span><span class="op">)</span></span>
-<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>800017a6:       42a7            clrl <span class="op">%</span>sp<span class="fu">@</span><span class="er">-</span></span>
-<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>800017a8:       2f2e 000c       movel <span class="op">%</span>fp<span class="fu">@</span><span class="er">(</span><span class="dv">12</span><span class="op">),%</span>sp<span class="fu">@</span><span class="er">-</span></span>
-<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>800017ac:       2f2e 0008       movel <span class="op">%</span>fp<span class="fu">@</span><span class="er">(</span><span class="dv">8</span><span class="op">),%</span>sp<span class="fu">@</span><span class="er">-</span></span></code></pre></div>
-<h1 id="first-attempt">first attempt</h1>
-<p>“Should be easy to weed out all the bugs” was my thought :)</p>
-<p>Having spent some time arguing with <strong>gcc</strong> devs about handling of incomplete
-prototypes in <a href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=69221">gcc bugzilla</a>
-and on <a href="http://comments.gmane.org/gmane.comp.gcc.devel/142294">gcc mailing list</a>
-it was time to start fixing <strong>GHC</strong>.</p>
-<p>I was familiar with the <strong>GHC</strong> code responsible for <strong>C</strong> code generation
-and gave first shot without actually building <strong>GHC</strong> compiler for <strong>m68k</strong>:
+<p>Real-world code example (just to get a feeling about patterns used by
+<code>gcc</code>):</p>
+<pre><code># m68k-unknown-linux-gnu-objdump -d /usr/m68k-unknown-linux-gnu/usr/bin/locale
+80001754 &lt;.text&gt;:
+80001754:       4e56 fff8       linkw %fp,#-8
+80001758:       48e7 3f3c       moveml %d2-%d7/%a2-%a5,%sp@-
+8000175c:       42b9 8000 96b0  clrl 800096b0 &lt;stdout@@GLIBC_2.0+0x1c&gt;
+80001762:       42b9 8000 96ac  clrl 800096ac &lt;stdout@@GLIBC_2.0+0x18&gt;
+80001768:       4879 8000 4258  pea 80004258 &lt;_IO_stdin_used@@Base+0x178&gt;
+8000176e:       42a7            clrl %sp@-
+80001770:       45f9 8000 163c  lea 8000163c &lt;setlocale@plt&gt;,%a2
+80001776:       4e92            jsr %a2@
+80001778:       508f            addql #8,%sp
+8000177a:       4a88            tstl %a0
+8000177c:       6700 02a2       beqw 80001a20 &lt;calloc@plt+0x2e0&gt;
+80001780:       4879 8000 4258  pea 80004258 &lt;_IO_stdin_used@@Base+0x178&gt;
+80001786:       4878 0005       pea 5 &lt;strstr@plt-0x800011eb&gt;
+8000178a:       4e92            jsr %a2@
+8000178c:       508f            addql #8,%sp
+8000178e:       4a88            tstl %a0
+80001790:       6700 02cc       beqw 80001a5e &lt;calloc@plt+0x31e&gt;
+80001794:       4879 8000 968c  pea 8000968c &lt;_libc_intl_domainname@@GLIBC_2.0&gt;
+8000179a:       4eb9 8000 131c  jsr 8000131c &lt;textdomain@plt&gt;
+800017a0:       42a7            clrl %sp@-
+800017a2:       486e fff8       pea %fp@(-8)
+800017a6:       42a7            clrl %sp@-
+800017a8:       2f2e 000c       movel %fp@(12),%sp@-
+800017ac:       2f2e 0008       movel %fp@(8),%sp@-</code></pre>
+<h2 id="first-attempt">first attempt</h2>
+<p>“Should be easy to weed out all the bugs” was my thought :)
+Having spent some time arguing with <code>gcc</code> devs about handling of
+incomplete prototypes in <a href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=69221"><code>gcc</code>
+bugzilla</a> and on
+<a href="http://comments.gmane.org/gmane.comp.gcc.devel/142294"><code>gcc</code> mailing
+list</a> it was time
+to start fixing <code>GHC</code>.
+I was familiar with the <code>GHC</code> code responsible for <code>c</code> code
+generation and gave first shot without actually building <code>GHC</code>
+compiler for <code>m68k</code>:
 <a href="https://ghc.haskell.org/trac/ghc/attachment/ticket/11395/0001-c-codegen-split-external-symbol-prototypes-EF_.patch">patch</a>.</p>
-<p>Adrian tried to test the patch and reported <strong>GHC</strong> still <strong>SIGSEGV</strong>ed as before.
-It was not very clear if patch changed anything. Did it crash later than used to
-or did I break something subtle?</p>
-<h1 id="cross-ghc-nano-howto">cross-ghc nano-howto</h1>
-<p>Next step was to try to actually build <strong>GHC</strong> as a crosscompiler.</p>
-<p>It appears to be as simple as building cross-gcc:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">ghc-m68k</span> $ ./configure <span class="at">--target</span><span class="op">=</span>m68k-unknown-linux-gnu <span class="at">--enable-unregisterised</span> <span class="dt">\</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">\</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>                       <span class="at">--enable-bfd-debug</span></span></code></pre></div>
-<p>That’s it! The first line is enough but it’s faster for subsequent rebuilds
-to use system dependencies and not bundled libs. Thus i’ve installed dependencies
-to the SYSROOT:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ARCH=m68k emerge-m68k-unknown-linux-gnu <span class="at">-1</span> <span class="dt">\</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    sys-libs/ncurses <span class="dt">\</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    dev-libs/gmp <span class="dt">\</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    virtual/libffi <span class="dt">\</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    sys-libs/binutils-libs</span></code></pre></div>
-<p>And i’ve got cross-ghc! Testing:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo <span class="st">'main = print 42'</span> <span class="op">&gt;</span> /tmp/hi.hs</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> inplace/bin/ghc-stage1 <span class="at">--make</span> /tmp/hi.hs</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> file /tmp/hi</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">/tmp/hi:</span> ELF 32-bit MSB executable, Motorola m68k, 68020, version 1 <span class="er">(</span><span class="ex">SYSV</span><span class="kw">)</span><span class="ex">,</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>         <span class="ex">dynamically</span> linked, interpreter /lib/ld.so.1, for GNU/Linux 2.6.32, not stripped</span></code></pre></div>
+<p>Adrian tried to test the patch and reported <code>GHC</code> still <code>SIGSEGV</code>ed
+as before. It was not very clear if patch changed anything. Did it crash
+later than used to or did I break something subtle?</p>
+<h2 id="cross-ghc-nano-howto">cross-<code>ghc</code> nano-howto</h2>
+<p>Next step was to try to actually build <code>GHC</code> as a cross-compiler.
+It appears to be as simple as building cross-<code>gcc</code>:</p>
+<pre><code>$ ./configure --target=m68k-unknown-linux-gnu --enable-unregisterised \
+              --enable-bfd-debug</code></pre>
+<p>That’s it! The first line is enough but it’s faster for subsequent
+rebuilds to use system dependencies and not bundled libraries. Thus
+I’ve installed dependencies to the <code>SYSROOT</code>:</p>
+<pre><code>$ ARCH=m68k emerge-m68k-unknown-linux-gnu -1 \
+    sys-libs/ncurses \
+    dev-libs/gmp \
+    virtual/libffi \
+    sys-libs/binutils-libs</code></pre>
+<p>And I got cross-<code>ghc</code>! Testing:</p>
+<pre><code>$ echo 'main = print 42' &gt; /tmp/hi.hs
+
+$ inplace/bin/ghc-stage1 --make /tmp/hi.hs
+
+$ file /tmp/hi
+/tmp/hi: ELF 32-bit MSB executable, Motorola m68k, 68020, version 1 (SYSV),
+         dynamically linked, interpreter /lib/ld.so.1, for GNU/Linux 2.6.32, not stripped</code></pre>
 <p>Simple!</p>
-<h1 id="qemu-user-nano-howto">qemu-user nano-howto</h1>
-<p>qemu allows you to run not only system images (qemu-system)
-but also standalone executables (qemu-user) for foreign architectures and even other kernels!</p>
-<p>The simple usage example for <strong>powerpc64</strong> (it’s slightly better supported by qemu)
-would be:</p>
+<h2 id="qemu-user-nano-howto"><code>qemu-user</code> nano-howto</h2>
+<p><code>qemu</code> allows you to run not only system images (<code>qemu-system</code>) but also
+standalone executables (<code>qemu-user</code>) for foreign architectures and even
+other kernels!
+The simple usage example for <code>powerpc64</code> (it’s slightly better
+supported by <code>qemu</code>) would be:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;Hello world!</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
 <span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> powerpc64-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> /usr/bin/qemu-ppc64 <span class="at">-L</span> /usr/powerpc64-unknown-linux-gnu ./a</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Hello</span> world!</span></code></pre></div>
-<p>With help of <a href="https://en.wikipedia.org/wiki/Binfmt_misc">binfmt_misc</a> kernel module
-you can run foreign binaries seamlessly as native binaries. This allows running things
-like testsuites for crosscompilers as they would have produced binaries you can run on
-your machine.</p>
-<p>Setup for <strong>powerpc64</strong>:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo  <span class="st">':ppc64:M::\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x15:\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff:/qemu-ppc64:'</span>  <span class="op">&gt;</span> /proc/sys/fs/binfmt_misc/register</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cat /qemu-ppc64 </span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/bash</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="bu">exec</span> /usr/bin/qemu-ppc64 <span class="at">-L</span> /usr/powerpc64-unknown-linux-gnu/ <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
-<div class="sourceCode" id="cb11"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> file a</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">a:</span> ELF 64-bit MSB executable, 64-bit PowerPC or cisco 7500, version 1 <span class="er">(</span><span class="ex">SYSV</span><span class="kw">)</span><span class="ex">,</span></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>   <span class="ex">dynamically</span> linked, interpreter /lib64/ld64.so.1, for GNU/Linux 2.6.32, not stripped</span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ./a</span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="ex">Hello</span> world!</span></code></pre></div>
-<p>Gentoo has a <a href="https://wiki.gentoo.org/wiki/Crossdev_qemu-static-user-chroot">detailed wiki page</a>
-on how to get qemu-user on your system.</p>
-<h1 id="m68k-hoops">m68k hoops</h1>
-<p>I did the same for <strong>m68k</strong> but found out <strong>qemu-m68k</strong> can’t even run simplest programs:</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> /usr/bin/qemu-m68k <span class="at">-L</span> /usr/m68k-unknown-linux-gnu ./a</span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">qemu:</span> fatal: Illegal instruction: ebc0 @ f67e36a8</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="ex">D0</span> = 6ffffef5   A0 = f67fb6bc   F0 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="ex">D1</span> = 0000010a   A1 = f67de000   F1 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="ex">D2</span> = 0000000f   A2 = f6ffec04   F2 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="ex">D3</span> = 00000000   A3 = 00000000   F3 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="ex">D4</span> = 00000000   A4 = 00000000   F4 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="ex">D5</span> = 00000000   A5 = f67fb774   F5 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="ex">D6</span> = 00000000   A6 = f6ffee54   F6 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="ex">D7</span> = 00000000   A7 = f6ffec04   F7 = 0000000000000000 <span class="er">(</span>           <span class="ex">0</span><span class="kw">)</span></span>
-<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a><span class="ex">PC</span> = f67e36a8   SR = 0000 <span class="at">-----</span> FPRESULT =            0</span></code></pre></div>
-<p>That means qemu does not support some instructions generated by gcc.</p>
-<p><strong>objdump -d</strong> can help us find out if it’s a sane opcode or gcc/ld
+<pre><code>$ powerpc64-unknown-linux-gnu-gcc a.c -o a
+
+$ /usr/bin/qemu-ppc64 -L /usr/powerpc64-unknown-linux-gnu ./a
+Hello world!</code></pre>
+<p>With help of <a href="https://en.wikipedia.org/wiki/Binfmt_misc"><code>binfmt_misc</code></a>
+kernel module you can run foreign binaries seamlessly as native
+binaries. This allows running things like test suites for cross-compilers
+as they would have produced binaries you can run on your machine.
+Setup for <code>powerpc64</code>:</p>
+<pre><code>$ echo  ':ppc64:M::\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x15:\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff:/qemu-ppc64:'  &gt; /proc/sys/fs/binfmt_misc/register
+
+$ cat /qemu-ppc64 
+#!/bin/bash
+
+exec /usr/bin/qemu-ppc64 -L /usr/powerpc64-unknown-linux-gnu/ &quot;$@&quot;</code></pre>
+<p>Running a foreign binary:</p>
+<pre><code>$ file a
+a: ELF 64-bit MSB executable, 64-bit PowerPC or cisco 7500, version 1 (SYSV),
+   dynamically linked, interpreter /lib64/ld64.so.1, for GNU/Linux 2.6.32, not stripped
+$ ./a
+Hello world!</code></pre>
+<p>Gentoo has a <a href="https://wiki.gentoo.org/wiki/Crossdev_qemu-static-user-chroot">detailed wiki
+page</a> on
+how to get <code>qemu-user</code> on your system.</p>
+<h2 id="m68k-hoops"><code>m68k</code> hoops</h2>
+<p>I did the same for <code>m68k</code> but found out <code>qemu-m68k</code> can’t even run
+simplest programs:</p>
+<pre><code>$ /usr/bin/qemu-m68k -L /usr/m68k-unknown-linux-gnu ./a
+qemu: fatal: Illegal instruction: ebc0 @ f67e36a8
+D0 = 6ffffef5   A0 = f67fb6bc   F0 = 0000000000000000 (           0)
+D1 = 0000010a   A1 = f67de000   F1 = 0000000000000000 (           0)
+D2 = 0000000f   A2 = f6ffec04   F2 = 0000000000000000 (           0)
+D3 = 00000000   A3 = 00000000   F3 = 0000000000000000 (           0)
+D4 = 00000000   A4 = 00000000   F4 = 0000000000000000 (           0)
+D5 = 00000000   A5 = f67fb774   F5 = 0000000000000000 (           0)
+D6 = 00000000   A6 = f6ffee54   F6 = 0000000000000000 (           0)
+D7 = 00000000   A7 = f6ffec04   F7 = 0000000000000000 (           0)
+PC = f67e36a8   SR = 0000 ----- FPRESULT =            0</code></pre>
+<p>That means <code>qemu</code> does not support some instructions generated by <code>gcc</code>.
+<code>objdump -d</code> can help us find out if it’s a real opcode or <code>gcc</code>/<code>ld</code>
 generated garbage:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> m68k-unknown-linux-gnu-gcc <span class="at">-static</span> a.c <span class="at">-o</span> a</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> m68k-unknown-linux-gnu-objdump <span class="at">-d</span> ./a  <span class="kw">|</span> <span class="fu">grep</span> ebc0</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="ex">800180ec:</span>       ebc0 105f       bfexts %d0,1,31,%d1</span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="ex">8001ebc0:</span>       226e 0014       moveal %fp<span class="pp">@(</span>20<span class="pp">)</span>,%a1</span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="ex">80037ab8:</span>       ebc0 105f       bfexts %d0,1,31,%d1</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="ex">8003ebc0:</span>       6612            bnes 8003ebd4 <span class="op">&lt;</span>_dl_close_worker+0x96a<span class="op">&gt;</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="ex">80058168:</span>       61ff ffff ebc0  bsrl 80056d2a <span class="op">&lt;</span>get_cie_encoding<span class="op">&gt;</span></span></code></pre></div>
-<p><strong>ebc0</strong> looks like a normal <strong>bfexts</strong> instruction (Bit Field Extract Signed).
-But Debian guys who reported a bug somehow can run <strong>m68k</strong> chroot!</p>
-<h1 id="hoop-1-qemu-fork">hoop #1: qemu fork</h1>
-<p>Debian has a nice <a href="https://wiki.debian.org/M68k/sbuildQEMU">wiki page about it</a>
-Basically the trick to emulate <strong>m68k</strong> binaries is to use Laurent’s qemu git tree.
-It allowed me to run <strong>C</strong> hello-world.</p>
-<h1 id="hoop-2-minimum-alignment">hoop #2: minimum alignment</h1>
-<p>Time to try haskell hello-world:</p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> echo <span class="st">'main = print 42'</span> <span class="op">&gt;</span> /tmp/hi.hs</span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> inplace/bin/ghc-stage1 <span class="at">--make</span> <span class="at">-debug</span> /tmp/hi.hs</span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> /tmp/hi</span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="ex">SIGSEGV</span></span></code></pre></div>
-<p>We are on the right track. qemu understands all the instructions
-it sees.</p>
-<p>qemu-user is capable of generating nice gdb-readable core files.</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> gdb /tmp/hi qemu_hi<span class="pp">*</span>.core</span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Core</span> was generated by <span class="kw">`</span><span class="ex">/tmp/hi</span> +RTS <span class="at">-Ds</span> <span class="at">-Di</span> <span class="at">-Dw</span> <span class="at">-DG</span> <span class="at">-Dg</span> <span class="at">-Db</span> <span class="at">-DS</span> <span class="at">-Dt</span> <span class="at">-Dp</span> <span class="at">-Da</span> <span class="at">-Dl</span> <span class="at">-Dm</span> <span class="at">-Dz</span> <span class="at">-Dc</span> <span class="at">-Dr</span><span class="st">'.</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="st">Program terminated with signal SIGSEGV, Segmentation fault.</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="st">#0  0x80463b0a in LOOKS_LIKE_INFO_PTR_NOT_NULL (p=32858) at includes/rts/storage/ClosureMacros.h:248</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="st">248         return (info-&gt;type != INVALID_OBJECT &amp;&amp; info-&gt;type &lt; N_CLOSURE_TYPES) ? rtsTrue : rtsFalse;</span></span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="st">(gdb) bt</span></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="st">#0  0x80463b0a in LOOKS_LIKE_INFO_PTR_NOT_NULL (p=32858) at includes/rts/storage/ClosureMacros.h:248</span></span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="st">#1  0x80463b46 in LOOKS_LIKE_INFO_PTR (p=32858) at includes/rts/storage/ClosureMacros.h:253</span></span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="st">#2  0x80463b6c in LOOKS_LIKE_CLOSURE_PTR (p=0x805aac6e &lt;stg_dummy_ret_closure&gt;) at includes/rts/storage/ClosureMacros.h:258</span></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="st">#3  0x80463e4c in initStorage () at rts/sm/Storage.c:121</span></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="st">#4  0x8043ffb4 in hs_init_ghc (argc=0xf6ffebf0, argv=0xf6ffebf4, rts_config=...) at rts/RtsStartup.c:181</span></span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="st">#5  0x80455982 in hs_main (argc=1, argv=0xf6ffed54, main_closure=0x804b8f70 &lt;ZCMain_main_closure&gt;, rts_config=...)</span></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="st">    at rts/RtsMain.c:51</span></span>
-<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a><span class="st">#6  0x80003c1c in main ()</span></span></code></pre></div>
-<p>These <strong>+RTS -Ds -Di -Dw -DG -Dg -Db -DS -Dt -Dp -Da -Dl -Dm -Dz -Dc -Dr</strong> are all flags
-for debug runtime. Sanity checks of sorts.</p>
-<p>This sanity failure basically says that it got tagged pointer where if should not be tagged.
-<strong>GHC</strong> uses least significant bits for closure pointers to distinct between evaluated and
-unevaluated closures. On 32-bit systems last 2 bits are used for tags assuming those will
-always be zero.</p>
+<pre><code>$ m68k-unknown-linux-gnu-gcc -static a.c -o a
+
+$ m68k-unknown-linux-gnu-objdump -d ./a  | grep ebc0
+
+800180ec:       ebc0 105f       bfexts %d0,1,31,%d1
+8001ebc0:       226e 0014       moveal %fp@(20),%a1
+80037ab8:       ebc0 105f       bfexts %d0,1,31,%d1
+8003ebc0:       6612            bnes 8003ebd4 &lt;_dl_close_worker+0x96a&gt;
+80058168:       61ff ffff ebc0  bsrl 80056d2a &lt;get_cie_encoding&gt;</code></pre>
+<p><code>ebc0</code> looks like a real <code>bfexts</code> instruction (Bit Field Extract
+Signed). But Debian guys who reported a bug somehow can run <code>m68k</code>
+<code>chroot</code>!</p>
+<h2 id="hoop-1-qemu-fork">hoop #1: <code>qemu</code> fork</h2>
+<p>Debian has a nice <a href="https://wiki.debian.org/M68k/sbuildQEMU">wiki page about
+it</a> Basically the trick to
+emulate <code>m68k</code> binaries is to use Laurent’s <code>qemu</code> <code>git</code> tree. It allowed
+me to run <code>c</code> hello-world.</p>
+<h2 id="hoop-2-minimum-alignment">hoop #2: minimum alignment</h2>
+<p>Time to try <code>haskell</code> hello-world:</p>
+<pre><code>$ echo 'main = print 42' &gt; /tmp/hi.hs
+
+$ inplace/bin/ghc-stage1 --make -debug /tmp/hi.hs
+
+$ /tmp/hi
+SIGSEGV</code></pre>
+<p>We are on the right track. <code>qemu</code> understands all the instructions it
+sees. <code>qemu-user</code> is capable of generating nice <code>gdb</code>-readable core files:</p>
+<pre><code>$ gdb /tmp/hi qemu_hi*.core
+Core was generated by `/tmp/hi +RTS -Ds -Di -Dw -DG -Dg -Db -DS -Dt -Dp -Da -Dl -Dm -Dz -Dc -Dr'.
+Program terminated with signal SIGSEGV, Segmentation fault.
+#0  0x80463b0a in LOOKS_LIKE_INFO_PTR_NOT_NULL (p=32858) at includes/rts/storage/ClosureMacros.h:248
+248         return (info-&gt;type != INVALID_OBJECT &amp;&amp; info-&gt;type &lt; N_CLOSURE_TYPES) ? rtsTrue : rtsFalse;
+
+(gdb) bt
+#0  0x80463b0a in LOOKS_LIKE_INFO_PTR_NOT_NULL (p=32858) at includes/rts/storage/ClosureMacros.h:248
+#1  0x80463b46 in LOOKS_LIKE_INFO_PTR (p=32858) at includes/rts/storage/ClosureMacros.h:253
+#2  0x80463b6c in LOOKS_LIKE_CLOSURE_PTR (p=0x805aac6e &lt;stg_dummy_ret_closure&gt;) at includes/rts/storage/ClosureMacros.h:258
+#3  0x80463e4c in initStorage () at rts/sm/Storage.c:121
+#4  0x8043ffb4 in hs_init_ghc (argc=0xf6ffebf0, argv=0xf6ffebf4, rts_config=...) at rts/RtsStartup.c:181
+#5  0x80455982 in hs_main (argc=1, argv=0xf6ffed54, main_closure=0x804b8f70 &lt;ZCMain_main_closure&gt;, rts_config=...)
+    at rts/RtsMain.c:51
+#6  0x80003c1c in main ()</code></pre>
+<p>These <code>+RTS -Ds -Di -Dw -DG -Dg -Db -DS -Dt -Dp -Da -Dl -Dm -Dz -Dc -Dr</code> are all flags for debug runtime. Sanity checks of sorts.
+This sanity failure basically says that it got tagged pointer where if
+should not be tagged. <code>GHC</code> uses least significant bits for closure
+pointers to distinct between evaluated and unevaluated closures. On
+32-bit systems last 2 bits are used for tags assuming those will always
+be zero.</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// includes/Cmm.h</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#if SIZEOF_VOID_P == 4</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#define W_ bits32</span></span>
@@ -230,14 +249,15 @@ always be zero.</p>
 <span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span>StgClosure<span class="op">*)((</span>StgWord<span class="op">)</span>p <span class="op">&amp;</span> <span class="op">~</span>TAG_MASK<span class="op">);</span></span>
 <span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Back to our backtrace. <strong>stg_dummy_ret_closure</strong> is an <strong>int</strong> array (untagged)
-with currently evaluated closure. But it’s address is clearly not aligned by
-4-byte boundary:</p>
+<p>Back to our backtrace. <code>stg_dummy_ret_closure</code> is an <code>int</code> array
+(untagged) with currently evaluated closure. But its address is
+clearly not aligned by 4-byte boundary:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dt">Prelude</span><span class="op">&gt;</span> <span class="bn">0x805aac6e</span> <span class="ot">`mod`</span> <span class="dv">4</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="dv">2</span></span></code></pre></div>
-<p>Most of architectures have <strong>sizeof(int) == __alignof__(int)</strong> alignment for
-various reasons (performance, lack of support for unaligned access in memory/cache unit).</p>
-<div class="sourceCode" id="cb19"><pre class="sourceCode C"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<p>Most architectures have <code>sizeof(int) == __alignof__(int)</code>
+alignment for various reasons (performance, lack of support for
+unaligned access in memory/cache unit).</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span> <span class="st">&quot;sizeof (int) = </span><span class="sc">%u</span><span class="st">, __alignof__ (int) = </span><span class="sc">%u\n</span><span class="st">&quot;</span></span>
 <span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>       <span class="op">,</span> <span class="op">(</span><span class="dt">unsigned</span><span class="op">)</span> <span class="kw">sizeof</span> <span class="op">(</span><span class="dt">int</span><span class="op">),</span> <span class="op">(</span><span class="dt">unsigned</span><span class="op">)</span> __alignof__ <span class="op">(</span><span class="dt">int</span><span class="op">));</span></span>
@@ -245,86 +265,87 @@ various reasons (performance, lack of support for unaligned access in memory/cac
 <span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Here is the result for a few targets:</p>
 <table>
+<thead>
+<tr>
+<th style="text-align: left;">target</th>
+<th><code>sizeof (int)</code></th>
+<th style="text-align: left;"><code>__alignof__ (int)</code></th>
+</tr>
+</thead>
 <tbody>
 <tr>
-<td>target</td>
-<td>sizeof (int)</td>
-<td></td>
+<td style="text-align: left;">x86_64-pc-linux-gnu</td>
+<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td><hr /></td>
-<td><hr /></td>
-<td><hr /></td>
+<td style="text-align: left;">i686-pc-linux-gnu</td>
+<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td>x86<span id="pc-linux-gnu">64-pc-linux-gnu</span></td>
+<td style="text-align: left;">powerpc-unknown-linux-gnu</td>
 <td>4</td>
-<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td>i686-pc-linux-gnu</td>
+<td style="text-align: left;">powerpc64-unknown-linux-gnu</td>
 <td>4</td>
-<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td>powerpc-unknown-linux-gnu</td>
+<td style="text-align: left;">sparc-unknown-linux-gnu</td>
 <td>4</td>
-<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td>powerpc64-unknown-linux-gnu</td>
+<td style="text-align: left;">sparc64-unknown-linux-gnu</td>
 <td>4</td>
-<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td>sparc-unknown-linux-gnu</td>
+<td style="text-align: left;">ia64-unknown-linux-gnu</td>
 <td>4</td>
-<td>4</td>
+<td style="text-align: left;">4</td>
 </tr>
 <tr>
-<td>sparc64-unknown-linux-gnu</td>
-<td>4</td>
-<td>4</td>
+<td style="text-align: left;"><code>&lt;you get the pattern&gt;</code></td>
+<td><code>...</code></td>
+<td style="text-align: left;"><code>...</code></td>
 </tr>
 <tr>
-<td>ia64-unknown-linux-gnu</td>
+<td style="text-align: left;">m68k-unknown-linux-gnu</td>
 <td>4</td>
-<td>4</td>
-</tr>
-<tr>
-<td>&lt;you get the pattern&gt;</td>
-<td>…</td>
-<td>…</td>
-</tr>
-<tr>
-<td>m68k-unknown-linux-gnu</td>
-<td>4</td>
-<td><strong>2</strong>(!)</td>
+<td style="text-align: left;"><strong>2</strong>(!)</td>
 </tr>
 </tbody>
 </table>
-<p>The fix for this is simple: we need to add <strong>__attribute__((aligned(sizeof(int))))</strong>
-to all closure declarations in <strong>.data</strong> section.
-Thus <a href="https://git.haskell.org/ghc.git/commitdiff/ade1a461ab4ba3e6de3c4afe9fe9766b7b4e51b3">the fix</a> does roughly that.</p>
-<p>Python also had suspiciously similar problem <a href="http://bugs.python.org/issue17237">reported here</a>.</p>
-<h1 id="hoop-3-qemu-bug">hoop #3: qemu bug</h1>
-<p>I did not expect <strong>GHC</strong> to work at this time as I’ve not fixed
-<strong>int</strong> / <strong>void*</strong> prototypes mismatch yet. But hello-world
-haskell program was already working!</p>
-<p>The next step is to try to run <strong>GHC</strong> testsuite and
-see what will break:</p>
-<div class="sourceCode" id="cb20"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> make fasttest TEST_HC=<span class="va">$(</span><span class="bu">pwd</span><span class="va">)</span>/inplace/bin/ghc-stage1 THREADS=12</span></code></pre></div>
-<p><strong>testsuite/mk/*inplace_bin_ghc-stage1.mk</strong> requires some manual tweaks
-in autodetected variables for our crosscompiler. Updated variables:</p>
+<p>The fix for this is simple: we need to add
+<code>__attribute__((aligned(sizeof(int))))</code> to all closure
+declarations in <code>.data</code> section. Thus <a href="https://git.haskell.org/ghc.git/commitdiff/ade1a461ab4ba3e6de3c4afe9fe9766b7b4e51b3">the
+fix</a>
+does roughly that.
+Python also had suspiciously similar problem <a href="http://bugs.python.org/issue17237">reported
+here</a>.</p>
+<h2 id="hoop-3-qemu-bug">hoop #3: <code>qemu</code> bug</h2>
+<p>I did not expect <code>GHC</code> to work at this time as I’ve not fixed <code>int</code>
+/ <code>void*</code> prototypes mismatch yet. But hello-world <code>haskell</code> program
+was already working!
+The next step is to try to run <code>GHC</code> test suite and see what will
+break:</p>
+<pre><code>$ make fasttest TEST_HC=$(pwd)/inplace/bin/ghc-stage1 THREADS=12</code></pre>
+<p><code>testsuite/mk/inplace_bin_ghc-stage1.mk</code> requires some manual tweaks
+in auto-detected variables for our cross-compiler. Updated variables:</p>
 <pre class="make"><code>WORDSIZE=32 # was 64
 TARGETPLATFORM=m68k-unknown-linux # was x86_64-unknown-linux
 TargetARCH_CPP=m68k # was x86_64
 GhcWithInterpreter=NO # was YES</code></pre>
-<p>What was unclear is why qemu itself did throw assertion errors on many samples:</p>
+<p>What was unclear is why <code>qemu</code> itself did throw assertion errors on many
+samples:</p>
 <pre><code>qemu-m68k/tcg/tcg.c:1774: tcg fatal error</code></pre>
-<p>The samples seemingly didn’t do anything fancy.
-It was time to dive into qemu!</p>
-<p>I’ve picked one of small testcases that failed: <strong>mul2</strong></p>
+<p>The samples seemingly didn’t do anything fancy. It was time to dive
+into <code>qemu</code>!
+I’ve picked one of small test cases that failed: <code>mul2</code></p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- testsuite/tests/numeric/should_run/mul2.hs</span></span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# LANGUAGE MagicHash, UnboxedTuples #-}</span></span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -350,19 +371,26 @@ It was time to dive into qemu!</p>
 <span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>                    <span class="fu">putStrLn</span> (<span class="st">&quot;High: &quot;</span> <span class="op">++</span> <span class="fu">show</span> wh)</span>
 <span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>                    <span class="fu">putStrLn</span> (<span class="st">&quot;Low: &quot;</span> <span class="op">++</span> <span class="fu">show</span> wl)</span>
 <span id="cb23-25"><a href="#cb23-25" aria-hidden="true" tabindex="-1"></a>                    <span class="fu">putStrLn</span> (<span class="st">&quot;Result: &quot;</span> <span class="op">++</span> <span class="fu">show</span> (<span class="ot">r ::</span> <span class="dt">Integer</span>))</span></code></pre></div>
-<p>Stepping aside a few words on how qemu works:</p>
-<p>qemu is a tiny jit compiler which has the following passes:</p>
+<p>Stepping aside a few words on how <code>qemu</code> works:
+<code>qemu</code> is a tiny jit compiler which has the following passes:</p>
 <ol type="1">
-<li><strong>target native instructions</strong>-&gt;**TCG IR**: JIT decodes target’s instructions and translates them into intermediate representation (<strong>TCG</strong>).</li>
-<li><strong>TCG IR</strong>-&gt;**TCG IR**: a few basic optimisations like dead store elimination</li>
-<li><strong>TCG IR</strong>-&gt;**host-native instructions**: intermediate representation is then compiled to host’s instruction set</li>
-<li><strong>execute host-native instructions</strong>: executed host code; return status explains why generated code finished</li>
+<li><code>target native instructions</code> -&gt; <code>TCG IR</code>: <code>JIT</code> decodes
+target’s instructions and translates them into intermediate
+representation (<code>TCG</code>).</li>
+<li><code>TCG IR</code> -&gt; <code>TCG IR</code>: a few basic optimisations like dead
+store elimination</li>
+<li><code>TCG IR</code> -&gt; <code>host-native instructions</code>: intermediate
+representation is then compiled to host’s instruction set</li>
+<li><code>execute host-native instructions</code>: executed host code; return
+status explains why generated code finished</li>
 </ol>
-<p>qemu does these steps not on instruction-by-instruction basis but on sequence-by-sequence basis.
-Simplictically qemu disassembles up to the first branching instruction.</p>
-<p>Our qemu assertion happens in pass <strong>3.</strong> <a href="https://github.com/qemu/qemu/blob/master/tcg/tcg.c#L1774">somewhere here</a></p>
-<p>To find out bad instruction sequence it’s enough to run qemu with
-<strong>-d in_asm</strong> flag. It dumps whatever is read by pass <strong>1.</strong></p>
+<p><code>qemu</code> does these steps not on instruction-by-instruction basis but on
+sequence-by-sequence basis. <code>qemu</code> (simplified) disassembles up to the
+first branching instruction.
+Our <code>qemu</code> assertion happens in pass <code>3.</code> <a href="https://github.com/qemu/qemu/blob/master/tcg/tcg.c#L1774">somewhere
+here</a>
+To find out bad instruction sequence it’s enough to run <code>qemu</code> with
+<code>-d in_asm</code> flag. It dumps whatever is read by pass <code>1.</code></p>
 <pre><code>$ qemu-m68k-git -d in_asm -L /usr/m68k-unknown-linux-gnu/ /tmp/mul2
 ----------------
 IN:
@@ -381,52 +409,56 @@ IN:
 0xf550c82a:  beqs 0xf550c856
 #
 qemu-m68k/tcg/tcg.c:1774: tcg fatal error</code></pre>
-<p>The offending instruction sequence was quite large
-but it was easy to trim it down to 2 instructions:</p>
+<p>The offending instruction sequence was quite large but it was easy to
+trim it down to 2 instructions:</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">_start:</span></span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    asll <span class="op">#</span><span class="dv">2</span><span class="op">,%</span>d0</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    movel <span class="op">%</span>a0<span class="fu">@</span><span class="er">,</span><span class="op">%</span>d2</span>
 <span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    rts</span></code></pre></div>
-<p>I’ve just copied original disassembly dump, pasted it in a text file
+<p>I copied original disassembly dump, pasted it in a text file
 and built a tiny program from it (removing instructions one by one):</p>
-<div class="sourceCode" id="cb26"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> m68k-unknown-linux-gnu-gcc <span class="at">-nostdlib</span> <span class="at">-nostartfiles</span> m68k.S <span class="at">-o</span> foo</span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> qemu-m68k-git <span class="at">-d</span> in_asm <span class="at">-L</span> /usr/m68k-unknown-linux-gnu/ ./foo</span>
-<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="co">#  fails as:</span></span>
-<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="co">#    IN:</span></span>
-<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a><span class="co">#    0x80000054:  asll #2,%d0</span></span>
-<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a><span class="co">#    0x80000056:  movel %a0@,%d2</span></span>
-<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="co">#    0x80000058:  rts</span></span>
-<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="co">#    qemu-m68k/tcg/tcg.c:1774: tcg fatal error</span></span></code></pre></div>
-<p>We don’t need to get a working program. It’s enough to keep qemu crashing
-in <strong>TCG</strong> pass.</p>
-<p>Having explored failure a bit more I’ve found out it’s enough to have
-single bad instruction to appear and crash qemu:</p>
+<pre><code>$ m68k-unknown-linux-gnu-gcc -nostdlib -nostartfiles m68k.S -o foo
+
+$ qemu-m68k-git -d in_asm -L /usr/m68k-unknown-linux-gnu/ ./foo
+#  fails as:
+#    IN:
+#    0x80000054:  asll #2,%d0
+#    0x80000056:  movel %a0@,%d2
+#    0x80000058:  rts
+#    qemu-m68k/tcg/tcg.c:1774: tcg fatal error</code></pre>
+<p>We don’t need to get a working program. It’s enough to keep <code>qemu</code>
+crashing in <code>TCG</code> pass.
+Having explored failure a bit more I found out it’s enough to have
+single bad instruction to appear and crash <code>qemu</code>:</p>
 <div class="sourceCode" id="cb27"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a># m68k<span class="op">.</span>S</span>
 <span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="fu">_start:</span></span>
 <span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    asll <span class="op">#</span><span class="dv">1</span><span class="op">,%</span>d0</span>
 <span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    br _start</span></code></pre></div>
-<p>Using qemu’s <strong>-d op</strong> flag allows us to look at intermediate representation of <strong>TCG</strong>:</p>
-<div class="sourceCode" id="cb28"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> m68k-unknown-linux-gnu-gcc <span class="at">-nostdlib</span> <span class="at">-nostartfiles</span> m68k.S <span class="at">-o</span> foo</span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> qemu-m68k-git <span class="at">-d</span> in_asm,op <span class="at">-L</span> ./foo</span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a> <span class="co"># asll #1,%d0 muops:</span></span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a> <span class="ex">----</span> 80000054 ffffffff</span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a> <span class="ex">movi_i32</span> tmp0,<span class="va">$0</span>x0   <span class="co"># tmp0 = 0</span></span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a> <span class="ex">movi_i32</span> tmp1,<span class="va">$0</span>x1f  <span class="co"># tmp1 = 31</span></span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a> <span class="ex">shr_i32</span> CC_C,D0,tmp1 <span class="co"># CC_C = D0 &gt;&gt; tmp1</span></span>
-<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a> <span class="ex">movi_i32</span> tmp1,<span class="va">$0</span>x1   <span class="co"># tmp1 = 1</span></span>
-<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a> <span class="ex">shl_i32</span> CC_N,D0,tmp1 <span class="co"># CC_N = D0 &lt;&lt; tmp1</span></span>
-<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a> <span class="ex">mov_i32</span> CC_V,tmp0    <span class="co"># CC_V = tmp0</span></span>
-<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a> <span class="ex">movi_i32</span> tmp1,<span class="va">$0</span>x1f  <span class="co"># tmp1 = 31</span></span>
-<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a> <span class="ex">movi_i32</span> tmp3,<span class="va">$0</span>x1e  <span class="co"># tmp3 = 30</span></span>
-<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a> <span class="ex">shr_i32</span> CC_V,D0,tmp3 <span class="co"># CC_V = D0 &lt;&lt; tmp3</span></span>
-<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a> <span class="ex">sar_i32</span> tmp2,D0,tmp2 <span class="co"># tmp2 = D0 &gt;&gt; tmp2, but tmp2 is used uninitilalized!</span></span>
-<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a> <span class="ex">...</span></span></code></pre></div>
-<p>Our tiny instruction got translated to a pile of intermediate muops.
-An interesting fact: <strong>tmp2</strong> (a temporary register) is used in <strong>sar_i32</strong> without
-initialization.</p>
-<p>It’s clearly qemu’s decoding pass <strong>1.</strong> bug (could be optimizing pass <strong>2.</strong> but I disabled it)
-which generates read from freshly introduced temp register.</p>
+<p>Using <code>qemu</code>s <code>-d op</code> flag allows us to look at intermediate
+representation of <code>TCG</code>:</p>
+<pre><code>$ m68k-unknown-linux-gnu-gcc -nostdlib -nostartfiles m68k.S -o foo
+
+$ qemu-m68k-git -d in_asm,op -L ./foo
+
+ # asll #1,%d0 muops:
+ ---- 80000054 ffffffff
+ movi_i32 tmp0,$0x0   # tmp0 = 0
+ movi_i32 tmp1,$0x1f  # tmp1 = 31
+ shr_i32 CC_C,D0,tmp1 # CC_C = D0 &gt;&gt; tmp1
+ movi_i32 tmp1,$0x1   # tmp1 = 1
+ shl_i32 CC_N,D0,tmp1 # CC_N = D0 &lt;&lt; tmp1
+ mov_i32 CC_V,tmp0    # CC_V = tmp0
+ movi_i32 tmp1,$0x1f  # tmp1 = 31
+ movi_i32 tmp3,$0x1e  # tmp3 = 30
+ shr_i32 CC_V,D0,tmp3 # CC_V = D0 &lt;&lt; tmp3
+ sar_i32 tmp2,D0,tmp2 # tmp2 = D0 &gt;&gt; tmp2, but tmp2 is used uninitilalized!
+ ...</code></pre>
+<p>Our tiny instruction got translated to a pile of intermediate <code>muop</code>s. An
+interesting fact: <code>tmp2</code> (a temporary register) is used in <code>sar_i32</code>
+without initialization.
+It’s clearly <code>qemu</code> decoding pass <code>1.</code> bug (could have been optimizing pass
+<code>2.</code> but I disabled it manually) which generates read from freshly introduced
+temp register.</p>
 <div class="sourceCode" id="cb29"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere in target-m68k/translate.c</span></span>
 <span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">void</span> shift_im<span class="op">(</span>DisasContext <span class="op">*</span>s<span class="op">,</span> <span class="dt">uint16_t</span> insn<span class="op">,</span> <span class="dt">int</span> opsize<span class="op">)</span> <span class="op">{</span></span>
 <span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="op">....</span></span>
@@ -435,22 +467,24 @@ which generates read from freshly introduced temp register.</p>
 <span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>            tcg_gen_sar_i32<span class="op">(</span>t0<span class="op">,</span> reg<span class="op">,</span> t0<span class="op">);</span> <span class="co">// that's our broken shift!</span></span>
 <span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>            tcg_gen_not_i32<span class="op">(</span>t0<span class="op">,</span> t0<span class="op">);</span></span>
 <span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>            <span class="op">...</span></span></code></pre></div>
-<p>I’ve fixed that with <a href="https://github.com/vivier/qemu-m68k/pull/7">the simple patch</a>
-and reran testsuite again.</p>
-<h1 id="hoop-4-crosscompiling-doubles-is-hard">hoop #4: crosscompiling doubles is hard</h1>
-<p>Or not that hard :) A lot of floating-point related tests worked
-without crashes but resulted in garbage outputs.</p>
-<p>The broken test was to print a <strong>Float</strong> (32bit ‘float’ type in C-speak):</p>
+<p>I fixed that with <a href="https://github.com/vivier/qemu-m68k/pull/7">the simple
+patch</a> and reran test suite
+again.</p>
+<h2 id="hoop-4-cross-compiling-doubles-is-hard">hoop #4: cross-compiling doubles is hard</h2>
+<p>Or not that hard :) A lot of floating-point related tests worked without
+crashes but resulted in garbage outputs.
+The broken test was to print a <code>Float</code> (32bit <code>float</code> type in
+<code>c</code>-speak):</p>
 <div class="sourceCode" id="cb30"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="ot">v ::</span> <span class="dt">Float</span></span>
 <span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>v <span class="ot">=</span> <span class="dv">43</span></span>
 <span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="fu">print</span> v <span class="co">-- prints &quot;0.0&quot;</span></span></code></pre></div>
-<p>This code printed “0.0” when was built with <strong>ghc-stage1</strong>.
-At this point I’ve looked up if <strong>m68k</strong> was a big-endian
-platform by chance. And it was!</p>
-<p><strong>GHC</strong> does weird things to encode double values in generated code.
+<p>This code printed <code>"0.0"</code> when was built with <code>ghc-stage1</code>. At this
+point I looked up if <code>m68k</code> was a big-endian platform by chance.
+And it was!
+<code>GHC</code> does weird things to encode double values in generated code.
 Basically it uses platform’s pointer-sized integrals to encode
-everything. <strong>GHC</strong> calls the type <strong>StgWord</strong>:</p>
-<div class="sourceCode" id="cb31"><pre class="sourceCode C"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere in includes/stg/Types.h</span></span>
+everything. <code>GHC</code> calls the type <code>StgWord</code>:</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere in includes/stg/Types.h</span></span>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#if SIZEOF_INT == 4</span></span>
 <span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">int</span>             StgWord32<span class="op">;</span></span>
 <span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif SIZEOF_LONG == 4</span></span>
@@ -468,9 +502,10 @@ everything. <strong>GHC</strong> calls the type <strong>StgWord</strong>:</p>
 <span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a><span class="pp">#error GHC untested on this architecture: sizeof(void *) != 4 or 8</span></span>
 <span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
 <span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
-<p>Thus in the end of the day <strong>GHC</strong> encodes ‘double’ and ‘float’
-values as <strong>StgWord closure[] = { (StgWord)&amp;useful_callback, 0x00000000, 0x40458000, … }</strong>.</p>
-<p>I’s an interesting question how <strong>43.0</strong> should look like:</p>
+<p>Thus in the end of the day <code>GHC</code> encodes <code>double</code> and <code>float</code>
+values as <code>StgWord closure[] = { (StgWord)&amp;useful_callback, 0x00000000, 0x40458000, ... }</code>.
+It’s an interesting question: how <code>43.0</code> should look like in this encoding?
+Let’s write a small program:</p>
 <div class="sourceCode" id="cb32"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
 <span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> d <span class="op">=</span> <span class="fl">43.0</span><span class="op">;</span></span>
 <span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">float</span> f  <span class="op">=</span> <span class="fl">43.0</span><span class="op">;</span></span>
@@ -478,52 +513,59 @@ values as <strong>StgWord closure[] = { (StgWord)&amp;useful_callback, 0x0000000
 <span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> <span class="dt">long</span> <span class="op">*</span> l <span class="op">=</span> <span class="op">&amp;</span>d<span class="op">;</span> printf <span class="op">(</span><span class="st">&quot;   l: </span><span class="sc">%016llX\n</span><span class="st">&quot;</span><span class="op">,</span>   l<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
 <span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="op">*</span> i <span class="op">=</span> <span class="op">&amp;</span>f<span class="op">;</span>       printf <span class="op">(</span><span class="st">&quot;   i: </span><span class="sc">%08X\n</span><span class="st">&quot;</span><span class="op">,</span>      i<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
 <span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb33"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 64bit-LE</span></span>
-<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> x86_64-pc-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="va">i</span><span class="op">[</span><span class="dv">2</span><span class="op">]</span><span class="ex">:</span> 00000000 40458000</span>
-<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>   <span class="ex">l:</span> 4045800000000000</span>
-<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>   <span class="ex">i:</span> 422C0000</span>
-<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="co"># 32bit-LE</span></span>
-<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> i686-pc-linux-gnu-clang a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a><span class="va">i</span><span class="op">[</span><span class="dv">2</span><span class="op">]</span><span class="ex">:</span> 00000000 40458000</span>
-<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>   <span class="ex">l:</span> 4045800000000000</span>
-<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>   <span class="ex">i:</span> 422C0000</span>
-<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a><span class="co"># 32bit-BE</span></span>
-<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> m68k-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a><span class="va">i</span><span class="op">[</span><span class="dv">2</span><span class="op">]</span><span class="ex">:</span> 40458000 00000000</span>
-<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>   <span class="ex">l:</span> 4045800000000000</span>
-<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>   <span class="ex">i:</span> 422C0000</span>
-<span id="cb33-16"><a href="#cb33-16" aria-hidden="true" tabindex="-1"></a><span class="co"># 64bit-BE</span></span>
-<span id="cb33-17"><a href="#cb33-17" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> powerpc64-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb33-18"><a href="#cb33-18" aria-hidden="true" tabindex="-1"></a><span class="va">i</span><span class="op">[</span><span class="dv">2</span><span class="op">]</span><span class="ex">:</span> 40458000 00000000</span>
-<span id="cb33-19"><a href="#cb33-19" aria-hidden="true" tabindex="-1"></a>   <span class="ex">l:</span> 4045800000000000</span>
-<span id="cb33-20"><a href="#cb33-20" aria-hidden="true" tabindex="-1"></a>   <span class="ex">i:</span> 422C0000</span>
-<span id="cb33-21"><a href="#cb33-21" aria-hidden="true" tabindex="-1"></a><span class="co"># 64bit-BE</span></span>
-<span id="cb33-22"><a href="#cb33-22" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> sparc64-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb33-23"><a href="#cb33-23" aria-hidden="true" tabindex="-1"></a><span class="va">i</span><span class="op">[</span><span class="dv">2</span><span class="op">]</span><span class="ex">:</span> 40458000 00000000</span>
-<span id="cb33-24"><a href="#cb33-24" aria-hidden="true" tabindex="-1"></a>   <span class="ex">l:</span> 4045800000000000</span>
-<span id="cb33-25"><a href="#cb33-25" aria-hidden="true" tabindex="-1"></a>   <span class="ex">i:</span> 422C0000</span></code></pre></div>
-<p>The only thing that changes here is the order of elements of <strong>i[2]</strong> array.
-Just as like you would see if you stored 64-bit integral value.</p>
-<p>The problem in original code was the assumption of target having the same
-endianness as a host. It took me a while to fix it cleanly in <strong>GHC</strong>:
-<a href="https://git.haskell.org/ghc.git/commitdiff/c42cdb7f6dcfd519d9607ac9fa53f049b2922fb8">the result</a>.</p>
-<h1 id="hoop-5-cmm-call-annotations">hoop #5: Cmm call annotations</h1>
-<p>Even more tests started working better but some <strong>SIGSEGV</strong>s
-still remained. I’ve looked at one example and noticed
-stack squeezing code consistently crashed garbage collector
-right after <strong>threadStackUnderflow()</strong> function call.</p>
-<p>It was another case of <strong>int</strong> versus <strong>void*</strong> return type in <strong>m68k</strong>.
-One of the intermediate representations (or just pieces of low-level code written
-to deal with closures) is <a href="https://en.wikipedia.org/wiki/C--">**Cmm** (c-minus-minus)</a></p>
-<p>Suppose we need to call external <strong>C</strong> function from haskell.
-Typical <strong>cmm</strong> code would look like that:</p>
+<p>And run it:</p>
+<pre><code># 64bit-LE
+$ x86_64-pc-linux-gnu-gcc a.c -o a &amp;&amp; ./a
+i[2]: 00000000 40458000
+   l: 4045800000000000
+   i: 422C0000
+
+# 32bit-LE
+$ i686-pc-linux-gnu-clang a.c -o a &amp;&amp; ./a
+i[2]: 00000000 40458000
+   l: 4045800000000000
+   i: 422C0000
+
+# 32bit-BE
+$ m68k-unknown-linux-gnu-gcc a.c -o a &amp;&amp; ./a
+i[2]: 40458000 00000000
+   l: 4045800000000000
+   i: 422C0000
+
+# 64bit-BE
+$ powerpc64-unknown-linux-gnu-gcc a.c -o a &amp;&amp; ./a
+i[2]: 40458000 00000000
+   l: 4045800000000000
+   i: 422C0000
+
+# 64bit-BE
+$ sparc64-unknown-linux-gnu-gcc a.c -o a &amp;&amp; ./a
+i[2]: 40458000 00000000
+   l: 4045800000000000
+   i: 422C0000</code></pre>
+<p>The only thing that changes here is the order of elements of <code>i[2]</code>
+array. Just as like you would see if you stored 64-bit integral value.
+The problem in original code was the assumption of target having the
+same endianness as a host. It took me a while to fix it cleanly in
+<code>GHC</code>: <a href="https://git.haskell.org/ghc.git/commitdiff/c42cdb7f6dcfd519d9607ac9fa53f049b2922fb8">the
+result</a>.</p>
+<h2 id="hoop-5-cmm-call-annotations">hoop #5: <code>Cmm</code> call annotations</h2>
+<p>Even more tests started working better but some <code>SIGSEGV</code>s still
+remained. I looked at one example and noticed stack squeezing code
+consistently crashed garbage collector right after
+<code>threadStackUnderflow()</code> function call.
+It was another case of <code>int</code> versus <code>void*</code> return type in
+<code>m68k</code>. One of the intermediate representations (or just pieces of
+low-level code written to deal with closures) is <a href="https://en.wikipedia.org/wiki/C--"><code>Cmm</code>
+(c-minus-minus)</a>
+Suppose we need to call external <code>c</code> function from <code>haskell</code>. Typical
+<code>cmm</code> code would look like that:</p>
 <div class="sourceCode" id="cb34"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>foo<span class="op">(</span>bits32 a<span class="op">)</span> <span class="op">{</span></span>
 <span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>    bits32 r<span class="op">;</span></span>
 <span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span>r<span class="op">)</span> <span class="op">=</span> foreign <span class="st">&quot;C&quot;</span> cfun<span class="op">(</span>a<span class="op">);</span></span>
 <span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span>r<span class="op">);</span></span>
 <span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Generated <strong>C</strong> code for it looks like that:</p>
+<p>Generated <code>c</code> code for it looks like that:</p>
 <div class="sourceCode" id="cb35"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ inplace/bin/ghc-stage1 -c -keep-tmp-files a.cmm</span></span>
 <span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat /tmp/ghc22508_0/ghc_3.hc</span></span>
 <span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="co">/* GHC_PACKAGES</span></span>
@@ -572,29 +614,33 @@ Typical <strong>cmm</strong> code would look like that:</p>
 <span id="cb37-18"><a href="#cb37-18" aria-hidden="true" tabindex="-1"></a>     R1.w = _c2;</span>
 <span id="cb37-19"><a href="#cb37-19" aria-hidden="true" tabindex="-1"></a>     JMP_(*((P_)(*Sp)));</span>
 <span id="cb37-20"><a href="#cb37-20" aria-hidden="true" tabindex="-1"></a>     }</span></code></pre></div>
-<p>On most 32-bit platforms this change does nothing.
-But on <strong>m68k</strong> it’s precisely what flips between
-<strong>%d0</strong> and <strong>%a0</strong> return registers.</p>
-<p>The fix for this issue looks <a href="https://git.haskell.org/ghc.git/commitdiff/e46742f5c51938bc7c992ac37fecc6df8cab7647">like that</a>.
-I tried to eyeball most of calls’ return values but could have easily missed something.</p>
-<p>At this point i’ve got <strong>GHC</strong>i working:</p>
-<div class="sourceCode" id="cb38"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> inplace/bin/ghc-stage2 <span class="at">--interactive</span></span>
-<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a><span class="ex">GHCi,</span> version 8.1.20160305: http://www.haskell.org/ghc/  :<span class="pp">?</span> for help</span>
-<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Loaded</span> GHCi configuration from /home/slyfox/.ghci</span></code></pre></div>
-<h1 id="the-result">The result</h1>
+<p>On most 32-bit platforms this change does nothing. But on <code>m68k</code> it’s
+precisely what flips between <code>%d0</code> and <code>%a0</code> return registers.
+The fix for this issue looks <a href="https://git.haskell.org/ghc.git/commitdiff/e46742f5c51938bc7c992ac37fecc6df8cab7647">like
+that</a>.
+I tried to eyeball most of calls’ return values but could have easily
+missed something.
+At this point I got <code>GHC</code>i working:</p>
+<pre><code>$ inplace/bin/ghc-stage2 --interactive
+GHCi, version 8.1.20160305: http://www.haskell.org/ghc/  :? for help
+Loaded GHCi configuration from /home/slyfox/.ghci</code></pre>
+<h2 id="the-result">The result</h2>
 <p>Not all tests are passing yet. But the result is good enough for people
-to try out <strong>GHC</strong> and fix the bugs themselves. I’ve triaged some of
+to try out <code>GHC</code> and fix the bugs themselves. I’ve triaged some of
 these failures but did not bother fixing them yet.</p>
 <p>Fun facts (as usual):</p>
 <ul>
-<li>building <strong>GHC</strong> as a crosscompiler is simple!</li>
-<li><strong>m68k</strong> is a 32-bit big-endian architecture</li>
-<li><strong>m68k</strong> has alignment 2 (less than natural alignment)</li>
-<li><strong>m68k</strong> is a rare system which uses different registers for integral and pointer types</li>
-<li>qemu (and it’s <strong>TCG</strong>) is a fun tiny project to play with :)</li>
-<li><strong>binfmt_misc</strong> linux kernel feature can run arbitrary binaries as executables on your system</li>
-<li>doubles are not as scary as I thought :)</li>
-<li>as a result <strong>GHC</strong> is friendlier for BE platforms both as a host and target for crosscompilation :)</li>
+<li>building <code>GHC</code> as a cross-compiler is simple!</li>
+<li><code>m68k</code> is a 32-bit big-endian architecture</li>
+<li><code>m68k</code> has alignment 2 (less than natural alignment)</li>
+<li><code>m68k</code> is a rare system which uses different registers for integral
+and pointer types</li>
+<li><code>qemu</code> (and it’s <code>TCG</code>) is a fun tiny project to play with :)</li>
+<li><code>binfmt_misc</code> <code>linux</code> kernel feature can run arbitrary binaries as
+executables on your system</li>
+<li><code>double</code>s are not as scary as I thought :)</li>
+<li><code>GHC</code> is now friendlier for BE platforms both as a host and
+target for cross-compilation :)</li>
 </ul>
 <p>Thanks!</p>
         </div>
