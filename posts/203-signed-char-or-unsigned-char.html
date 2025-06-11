@@ -29,17 +29,15 @@
                 <div class="info">September 17, 2017</div>
             
 
-            <p>Yesterday I debugged an interesting <a href="https://bugs.gentoo.org/630698">bug</a>:
-sqlite test suite
-was hanging up on csv parsing test on <strong>powerpc32</strong> and
-<strong>powerpc64</strong> platforms. But other platforms were fine!
-<strong>ia64</strong> was ok, <strong>hppa</strong> was ok, <strong>sparc</strong> was ok. Thus
-it’s not (just) endianness issue or stack growth direction.
-What could it be?</p>
-<p>It took me a while to debug the issue but it boiled down
-to an infinite loop of trying to find <strong>EOF</strong> when reading a
-file. Let’s look at the simplified version of buggy code
-in sqlite:</p>
+            <p>Yesterday I debugged an interesting
+<a href="https://bugs.gentoo.org/630698">bug</a>: <code>sqlite</code> test suite was hanging up
+on <code>csv</code> parsing test on <code>powerpc32</code> and <code>powerpc64</code> platforms. But
+other platforms were fine! <code>ia64</code> was ok, <code>hppa</code> was ok, <code>sparc</code>
+was ok. Thus it’s not (just) endianness issue or stack growth
+direction. What could it be?</p>
+<p>It took me a while to debug the issue but it boiled down to an infinite
+loop of trying to find <code>EOF</code> when reading a file. Let’s look at the
+simplified version of buggy code in <code>sqlite</code>:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span><span class="pp"> </span><span class="co">/* #define EOF (-1) */</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
@@ -52,29 +50,29 @@ in sqlite:</p>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> n<span class="op">;</span></span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The code is supposed reach end of file (or maybe ‘xFF’ symbol) and finish.
-Normally it’s exactly what happens:</p>
+<p>The code is supposed reach end of file (or maybe <code>'xFF'</code> symbol) and
+finish. Normally it’s exactly what happens:</p>
 <pre><code>$ x86_64-pc-linux-gnu-gcc a.c -o a &amp;&amp; ./a &amp;&amp; echo $?
 0</code></pre>
-<p>But not on <strong>powerpc64</strong>:</p>
+<p>But not on <code>powerpc64</code>:</p>
 <pre><code>$ powerpc64-unknown-linux-gnu-gcc a.c -o a &amp;&amp; ./a &amp;&amp; echo $?
 &lt;hung&gt;</code></pre>
-<p>The bug here is simple: <strong>c == EOF</strong> promotes both operands <strong>char c</strong>
-and <strong>-1</strong> to <strong>int</strong>. Thus for <strong>EOF</strong> case condition looks like that:</p>
+<p>The bug here is simple: <code>c == EOF</code> promotes both operands <code>char c</code>
+and <code>-1</code> to <code>int</code>. Thus for <code>EOF</code> case condition looks like that:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="op">((</span><span class="dt">int</span><span class="op">)(</span><span class="dt">char</span><span class="op">)(-</span><span class="dv">1</span><span class="op">)</span> <span class="op">==</span> <span class="op">-</span><span class="dv">1</span><span class="op">)</span></span></code></pre></div>
-<p>So why does it never fire on <strong>powerpc64</strong>? Because it’s an <strong>unsigned char</strong> platform!
-As a result it looks like two different conditions:</p>
+<p>So why does it never fire on <code>powerpc64</code>? Because it’s an <code>unsigned char</code> platform! As a result it looks like two different conditions:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="op">((</span><span class="dt">int</span><span class="op">)</span><span class="bn">0xff</span> <span class="op">==</span> <span class="op">-</span><span class="dv">1</span><span class="op">)</span> <span class="co">// powerpc64</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="op">((</span><span class="dt">int</span><span class="op">)(-</span><span class="dv">1</span><span class="op">)</span> <span class="op">==</span> <span class="op">-</span><span class="dv">1</span><span class="op">)</span> <span class="co">// x86_64</span></span></code></pre></div>
-<p>Once we know the problem we can force <strong>x86_64</strong> to hang as well by using <strong>-funsigned-char</strong>
-<strong>gcc</strong> option:</p>
+<p>Once we know the problem we can force <code>x86_64</code> to hang as well by
+using <code>-funsigned-char</code> <code>gcc</code> option:</p>
 <pre><code>$ x86_64-pc-linux-gnu-gcc a.c -o a -funsigned-char &amp;&amp; ./a &amp;&amp; echo $?
 &lt;hung&gt;</code></pre>
-<p>I did not encounter bugs related to char signedness for quite a while.</p>
-<p>What are other platforms defaulting to unsigned char? I tried the simple hack
-(I’ve encountered it <a href="https://github.com/taglib/taglib/pull/834">today</a> due
-to changes in <strong>c++11</strong> to forbid narrowing conversion in initializers):</p>
+<p>I did not encounter bugs related to char signedness for quite a while.
+What are other platforms defaulting to <code>unsigned char</code>? I tried the simple
+hack (I’ve encountered it
+<a href="https://github.com/taglib/taglib/pull/834">today</a> due to changes in
+<code>c++11</code> to forbid narrowing conversion in initializers):</p>
 <pre><code>$ cat a.cc
 char c[] = { -1 };
 
@@ -106,20 +104,19 @@ for cxx in /usr/bin/*-g++; do echo -n &quot;$cxx &quot;; $cxx -c a.cc 2&gt;/dev/
 /usr/bin/s390x-unknown-linux-gnu-g++ UNSIGNED</code></pre>
 <p>Or in a shorter form:</p>
 <ul>
-<li>signed: <strong>alpha</strong>, <strong>hppa</strong>, <strong>x86</strong>, <strong>ia64</strong>, <strong>m68k</strong>, <strong>mips</strong>, <strong>sh</strong>, <strong>sparc</strong></li>
-<li>unsigned: <strong>arm</strong>, <strong>powerpc</strong>, <strong>s390</strong></li>
+<li>signed: <code>alpha</code>, <code>hppa</code>, <code>x86</code>, <code>ia64</code>, <code>m68k</code>, <code>mips</code>,
+<code>sh</code>, <code>sparc</code></li>
+<li>unsigned: <code>arm</code>, <code>powerpc</code>, <code>s390</code></li>
 </ul>
-<p>Why would compiler prefer one signedness over another?
-The answer is the underlying Instruction Set Architecture.
-Or … not :), read on!.</p>
-<p>Let’s look at generated code for two simple functions fetching
-single char from memory into register and compare generated
-code:</p>
+<p>Why would compiler prefer one signedness over another? The answer is the
+underlying Instruction Set Architecture. Or … not :), read on!</p>
+<p>Let’s look at generated code for two simple functions fetching single
+char from memory into register and compare generated code:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">signed</span>   <span class="dt">long</span> sc2sl <span class="op">(</span><span class="dt">signed</span>   <span class="dt">char</span> <span class="op">*</span> p<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">*</span>p<span class="op">;</span> <span class="op">}</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">unsigned</span> <span class="dt">long</span> uc2ul <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">char</span> <span class="op">*</span> p<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">*</span>p<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
-<h1 id="alpha">Alpha</h1>
-<p>Alpha is a 64-bit architecture. Does not support unaligned reads
-in its basic ISA. <strong>You have been warned</strong>.</p>
+<h2 id="alpha"><code>Alpha</code></h2>
+<p><code>Alpha</code> is a 64-bit architecture. Does not support unaligned reads in its
+basic ISA. <strong>You have been warned</strong>.</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">; alpha-unknown-linux-gnu-gcc -O2 -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -145,11 +142,11 @@ in its basic ISA. <strong>You have been warned</strong>.</p>
 <span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>   ldq_u   v0<span class="op">,</span><span class="dv">0</span><span class="op">(</span>a0<span class="op">)</span>  <span class="co">; load unaligned: v0 = *(long*)(align(p))</span></span>
 <span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>   extbl   v0<span class="op">,</span>a0<span class="op">,</span>v0  <span class="co">; extract byte in v0</span></span>
 <span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>   <span class="cf">ret</span></span></code></pre></div>
-<p>In this case <strong>Alpha</strong> handles unsigned load slightly nicer (does not require
-arithmetic shift and shift offset computation). It takes quite a bit of time
-to understand <strong>sc2sl</strong> implementation.</p>
-<p><strong>creemj</strong> noted on <strong>#gentoo-alpha</strong> <strong>BWX</strong> ISA extension
-(enabled with <strong>-mbwx</strong> in <strong>gcc</strong>):</p>
+<p>In this case <code>alpha</code> handles unsigned load slightly nicer (does not
+require arithmetic shift and shift offset computation). It takes quite a
+bit of time to understand <code>sc2sl</code> implementation.</p>
+<p><code>creemj</code> noted on <code>#gentoo-alpha</code> <code>BWX</code> ISA extension (enabled
+with <code>-mbwx</code> in <code>gcc</code>):</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">; alpha-unknown-linux-gnu-gcc -O2 -mbwx -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -159,13 +156,13 @@ to understand <strong>sc2sl</strong> implementation.</p>
 <span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="fu">uc2ul:</span></span>
 <span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    ldbu    v0<span class="op">,</span><span class="dv">0</span><span class="op">(</span>a0<span class="op">)</span></span>
 <span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">ret</span></span></code></pre></div>
-<p>Here signed load requires one instruction to amend
-default-unsigned load semantics.</p>
-<h1 id="hppa-pa-risc">HPPA (PA-RISC)</h1>
-<p>Currently HPPA userland supports only 32-bit mode on linux.
-Similar to many RISC architectures its branching instructions
-take two clock cycles to execute. By convention it means
-the next instruction right after branch (bv) is also executed.</p>
+<p>Here signed load requires one instruction to amend default-unsigned load
+semantics.</p>
+<h2 id="hppa-pa-risc"><code>HPPA</code> (PA-RISC)</h2>
+<p>Currently <code>HPPA</code> userland supports only 32-bit mode on <code>linux</code>. Similar to
+many RISC architectures its branching instructions take two clock cycles
+to execute. By convention it means the next instruction right after
+branch (<code>bv</code> instruction) is also executed.</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">; hppa2.0-unknown-linux-gnu-gcc -O2 -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -176,8 +173,8 @@ the next instruction right after branch (bv) is also executed.</p>
 <span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="fu">uc2ul:</span></span>
 <span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    bv r0<span class="op">(</span><span class="dt">rp</span><span class="op">)</span>     <span class="co">; return</span></span>
 <span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>     ldb <span class="dv">0</span><span class="op">(</span>r26<span class="op">),</span>ret0</span></code></pre></div>
-<p>Similar to <strong>Alpha</strong> signed chars require one more arithmetic operation.</p>
-<h1 id="x86">x86</h1>
+<p>Similar to <code>Alpha</code> signed chars require one more arithmetic operation.</p>
+<h2 id="x86"><code>x86</code></h2>
 <p>64-bit mode:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">; x86_64-pc-linux-gnu-gcc -O2 -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -187,8 +184,8 @@ the next instruction right after branch (bv) is also executed.</p>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="fu">uc2ul:</span></span>
 <span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    movzbl <span class="op">(%</span><span class="kw">rdi</span><span class="op">),%</span><span class="kw">eax</span> <span class="co">; load/zero-extend byte to long</span></span>
 <span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    retq</span></code></pre></div>
-<p>Note the difference between target operands (64 vs. 32 bits).
-x86-64 implicitly zeroes out register part for us in 64-bit mode.</p>
+<p>Note the difference between target operands (64 vs. 32 bits). <code>x86_64</code>
+implicitly zeroes out register part for us in 64-bit mode.</p>
 <p>32-bit mode:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">; x86_64-pc-linux-gnu-gcc -O2 -m32 -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -202,12 +199,12 @@ x86-64 implicitly zeroes out register part for us in 64-bit mode.</p>
 <span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>    movzbl <span class="op">(%</span><span class="kw">eax</span><span class="op">),%</span><span class="kw">eax</span></span>
 <span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">ret</span></span></code></pre></div>
 <p>No surprises here. Argument is passed through stack.</p>
-<h1 id="ia64">ia64</h1>
-<p><strong>ia64</strong> “instructions” are huge. They are 128-bit long and encode
-3 real instructions. Result of memory fetch is not used in the same
-bundle thus we need at least two bundles to fetch and shift.
-(I don’t know why yet, either in order to avoid memory stall in the
-same bundle or it’s a “Write ; Read-Write” conflict on r8 in a single bundle)</p>
+<h2 id="ia64"><code>ia64</code></h2>
+<p><code>ia64</code> “instructions” are huge. They are 128-bit long and encode 3
+real instructions. Result of memory fetch is not used in the same bundle
+thus we need at least two bundles to fetch and shift. (I don’t know why
+yet, either in order to avoid memory stall in the same bundle or it’s a
+“Write ; Read-Write” conflict on <code>r8</code> in a single bundle)</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc -O2 -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -221,10 +218,11 @@ same bundle or it’s a “Write ; Read-Write” conflict on r8 in a single bund
 <span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>  [MIB<span class="op">]</span> ld1 <span class="kw">r8</span><span class="op">=[</span>r32<span class="op">]</span>     <span class="op">#</span> load <span class="dt">byte</span> <span class="op">(</span>implicit zero<span class="op">-</span>extend<span class="op">)</span></span>
 <span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>        <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span></span>
 <span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>        br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0<span class="co">;;</span></span></code></pre></div>
-<p>Unsigned char load requires fewer instructions (no additional shift required).</p>
-<h1 id="m68k">m68k</h1>
-<p>For some reason frame pointer is still preserved on <strong>-O2</strong>.
-I’ve disabled it with <strong>-fomit-frame-pointer</strong> to make assembly shorter:</p>
+<p>Unsigned char load requires fewer instructions (no additional shift
+required).</p>
+<h2 id="m68k"><code>m68k</code></h2>
+<p>For some reason frame pointer is still preserved on <code>-O2</code>. I’ve
+disabled it with <code>-fomit-frame-pointer</code> to make assembly shorter:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">; m68k-unknown-linux-gnu-gcc -O2 -fomit-frame-pointer -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -239,9 +237,9 @@ I’ve disabled it with <strong>-fomit-frame-pointer</strong> to make assembly s
 <span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>    moveb <span class="op">%</span>a0<span class="fu">@</span><span class="er">,</span><span class="op">%</span>d0    <span class="co">; load byte</span></span>
 <span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    rts</span></code></pre></div>
 <p>Both functions are similar. Both require arithmetic fiddling.</p>
-<h1 id="mips">mips</h1>
-<p>Similar to HPPA has the same rule of executing one instruction
-after branch instruction.</p>
+<h2 id="mips"><code>mips</code></h2>
+<p>Similar to <code>HPPA</code> has the same rule of executing one instruction after
+branch instruction.</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">; mips64-unknown-linux-gnu-gcc -O2 -fomit-frame-pointer -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -252,9 +250,9 @@ after branch instruction.</p>
 <span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    jr      ra</span>
 <span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>     lbu     v0<span class="op">,</span><span class="dv">0</span><span class="op">(</span>a0<span class="op">)</span> <span class="co">; load byte (zero-extend)</span></span></code></pre></div>
 <p>Both functions are taking exactly one instruction.</p>
-<h1 id="superh">SuperH</h1>
-<p>Similar to HPPA has the same rule of executing one instruction
-after branch instruction.</p>
+<h2 id="superh"><code>SuperH</code></h2>
+<p>Similar to <code>HPPA</code> has the same rule of executing one instruction after
+branch instruction.</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">; sh4-unknown-linux-gnu-gcc -O2 -fomit-frame-pointer -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -265,11 +263,11 @@ after branch instruction.</p>
 <span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="bu">mov</span><span class="op">.</span>b   <span class="fu">@r</span><span class="dv">4</span><span class="op">,</span>r0 <span class="co">; load byte (sign-extend)</span></span>
 <span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    rts</span>
 <span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>     extu<span class="op">.</span>b  r0<span class="op">,</span>r0 <span class="co">; zero-extend result</span></span></code></pre></div>
-<p>Here unsigned load requires one instruction to amend
-default-signed load semantics.</p>
-<h1 id="sparc">SPARC</h1>
-<p>Similar to HPPA has the same rule of executing one instruction
-after branch instruction.</p>
+<p>Here unsigned load requires one instruction to amend default-signed load
+semantics.</p>
+<h2 id="sparc"><code>SPARC</code></h2>
+<p>Similar to <code>HPPA</code> has the same rule of executing one instruction after
+branch instruction.</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">; sparc-unknown-linux-gnu-gcc -O2 -fomit-frame-pointer -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -280,7 +278,7 @@ after branch instruction.</p>
 <span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    retl</span>
 <span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>     ldub  <span class="op">[</span> <span class="op">%</span>o0 <span class="op">],</span> <span class="op">%</span>o0</span></code></pre></div>
 <p>Both functions are taking exactly one instruction.</p>
-<h1 id="arm">ARM</h1>
+<h2 id="arm"><code>ARM</code></h2>
 <div class="sourceCode" id="cb19"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">; armv5tel-softfloat-linux-gnueabi-gcc -O2 -fomit-frame-pointer -c a.c &amp;&amp; armv5tel-softfloat-linux-gnueabi-objdump -d a.o</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -291,9 +289,9 @@ after branch instruction.</p>
 <span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>    ldrb    r0<span class="op">,</span> <span class="op">[</span>r0<span class="op">]</span> <span class="co">; load/zero-extend</span></span>
 <span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>    bx      lr</span></code></pre></div>
 <p>Both functions are taking exactly one instruction.</p>
-<h1 id="powerpc">PowerPC</h1>
-<p>Powerpc generates quite inefficient code for <strong>-fPIC</strong> mode.
-Enabling -fno-PIC by default.</p>
+<h2 id="powerpc"><code>PowerPC</code></h2>
+<p><code>PowerPC</code> generates quite inefficient code for <code>-fPIC</code> mode. Enabling
+<code>-fno-PIC</code> by default.</p>
 <div class="sourceCode" id="cb20"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">; powerpc-unknown-linux-gnu-gcc -O2 -fomit-frame-pointer -fno-PIC -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -305,9 +303,9 @@ Enabling -fno-PIC by default.</p>
 <span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a><span class="fu">uc2ul:</span></span>
 <span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>    lbz     r3<span class="op">,</span><span class="dv">0</span><span class="op">(</span>r3<span class="op">)</span> <span class="co">; load-byte/zero-extend</span></span>
 <span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>    blr</span></code></pre></div>
-<p>Here signed load requires one instruction to amend
-default-unsigned load semantics.</p>
-<h1 id="s390">S390</h1>
+<p>Here signed load requires one instruction to amend default-unsigned load
+semantics.</p>
+<h2 id="s390"><code>S390</code></h2>
 <p>64-bit mode:</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">; s390x-unknown-linux-gnu-gcc -O2 -fomit-frame-pointer -fno-PIC -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -319,9 +317,9 @@ default-unsigned load semantics.</p>
 <span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="fu">uc2ul:</span></span>
 <span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    llgc    <span class="op">%</span>r2<span class="op">,</span><span class="dv">0</span><span class="op">(%</span>r2<span class="op">)</span> <span class="co">; load-logical-character</span></span>
 <span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>    br      <span class="op">%</span><span class="kw">r14</span></span></code></pre></div>
-<p>Most esoteric instruction set :) It looks like unsigned loads
-are slightly shorter here.</p>
-<p>“31”-bit mode (note <strong>-m31</strong>):</p>
+<p>Most esoteric instruction set :) It looks like unsigned loads are
+slightly shorter here.</p>
+<p>“31”-bit mode (note <code>-m31</code>):</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">; s390x-unknown-linux-gnu-gcc -m31 -O2 -fomit-frame-pointer -fno-PIC -c a.c &amp;&amp; objdump -d a.o</span></span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sc2sl:</span></span>
@@ -334,97 +332,98 @@ are slightly shorter here.</p>
 <span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    ic      <span class="op">%</span>r1<span class="op">,</span><span class="dv">0</span><span class="op">(%</span>r2<span class="op">)</span>   <span class="co">; insert-character</span></span>
 <span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    lr      <span class="op">%</span>r2<span class="op">,%</span>r1      <span class="co">; register-to-register(?) move</span></span>
 <span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>    br      <span class="op">%</span><span class="kw">r14</span></span></code></pre></div>
-<p>Surprisingly in 31-bit mode signed stores are slightly shorter.
-But it looks like <strong>uc2ul</strong> could be shorter by eliminating <strong>lr</strong>.</p>
-<h1 id="parting-words">Parting words</h1>
-<p>At least from ISA standpoint some architectures treat <strong>signed char</strong>
-and <strong>unsigned char</strong> equally and could pick any signedness. Others
+<p>Surprisingly in 31-bit mode signed stores are slightly shorter. But it
+looks like <code>uc2ul</code> could be shorter by eliminating <code>lr</code>.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>At least from ISA standpoint some architectures treat <code>signed char</code>
+and <code>unsigned char</code> equally and could pick any signedness. Others
 differ quite a bit.</p>
 <p>Here is my silly table:</p>
 <table>
 <thead>
 <tr>
-<th>architecture</th>
-<th>signedness</th>
-<th>preferred signedness</th>
-<th>match</th>
+<th style="text-align: left;">architecture</th>
+<th style="text-align: left;">signedness</th>
+<th style="text-align: left;">preferred signedness</th>
+<th style="text-align: left;">match</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>alpha</td>
-<td>SIGNED</td>
-<td>UNSIGNED</td>
-<td><strong>NO</strong></td>
+<td style="text-align: left;">alpha</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;"><strong>NO</strong></td>
 </tr>
 <tr>
-<td>arm</td>
-<td>UNSIGNED</td>
-<td>AMBIVALENT</td>
-<td>YES</td>
+<td style="text-align: left;">arm</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;">AMBIVALENT</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>hppa</td>
-<td>SIGNED</td>
-<td>UNSIGNED</td>
-<td><strong>NO</strong></td>
+<td style="text-align: left;">hppa</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;"><strong>NO</strong></td>
 </tr>
 <tr>
-<td>ia64</td>
-<td>SIGNED</td>
-<td>UNSIGNED</td>
-<td><strong>NO</strong></td>
+<td style="text-align: left;">ia64</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;"><strong>NO</strong></td>
 </tr>
 <tr>
-<td>m68k</td>
-<td>SIGNED</td>
-<td>AMBIVALENT</td>
-<td>YES</td>
+<td style="text-align: left;">m68k</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">AMBIVALENT</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>mips</td>
-<td>SIGNED</td>
-<td>AMBIVALENT</td>
-<td>YES</td>
+<td style="text-align: left;">mips</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">AMBIVALENT</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>powerpc</td>
-<td>UNSIGNED</td>
-<td>UNSIGNED</td>
-<td>YES</td>
+<td style="text-align: left;">powerpc</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>s390(64)</td>
-<td>UNSIGNED</td>
-<td>UNSIGNED</td>
-<td>YES</td>
+<td style="text-align: left;">s390(64)</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;">UNSIGNED</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>sh</td>
-<td>SIGNED</td>
-<td>SIGNED</td>
-<td>YES</td>
+<td style="text-align: left;">sh</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>sparc</td>
-<td>SIGNED</td>
-<td>AMBIVALENT</td>
-<td>YES</td>
+<td style="text-align: left;">sparc</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">AMBIVALENT</td>
+<td style="text-align: left;">YES</td>
 </tr>
 <tr>
-<td>x86</td>
-<td>SIGNED</td>
-<td>AMBIVALENT</td>
-<td>YES</td>
+<td style="text-align: left;">x86</td>
+<td style="text-align: left;">SIGNED</td>
+<td style="text-align: left;">AMBIVALENT</td>
+<td style="text-align: left;">YES</td>
 </tr>
 </tbody>
 </table>
 <p>What do we see here:</p>
 <ul>
-<li><strong>alpha</strong> follows the majority of architecture in char signedness but
+<li><code>alpha</code> follows the majority of architecture in char signedness but
 pays for it a lot.</li>
-<li><strong>arm</strong> could have been signed just fine (for this tiny silly test)</li>
-<li><strong>hppa</strong> and <strong>ia64</strong> might be unsigned and balance the table a bit (<strong>6/5</strong> versus <strong>8/3</strong>) :)</li>
+<li><code>arm</code> could have been signed just fine (for this tiny silly test)</li>
+<li><code>hppa</code> and <code>ia64</code> might be unsigned and balance the table a bit
+(<strong>6/5</strong> versus <strong>8/3</strong>) :)</li>
 </ul>
 <p>Have fun!</p>
         </div>

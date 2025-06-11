@@ -29,38 +29,35 @@
                 <div class="info">August  4, 2018</div>
             
 
-            <p>This story is another dive into linux kernel internals. It has
-started as a <strong>strace</strong> hangup on <strong>ia64</strong> and ended up being
-an unusual case of <strong>gcc</strong> generating garbage code for linux
-kernel (not perfectly valid C either). I’ll try to cover a few
-<strong>ptrace()</strong> system call corners on <strong>x86_64</strong> and <strong>ia64</strong> for
-comparison.</p>
-<h1 id="intro">Intro</h1>
-<p>I updated <a href="../posts/207-linker-script-weird-tricks-or-EFI-on-ia64.html">**elilo**</a>
-and <strong>kernel</strong> on <strong>ia64</strong> machine recently.</p>
-<p>Kernel boot times shrunk from 10 minutes (kernel <strong>3.14.14</strong>)
-down to 2 minutes (kernel <strong>4.9.72</strong>). <strong>3.14.14</strong> kernel had
-large 8-minute pause when early console was not accessible.
-Every time this pause happened I thought I bricked the
-machine. And now delays are gone \o/</p>
-<p>One new thing broke (so far): every time I ran <strong>strace</strong> it
-was hanging without any output printed. Mike Frysinger pointed
-out <strong>strace</strong> hangup likely related to <strong>gdb</strong> problems on
-<strong>ia64</strong> <a href="https://bugs.gentoo.org/518130">reported before</a>
-by Émeric Maschino.</p>
+            <p>This story is another dive into <code>linux</code> kernel internals. It has started
+as a <code>strace</code> hangup on <code>ia64</code> and ended up being an unusual case of
+<code>gcc</code> generating garbage code for <code>linux</code> kernel (not perfectly valid <code>c</code>
+either). I’ll try to cover a few <code>ptrace()</code> system call corners on
+<code>x86_64</code> and <code>ia64</code> for comparison.</p>
+<h2 id="intro">Intro</h2>
+<p>I updated
+<a href="../posts/207-linker-script-weird-tricks-or-EFI-on-ia64.html"><code>elilo</code></a>
+and <code>kernel</code> on <code>ia64</code> machine recently.
+Kernel boot times shrunk from 10 minutes (kernel <code>3.14.14</code>) down to 2
+minutes (kernel <code>4.9.72</code>). <code>3.14.14</code> kernel had large 8-minute pause
+when early console was not accessible. Every time this pause happened I
+thought I bricked the machine. And now delays are gone \o/
+One extra thing broke (so far): every time I ran <code>strace</code> it was hanging
+without any output printed. Mike Frysinger pointed out <code>strace</code> hangup
+likely related to <code>gdb</code> problems on <code>ia64</code> <a href="https://bugs.gentoo.org/518130">reported
+before</a> by Émeric Maschino.</p>
 <p>And he was right!</p>
-<h1 id="reproducing">Reproducing</h1>
-<p>Using <a href="../posts/199-ia64-machine-emulation.html">ski image</a> I
-booted fresh kernel to make sure the bug was still there:</p>
+<h2 id="reproducing">Reproducing</h2>
+<p>Using <a href="../posts/199-ia64-machine-emulation.html"><code>ski</code> image</a> I booted fresh
+kernel to make sure the bug was still there:</p>
 <pre><code># strace ls
 &lt;no response, hangup&gt;</code></pre>
-<p>Yay! <strong>ski</strong> was able reproduce it: no need to torture
-physical machine while debugging. Next step was to find where
-<strong>strace</strong> got stuck. As <strong>strace</strong> and <strong>gdb</strong> are broken I
-had to resort to <strong>printf()</strong> debugging.</p>
-<p>Before doing that I tried <strong>strace</strong>’s <strong>-d</strong> option to
-enable debug mode where it prints everything it expects from
-tracee process:</p>
+<p>Yay! <code>ski</code> was able reproduce it: no need to torture physical machine
+while debugging. Next step was to find where <code>strace</code> got stuck. As
+<code>strace</code> and <code>gdb</code> are broken I had to resort to <code>printf()</code>
+debugging.
+Before doing that I tried <code>strace</code>s <code>-d</code> option to enable debug
+mode where it prints everything it expects from traced process:</p>
 <pre><code>root@ia64 / # strace -d ls
 strace: ptrace_setoptions = 0x51
 strace: new tcb for pid 52, active tcbs:1
@@ -70,9 +67,8 @@ strace: [wait(0x80057f) = 52] WIFSTOPPED,sig=SIGTRAP,EVENT_STOP (128)
 strace: [wait(0x00127f) = 52] WIFSTOPPED,sig=SIGCONT
 strace: [wait(0x00857f) = 52] WIFSTOPPED,sig=133
 ????</code></pre>
-<p>Cryptic output. I tried to compare this output against
-correctly working <strong>x86_64</strong> system to understand what went
-wrong:</p>
+<p>Cryptic output. I tried to compare this output against correctly working
+<code>x86_64</code> system to understand what went wrong:</p>
 <pre><code>amd64 $ strace -d ls
 strace: ptrace_setoptions = 0x51
 strace: new tcb for pid 29343, active tcbs:1
@@ -84,14 +80,14 @@ strace: [wait(0x00857f) = 29343] WIFSTOPPED,sig=133
 execve(&quot;/bin/ls&quot;, [&quot;ls&quot;], 0x60000fffffa4f1f8 /* 36 vars */strace: [wait(0x04057f) = 29343] WIFSTOPPED,sig=SIGTRAP,EVENT_EXEC (4)
 strace: [wait(0x00857f) = 29343] WIFSTOPPED,sig=133
 ...</code></pre>
-<p>Up to <strong>execve</strong> call both logs are identical. Still no clue.</p>
-<p>I spent some time looking at ptrace state machine in kernel
-and gave up trying to understand what was wrong. I then asked
-<a href="https://github.com/strace/strace/issues/33">strace maintainer</a>
-on what could be wrong and got an almost immediate response
-from Dmitry V. Levin: <strong>strace</strong> did not show actual error.</p>
-<p>After a source code tweak he pointed at <strong>ptrace()</strong> syscall
-failure returning <strong>-EIO</strong>:</p>
+<p>Up to <code>execve</code> call both logs are identical. Still no clue.
+I spent some time looking at <code>ptrace</code> state machine in kernel and gave up
+trying to understand what was wrong. I then asked <a href="https://github.com/strace/strace/issues/33"><code>strace</code>
+maintainer</a> on what could be
+wrong and got an almost immediate response from Dmitry V. Levin:
+<code>strace</code> did not show actual error.</p>
+<p>After a source code tweak he pointed at <code>ptrace()</code> syscall failure
+returning <code>-EIO</code>:</p>
 <pre><code>$ ./strace -d /
 ./strace: ptrace_setoptions = 0x51
 ./strace: new tcb for pid 11080, active tcbs:1
@@ -104,20 +100,20 @@ failure returning <strong>-EIO</strong>:</p>
 ????
 ...
 &quot;Looks like ptrace(PTRACE_GETREGS) always fails with EIO on this new kernel.&quot;</code></pre>
-<p>Now I got a more specific signal: <strong>ptrace(PTRACE_GETREGS,…)</strong>
+<p>Now I got a more specific signal: <code>ptrace(PTRACE_GETREGS, ...)</code>
 syscall failed.</p>
-<h1 id="into-the-kernel">Into the kernel</h1>
+<h2 id="into-the-kernel">Into the kernel</h2>
 <p>I felt I had finally found the smoking gun: getting registers of
-<strong>WIFSTOPPED</strong> tracee task should never fail. All registers
-must be already stored somewhere in memory.</p>
-<p>Otherwise how would kernel be able to resume executing tracee
-task when needed?</p>
-<p>Before diving into <strong>ia64</strong> land let’s look into <strong>x86_64</strong>
-<strong>ptrace(PTRACE_GETREGS, …)</strong> implementation.</p>
-<h2 id="x8664-ptraceptracegetregs">x86<span>64</span> ptrace(PTRACE<span id="getregs">GETREGS</span>)</h2>
-<p>To find a <strong>&lt;foo&gt;</strong> syscall implementation in kernel we can
-search for <strong>sys_&lt;foo&gt;()</strong> function definition. The lazy way
-to find a definition is to interrogate built kernel with <strong>gdb</strong>:</p>
+<code>WIFSTOPPED</code> traced task should never fail. All registers must be
+already stored somewhere in memory.
+Otherwise how would kernel be able to resume executing traced task when
+needed?
+Before diving into <code>ia64</code> land let’s look into <code>x86_64</code>
+<code>ptrace(PTRACE_GETREGS, ...)</code> implementation.</p>
+<h3 id="x86_64-ptraceptrace_getregs"><code>x86_64</code> <code>ptrace(PTRACE_GETREGS)</code></h3>
+<p>To find a <code>&lt;foo&gt;</code> syscall implementation in kernel we can search for
+<code>sys_&lt;foo&gt;()</code> function definition. The lazy way to find a
+definition is to interrogate built kernel with <code>gdb</code>:</p>
 <pre><code>$ gdb --quiet ./vmlinux
 (gdb) list sys_ptrace
 1105
@@ -130,8 +126,8 @@ to find a definition is to interrogate built kernel with <strong>gdb</strong>:</
 1112    {
 1113            struct task_struct *child;
 1114            long ret;</code></pre>
-<p><strong>SYSCALL_DEFINE4(ptrace, …)</strong> macro defines actual
-<a href="http://lxr.linux.no/#linux+v4.15.13/kernel/ptrace.c#L1121">sys_ptrace()</a>
+<p><code>SYSCALL_DEFINE4(ptrace, ...)</code> macro defines actual
+<a href="http://lxr.linux.no/#linux+v4.15.13/kernel/ptrace.c#L1121"><code>sys_ptrace()</code></a>
 which does a few sanity checks and dispatches to <strong>arch_ptrace()</strong>:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>SYSCALL_DEFINE4<span class="op">(</span>ptrace<span class="op">,</span> <span class="dt">long</span><span class="op">,</span> request<span class="op">,</span> <span class="dt">long</span><span class="op">,</span> pid<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span><span class="op">,</span> addr<span class="op">,</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>                <span class="dt">unsigned</span> <span class="dt">long</span><span class="op">,</span> data<span class="op">)</span></span>
@@ -144,8 +140,8 @@ which does a few sanity checks and dispatches to <strong>arch_ptrace()</strong>:
 <span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    ret <span class="op">=</span> arch_ptrace<span class="op">(</span>child<span class="op">,</span> request<span class="op">,</span> addr<span class="op">,</span> data<span class="op">);</span></span>
 <span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ret<span class="op">;</span></span>
 <span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><strong>x86_64</strong> implementation
-<a href="http://lxr.linux.no/#linux+v4.15.13/arch/x86/kernel/ptrace.c#L809">does copy_regset_to_user() call</a>
+<p><code>x86_64</code> implementation <a href="http://lxr.linux.no/#linux+v4.15.13/arch/x86/kernel/ptrace.c#L809">does <code>copy_regset_to_user()</code>
+call</a>
 and takes a few lines of code to fetch registers:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> arch_ptrace<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>child<span class="op">,</span> <span class="dt">long</span> request<span class="op">,</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>                 <span class="dt">unsigned</span> <span class="dt">long</span> addr<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> data<span class="op">)</span> <span class="op">{</span></span>
@@ -156,8 +152,8 @@ and takes a few lines of code to fetch registers:</p>
 <span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>                                  REGSET_GENERAL<span class="op">,</span></span>
 <span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>                                  <span class="dv">0</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> user_regs_struct<span class="op">),</span></span>
 <span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>                                  datap<span class="op">);</span></span></code></pre></div>
-<p>Let’s look at it in detail to get the idea where registers
-are normally stored.</p>
+<p>Let’s look at it in detail to get the idea where registers are normally
+stored.</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">int</span> copy_regset_to_user<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>target<span class="op">,</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>                                      <span class="dt">const</span> <span class="kw">struct</span> user_regset_view <span class="op">*</span>view<span class="op">,</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>                                      <span class="dt">unsigned</span> <span class="dt">int</span> setno<span class="op">,</span></span>
@@ -174,8 +170,8 @@ are normally stored.</p>
 <span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> regset<span class="op">-&gt;</span>get<span class="op">(</span>target<span class="op">,</span> regset<span class="op">,</span> offset<span class="op">,</span> size<span class="op">,</span> NULL<span class="op">,</span> data<span class="op">);</span></span>
 <span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here <strong>copy_regset_to_user()</strong> is just a dispatcher to
-<strong>view</strong> argument. Moving on:</p>
+<p>Here <code>copy_regset_to_user()</code> is just a dispatcher to <code>view</code>
+argument. Moving on:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> user_regset_view <span class="op">*</span>task_user_regset_view<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>task<span class="op">)</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// simplified #ifdef-ery</span></span>
@@ -198,9 +194,9 @@ are normally stored.</p>
 <span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>get <span class="op">=</span> genregs_get<span class="op">,</span> <span class="op">.</span>set <span class="op">=</span> genregs_set</span>
 <span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">},</span></span>
 <span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span></code></pre></div>
-<p>A bit of boilerplate to tie <strong>genregs_get()</strong> and <strong>genregs_set()</strong>
-to 64-bit (or 32-bit) caller. Let’s look at 64-bit variant of
-<strong>genregs_get()</strong> as it’s used in our <strong>PTRACE_GETREGS</strong> case:</p>
+<p>A bit of boilerplate to tie <code>genregs_get()</code> and <code>genregs_set()</code> to
+64-bit (or 32-bit) caller. Let’s look at 64-bit variant of
+<code>genregs_get()</code> as it’s used in our <code>PTRACE_GETREGS</code> case:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> genregs_get<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>target<span class="op">,</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">const</span> <span class="kw">struct</span> user_regset <span class="op">*</span>regset<span class="op">,</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">unsigned</span> <span class="dt">int</span> pos<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">int</span> count<span class="op">,</span></span>
@@ -247,15 +243,13 @@ to 64-bit (or 32-bit) caller. Let’s look at 64-bit variant of
 <span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> task<span class="op">-&gt;</span>stack<span class="op">;</span></span>
 <span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>From <strong>task_pt_regs()</strong> defnition we see that actual register
-contents is stored in task’s kernel stack.
-And <strong>genregs_get()</strong> copies register contents one by one in a
-<strong>while()</strong> loop.</p>
-<p>How do task’s registers get stored to task’s kernel stack?
-There are a few paths to get there. Most frequent is perhaps
-interrupt handling when task is descheduled from CPU and is
-moved to scheduler wait queue.</p>
-<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S?h=v4.18-rc7#n546">ENTRY(interrupt_entry)</a>:
+<p>From <code>task_pt_regs()</code> definition we see that actual register contents
+is stored in task’s kernel stack. And <code>genregs_get()</code> copies register
+contents one by one in a <code>while()</code> loop.</p>
+<p>How do task’s registers get stored to task’s kernel stack? There are a
+few paths to get there. Most frequent is perhaps interrupt handling when
+task is unscheduled from CPU and is moved to scheduler wait queue.</p>
+<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S?h=v4.18-rc7#n546"><code>ENTRY(interrupt_entry)</code></a>:
 is an entry point for interrupt handling.</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span><span class="op">(</span>interrupt_entry<span class="op">)</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    UNWIND_HINT_FUNC</span>
@@ -371,35 +365,33 @@ is an entry point for interrupt handling.</p>
 <span id="cb11-112"><a href="#cb11-112" aria-hidden="true" tabindex="-1"></a>    pushq        <span class="op">%</span><span class="kw">rsi</span>                <span class="op">/*</span> return address on top of stack <span class="op">*/</span></span>
 <span id="cb11-113"><a href="#cb11-113" aria-hidden="true" tabindex="-1"></a>    .endif</span>
 <span id="cb11-114"><a href="#cb11-114" aria-hidden="true" tabindex="-1"></a>.endm</span></code></pre></div>
-<p>Interesting effects of the <strong>interrupt_entry</strong> are:</p>
+<p>Interesting effects of the <code>interrupt_entry</code> are:</p>
 <ul>
-<li>registers are backed up by <strong>PUSH_AND_CLEAR_REGS</strong> macro</li>
-<li>memory area used for backup is <strong>PER_CPU_VAR(cpu_current_top_of_stack)</strong>
-(task’s kernel stack)</li>
+<li>registers are backed up by <code>PUSH_AND_CLEAR_REGS</code> macro</li>
+<li>memory area used for backup is
+<code>PER_CPU_VAR(cpu_current_top_of_stack)</code> (task’s kernel stack)</li>
 </ul>
-<p>To recap: <strong>ptrace(PTRACE_GETREGS, …)</strong> does elementwise copy
-(using <strong>__put_user()</strong>) for each general register located in a
-single <strong>struct pt_regs</strong> in task’s kernel stack to tracer’s userspace.</p>
-<p>Now let’s look at how <strong>ia64</strong> does the same.</p>
-<h2 id="ia64-ptraceptracegetregs">ia64 ptrace(PTRACE<span id="getregs">GETREGS</span>)</h2>
-<p>“Can’t be much more complicated than on x86<span>64</span>” was my
-thought. Haha.</p>
-<p>I started searching for <strong>-EIO</strong> failure in kernel and
-sprinkling <strong>printk()</strong> statements in <strong>ptrace()</strong>
-handling code.</p>
-<p><strong>ia64</strong> begins with the same call path as <strong>x86_64</strong>:</p>
+<p>To recap: <code>ptrace(PTRACE_GETREGS, ...)</code> does elementwise copy (using
+<code>__put_user()</code>) for each general register located in a single
+<code>struct pt_regs</code> in task’s kernel stack to tracer’s userspace.</p>
+<p>Now let’s look at how <code>ia64</code> does the same.</p>
+<h2 id="ia64-ptraceptrace_getregs"><code>ia64</code> <code>ptrace(PTRACE_GETREGS)</code></h2>
+<p>“Can’t be much more complicated than on x86_64” was my thought. Haha.</p>
+<p>I started searching for <code>-EIO</code> failure in kernel and sprinkling
+<code>printk()</code> statements in <code>ptrace()</code> handling code.
+<code>ia64</code> begins with the same call path as <code>x86_64</code>:</p>
 <ul>
-<li><strong>ptrace()</strong> entry point: <a href="http://lxr.linux.no/#linux+v4.15.13/kernel/ptrace.c#L1121">SYSCALL_DEFINE4(ptrace…</a></li>
-<li>ia64-specific <strong>arch_ptrace()</strong> handler: <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/ptrace.c#L1158">arch_ptrace(…</a></li>
-<li><a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/ptrace.c#L828">**ptrace_getregs(..**</a></li>
+<li><code>ptrace()</code> entry point:
+<a href="http://lxr.linux.no/#linux+v4.15.13/kernel/ptrace.c#L1121"><code>SYSCALL_DEFINE4(ptrace...</code></a></li>
+<li><code>ia64</code>-specific <code>arch_ptrace()</code> handler:
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/ptrace.c#L1158"><code>arch_ptrace(...</code></a></li>
+<li><a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/ptrace.c#L828"><code>ptrace_getregs(...</code></a></li>
 </ul>
-<p>Again, <strong>ptrace_getregs()</strong> is supposed to copy in-memory
-context back to caller’s userspace.
-Where did it return <strong>EIO</strong>?</p>
-<p><strong>Quiz</strong>: while you are skimming through the
-<strong>ptrace_getregs()</strong> code and comments right below, try to
-guess which <strong>EIO</strong> exit path is taken in our case. I’ve
-marked the cases with <strong>[N]</strong> numbers.</p>
+<p>Again, <code>ptrace_getregs()</code> is supposed to copy in-memory context back
+to caller’s userspace. Where did it return <code>EIO</code>?</p>
+<p><strong>Quiz</strong>: while you are skimming through the <code>ptrace_getregs()</code> code
+and comments right below, try to guess which <code>EIO</code> exit path is taken
+in our case. I’ve marked the cases with <code>[N]</code> numbers.</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">long</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>ptrace_getregs <span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>child<span class="op">,</span> <span class="kw">struct</span> pt_all_user_regs __user <span class="op">*</span>ppr<span class="op">)</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -545,18 +537,19 @@ marked the cases with <strong>[N]</strong> numbers.</p>
 <span id="cb12-143"><a href="#cb12-143" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>It’s a huge function. Be afraid not! It has two main parts:</p>
 <ul>
-<li>extraction of register values using <strong>unw_unwind_to_user()</strong></li>
+<li>extraction of register values using <code>unw_unwind_to_user()</code></li>
 <li>copying extracted values to caller’s userspace using
-<strong>__put_user()</strong> and <strong>__copy_to_user()</strong> helpers.</li>
+<code>__put_user()</code> and <code>__copy_to_user()</code> helpers.</li>
 </ul>
-<p>Those two are a analogous of <strong>x86_64</strong>’s
-<strong>copy_regset_to_user()</strong> implementation.</p>
-<p><strong>Quiz answer</strong>: surprisingly it’s case <strong>[4]</strong>: <strong>EIO</strong>
-popped up due to a failure in <strong>unw_unwind_to_user()</strong> call.
-Or not so surprisingly given it’s The Function to fetch
-register values from somewhere.</p>
-<p>Let’s check where register contents are hiding on <strong>ia64</strong>.
-Here goes <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1970">unw_unwind_to_user() definition</a>:</p>
+<p>Those two are analogous to <code>x86_64**</code> <code>copy_regset_to_user()</code>
+implementation.</p>
+<p><strong>Quiz answer</strong>: surprisingly it’s case <code>[4]</code>: <code>EIO</code> popped up
+due to a failure in <code>unw_unwind_to_user()</code> call. Or not so
+surprisingly given it’s The Function to fetch register values from
+somewhere.</p>
+<p>Let’s check where register contents are hiding on <code>ia64</code>. Here goes
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1970"><code>unw_unwind_to_user()</code>
+definition</a>:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>unw_unwind_to_user <span class="op">(</span><span class="kw">struct</span> unw_frame_info <span class="op">*</span>info<span class="op">)</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -587,16 +580,15 @@ Here goes <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c
 <span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
 <span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
 <span id="cb13-30"><a href="#cb13-30" aria-hidden="true" tabindex="-1"></a>EXPORT_SYMBOL<span class="op">(</span>unw_unwind_to_user<span class="op">);</span></span></code></pre></div>
-<p>The code above is more complicated than on <strong>x86_64</strong>. How is
-it supposed to work?</p>
-<p>For efficiency reasons syscall interface (and even interrupt
-handling interface) on <strong>ia64</strong> looks a lot more like normal
-function call. This means that <strong>linux</strong> does not store
-all general registers to a separate <strong>struct pt_regs</strong> backup
-area for each task switch.</p>
-<p>Let’s peek at interrupt handling entry for completeness.</p>
-<p><strong>ia64</strong> uses <strong>interrupt</strong> entrypoint to enter the kernel
-at <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/ivt.S?h=v4.18-rc7#n878">ENTRY(interrupt)</a>:</p>
+<p>The code above is more complicated than on <code>x86_64</code>. How is it
+supposed to work?
+For efficiency reasons syscall interface (and even interrupt handling
+interface) on <code>ia64</code> looks a lot more like normal function call. This
+means that <code>linux</code> does not store all general registers to a separate
+<code>struct pt_regs</code> backup area for each task switch.
+Let’s peek at interrupt handling entry for completeness.
+<code>ia64</code> uses <code>interrupt</code> entry point to enter the kernel at
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/ivt.S?h=v4.18-rc7#n878"><code>ENTRY(interrupt)</code></a>:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span><span class="op">(</span>interrupt<span class="op">)</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    /* interrupt handler has become too big to fit this area<span class="op">.</span> <span class="op">*/</span></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>sptk<span class="op">.</span>many __interrupt</span>
@@ -626,35 +618,35 @@ at <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/t
 <span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a><span class="pp">END</span><span class="op">(</span>__interrupt<span class="op">)</span></span></code></pre></div>
 <p>The code above handles interrupts as:</p>
 <ul>
-<li><strong>SAVE_MIN_WITH_COVER</strong> sets kernel stack (<strong>r12</strong>), gp
-(<strong>r1</strong>) and so on</li>
-<li><strong>SAVE_REST</strong> stores rest of registers <strong>r2</strong> to <strong>r31</strong> but
-leaves <strong>r32</strong> to <strong>r127</strong> be managed by <strong>RSE</strong> (register
-stack engine) like normal function call would.</li>
-<li>Hands off control to C code in <strong>ia64_handle_irq</strong>.</li>
+<li><code>SAVE_MIN_WITH_COVER</code> sets kernel stack (<code>r12</code>), <code>gp</code> (<code>r1</code>) and
+so on</li>
+<li><code>SAVE_REST</code> stores rest of registers <code>r2</code> to <code>r31</code> but leaves
+<code>r32</code> to <code>r127</code> be managed by <code>RSE</code> (register stack engine) like
+normal function call would.</li>
+<li>Hands off control to C code in <code>ia64_handle_irq</code>.</li>
 </ul>
-<p>All the above means that in order to get register <strong>r32</strong>
-or similar we would need to perform stack kernel unwinding
-down to the userspace boundary and read register values from
-<strong>RSE</strong> memory area (backing store).</p>
-<h1 id="into-the-rabbit-hole">Into the rabbit hole</h1>
+<p>All the above means that in order to get register <code>r32</code> or similar we
+would need to perform stack kernel unwinding down to the user space
+boundary and read register values from <code>RSE</code> memory area (backing
+store).</p>
+<h2 id="into-the-rabbit-hole">Into the rabbit hole</h2>
 <p>Back to our unwinder failure.</p>
-<p>Our case is not very complicated as tracee is stopped at system
-call boundary and there is not too much to unwind. How one would
-know where user boundary starts? <strong>linux</strong> looks at return
-instruction pointer in every stack frame and checks if it’s return
-address still points to kernel address space.</p>
-<p>Unwinding failure seemingly happens in depths of
-<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1883">unw_unwind(info, &amp;ip)</a>.
+<p>Our case is not very complicated as tracee is stopped at system call
+boundary and there is not too much to unwind. How one would know where
+user boundary starts? <code>linux</code> looks at return instruction pointer in
+every stack frame and checks if it’s return address still points to
+kernel address space.</p>
+<p>Unwinding failure seemingly happens in depths of <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1883"><code>unw_unwind(info, &amp;ip)</code></a>.
 From there
-<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1834">find_save_locs(info);</a>
-is called. <strong>find_save_locs()</strong> lazily builds or runs an
-unwind script. The <a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1714">run_script()</a>
-is a small bytecode interpter of 11 instruction types.</p>
-<p>If the above does not make sense to you it’s fine. It did not
-make sense to me either.</p>
-<p>To get more information from unwinder I enabled debugging
-output for unwinder by adding <strong>#define UNW_DEBUG</strong>:</p>
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1834"><code>find_save_locs(info);</code></a>
+is called. <code>find_save_locs()</code> lazily builds or runs an unwind script.
+The
+<a href="http://lxr.linux.no/#linux+v4.15.13/arch/ia64/kernel/unwind.c#L1714"><code>run_script()</code></a>
+is a small byte code interpreter of 11 instruction types.
+If the above does not make sense to you it’s fine. It did not make
+sense to me either.
+To get more information from unwinder I enabled debugging output for
+unwinder by adding <code>#define UNW_DEBUG</code>:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/unwind.c</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/unwind.c</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    @@ -56,4 +56,6 @@</span>
@@ -664,15 +656,15 @@ output for unwinder by adding <strong>#define UNW_DEBUG</strong>:</p>
 <span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
 <span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a> #ifdef UNW_DEBUG</span>
 <span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>   static unsigned int unw_debug_level = UNW_DEBUG;</span></code></pre></div>
-<p>I ran <strong>strace</strong> again:</p>
+<p>I ran <code>strace</code> again:</p>
 <pre><code>ia64 # strace -v -d ls
 strace: ptrace_setoptions = 0x51
 unwind.build_script: no unwind info for ip=0xa00000010001c1a0 (prev ip=0x0)
 unwind.run_script: no state-&gt;pt, dst=18, val=136
 unwind.unw_unwind: failed to locate return link (ip=0xa00000010001c1a0)!
 unwind.unw_unwind_to_user: failed to unwind to user-level (ip=0xa00000010001c1a0)</code></pre>
-<p><strong>build_script()</strong> couldn’t resolve current <strong>ip=0xa00000010001c1a0</strong>
-address. Why? No idea! I added <strong>printk()</strong> around the place where I
+<p><code>build_script()</code> couldn’t resolve current <code>ip=0xa00000010001c1a0</code>
+address. Why? No idea! I added <code>printk()</code> around the place where I
 expected a match:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/ia64/kernel/unwind.c</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/ia64/kernel/unwind.c</span></span>
@@ -685,23 +677,21 @@ expected a match:</p>
 <span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>                if (ip &gt;= table-&gt;start &amp;&amp; ip &lt; table-&gt;end) {</span>
 <span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>                        /*</span>
 <span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>                         * Leave the kernel unwind table at the very front,</span></code></pre></div>
-<p>I ran <strong>strace</strong> again:</p>
+<p>I ran <code>strace</code> again:</p>
 <pre><code>ia64 # strace -v -d ls
 strace: ptrace_setoptions = 0x51
 unwind.build_script: looking up ip=0xa00000010001c1a0 in [start=0xa000000100009240,end=0xa000000100000000)
 unwind.build_script: looking up ip=0xa00000010001c1a0 in [start=0xa000000000040720,end=0xa000000000040ad0)
 unwind.build_script: no unwind info for ip=0xa00000010001c1a0 (prev ip=0x0)</code></pre>
 <p>Can you spot the problem? Look at this range:
-<strong>[start=0xa000000100009240,end=0xa000000100000000)</strong>.
-It’s <strong>end</strong> is less than <strong>start</strong>. This renders
-<strong>table-&gt;start &amp;&amp; ip &lt; table-&gt;end</strong> condition to be always
-false. How could it happen?</p>
-<p>It means the <strong>ptrace()</strong> itself is not at fault here but
-a victim of already corrupted <strong>table-&gt;end</strong> value.</p>
-<h1 id="going-deeper">Going deeper</h1>
-<p>To find <strong>table-&gt;end</strong> corruption I checked if <strong>table</strong> was
-populated correctly. It is done by a simple function
-<strong>init_unwind_table()</strong>:</p>
+<code>[start=0xa000000100009240,end=0xa000000100000000)</code>. It’s <code>end</code> is
+less than <code>start</code>. This renders <code>table-&gt;start &amp;&amp; ip &lt; table-&gt;end</code>
+condition to be always false. How could it happen?
+It means the <code>ptrace()</code> itself is not at fault here but a victim of
+already corrupted <code>table-&gt;end</code> value.</p>
+<h2 id="going-deeper">Going deeper</h2>
+<p>To find <code>table-&gt;end</code> corruption I checked if <code>table</code> was populated
+correctly. It is done by a simple function <code>init_unwind_table()</code>:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>init_unwind_table <span class="op">(</span><span class="kw">struct</span> unw_table <span class="op">*</span>table<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> segment_base<span class="op">,</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>                   <span class="dt">unsigned</span> <span class="dt">long</span> gp<span class="op">,</span> <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>table_start<span class="op">,</span> <span class="dt">const</span> <span class="dt">void</span> <span class="op">*</span>table_end<span class="op">)</span></span>
@@ -755,15 +745,16 @@ populated correctly. It is done by a simple function
 <p>Here we see unwind tables created for:</p>
 <ul>
 <li>one table for kernel itself</li>
-<li>one table <strong>linux-gate.so</strong> (equivalent of <strong>linux-vdso.so.1</strong> on <strong>x86_64</strong>)</li>
+<li>one table <code>linux-gate.so</code> (equivalent of <code>linux-vdso.so.1</code> on
+<code>x86_64</code>)</li>
 <li>one table for each kernel module</li>
 </ul>
-<h1 id="arrays-are-hard">Arrays are hard</h1>
-<p>Nothing complicated, right? Actually <strong>gcc</strong> fails to generate
-correct code for <strong>end[-1].end_offset</strong> expression! It happens
-to be a rare corner case:</p>
-<p>Both <strong>__start_unwind</strong> and <strong>__end_unwind</strong> are defined in
-linker script as external symbols:</p>
+<h2 id="arrays-are-hard">Arrays are hard</h2>
+<p>Nothing complicated, right? Actually <code>gcc</code> fails to generate correct
+code for <code>end[-1].end_offset</code> expression! It happens to be a rare
+corner case:
+Both <code>__start_unwind</code> and <code>__end_unwind</code> are defined in linker
+script as external symbols:</p>
 <pre><code># somewhere in arch/ia64/kernel/vmlinux.lds.S
 # ...
 SECTIONS {
@@ -774,10 +765,10 @@ SECTIONS {
             __end_unwind = .;
     } :code :unwind
     # ...</code></pre>
-<p>Here is how C code defines <strong>__end_unwind</strong>:</p>
+<p>Here is how C code defines <code>__end_unwind</code>:</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __end_unwind<span class="op">[];</span></span></code></pre></div>
-<p>If we manually inline all the above into <strong>unw_init</strong> we will
-get the following:</p>
+<p>If we manually inline all the above into <code>unw_init</code> we will get the
+following:</p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __init</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>unw_init <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -785,18 +776,17 @@ get the following:</p>
 <span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
 <span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    table<span class="op">-&gt;</span>end <span class="op">=</span> segment_base <span class="op">+</span> <span class="op">((</span>unw_table_entry <span class="op">*)</span>__end_unwind<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>end_offset<span class="op">;</span></span>
 <span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>If <strong>__end_unwind[]</strong> would be an array defined in <strong>C</strong> then
-negative index <strong>-1</strong> would cause undefned behaviour.</p>
-<p>On the practical side it’s just pointer arithmetics. Is there
-anything special about subtracting a few bytes from an
-arbitrary address and then dereference it?</p>
-<p>Let’s check what kind of assembly <strong>gcc</strong> actually generates.</p>
-<h1 id="compiler-mysteries">Compiler mysteries</h1>
-<p>Still reading? Great! You got to most exciting part of this
-article!</p>
-<p>Let’s look at simpler code first. And then we will grow it to
-be closer to our initial example.</p>
-<p>Let’s start from global array with a negative index:</p>
+<p>If <code>__end_unwind[]</code> would be an array defined in <code>c</code> then
+negative index <code>-1</code> would cause undefined behavior.
+On the practical side it’s just pointer arithmetic. Is there anything
+special about subtracting a few bytes from an arbitrary address and then
+dereference it?
+Let’s check what kind of assembly <code>gcc</code> actually generates.</p>
+<h2 id="compiler-mysteries">Compiler mysteries</h2>
+<p>Still reading? Great! You got to most exciting part of this article!
+Let’s look at simpler code first. And then we will grow it to be closer
+to our initial example.
+Let’s start from global array with a negative index:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">long</span> __some_table<span class="op">[];</span></span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> __some_table<span class="op">[-</span><span class="dv">1</span><span class="op">];</span> <span class="op">}</span></span></code></pre></div>
 <p>Compilation result (I’ll strip irrelevant bits and annotations):</p>
@@ -816,15 +806,16 @@ be closer to our initial example.</p>
 <span id="cb25-14"><a href="#cb25-14" aria-hidden="true" tabindex="-1"></a>    .endp end<span class="op">#</span></span></code></pre></div>
 <p>Here two things happen:</p>
 <ul>
-<li><strong>__some_table</strong> address is read from <strong>GOT</strong> (<strong>r1</strong> is
-rougly <strong>GOT</strong> register) by performing an <strong>ld8.mov</strong> (a
-form of 8-byte load) into <strong>r14</strong>.</li>
-<li>final value is loaded at address <strong>r14 - 18</strong> using <strong>ld8</strong> (also a 8-byte load).</li>
+<li><code>__some_table</code> address is read from <code>GOT</code> (<code>r1</code> is roughly
+<code>GOT</code> register) by performing an <code>ld8.mov</code> (a form of 8-byte load)
+into <code>r14</code>.</li>
+<li>final value is loaded from address <code>r14 - 8</code> using <code>ld8</code> (also a
+8-byte load).</li>
 </ul>
-<p>Simple!</p>
-<p>We can simplify the example by avoiding <strong>GOT</strong> indirection.
-The typical way to do it is to use
-<strong>__attribute__((visibility(“hidden”)))</strong> hint:</p>
+<p>Simple!
+We can simplify the example by avoiding <code>GOT</code> indirection. The typical
+way to do it is to use <code>__attribute__((visibility("hidden")))</code>
+hint:</p>
 <div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">long</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)));</span></span>
 <span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> __some_table<span class="op">[-</span><span class="dv">1</span><span class="op">];</span> <span class="op">}</span></span></code></pre></div>
 <p>Assembly code:</p>
@@ -841,13 +832,12 @@ The typical way to do it is to use
 <span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
 <span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
 <span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
-<p>Here <strong>movl r14 = @gprel(__some_table#)</strong> is a link-time
-64-bit constant: an offset of <strong>__some_table</strong> array from
-<strong>r1</strong> value. Only a single 8-byte load happens at address
-<strong>@gprel(__some_table#) + r1 - 8</strong>.</p>
-<p>Also straightforward.</p>
-<p>Now let’s change the alignment of our table from <strong>long</strong>
-(8 bytes on <strong>ia64</strong>) to <strong>char</strong> (1 byte):</p>
+<p>Here <code>movl r14 = @gprel(__some_table#)</code> is a link-time 64-bit
+constant: an offset of <code>__some_table</code> array from <code>r1</code> value. Only
+a single 8-byte load happens at address <code>@gprel(__some_table#) + r1 - 8</code>.
+Also straightforward.
+Now let’s change the alignment of our table from <code>long</code> (8 bytes on
+<code>ia64</code>) to <code>char</code> (1 byte):</p>
 <div class="sourceCode" id="cb28"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)));</span></span>
 <span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="dt">long</span><span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">];</span> <span class="op">}</span></span></code></pre></div>
 <div class="sourceCode" id="cb29"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
@@ -901,14 +891,12 @@ The typical way to do it is to use
 <span id="cb29-49"><a href="#cb29-49" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="kw">r8</span></span>
 <span id="cb29-50"><a href="#cb29-50" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span>
 <span id="cb29-51"><a href="#cb29-51" aria-hidden="true" tabindex="-1"></a>    .endp end<span class="op">#</span></span></code></pre></div>
-<p>This is quite a blowup in code size! Here instead of one
-8-byte <strong>ld8</strong> load compiler generated 8 1-byte <strong>ld1</strong>
-loads to assemble valid value with the help of arithmetic
-<strong>shift</strong>s and <strong>or</strong>s.</p>
-<p>Note how each individual byte gets it’s personal register to
-keep an address and result of the load.</p>
-<p>Here is the subset of above instructions to handle byte offset
-<strong>-5</strong>:</p>
+<p>This is quite a blowup in code size! Here instead of one 8-byte <code>ld8</code>
+load compiler generated 8 1-byte <code>ld1</code> loads to assemble valid value
+with the help of arithmetic shifts and <code>or</code>s.
+Note how each individual byte gets it’s personal register to keep an
+address and result of the load.
+Here is the subset of above instructions to handle byte offset <code>-5</code>:</p>
 <div class="sourceCode" id="cb30"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">; point r14 at __some_table:</span></span>
 <span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
 <span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
@@ -920,9 +908,9 @@ keep an address and result of the load.</p>
 <span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>ld1 r17 <span class="op">=</span> <span class="op">[</span>r17<span class="op">]</span></span>
 <span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a><span class="bu">shl</span> r17 <span class="op">=</span> r17<span class="op">,</span> <span class="dv">24</span></span>
 <span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span> r16 <span class="op">=</span> r17<span class="op">,</span> r16</span></code></pre></div>
-<p>This code, while ugly and inefficient, is still correct.</p>
-<p>Now let’s wrap our 8-byte value in a <strong>struct</strong> to make
-example closer to original unwinder’s table registration code:</p>
+<p>This code, while ugly and inefficient, is still correct.
+Now let’s wrap our 8-byte value in a <code>struct</code> to make example closer
+to original unwinder’s table registration code:</p>
 <div class="sourceCode" id="cb31"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)));</span></span>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span> <span class="dt">long</span> v<span class="op">;</span> <span class="op">};</span></span>
 <span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="kw">struct</span> s <span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>v<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
@@ -991,9 +979,9 @@ in previous example or somehow different?</p>
 <span id="cb32-61"><a href="#cb32-61" aria-hidden="true" tabindex="-1"></a>    <span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r8</span></span>
 <span id="cb32-62"><a href="#cb32-62" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span>
 <span id="cb32-63"><a href="#cb32-63" aria-hidden="true" tabindex="-1"></a>    .endp end<span class="op">#</span></span></code></pre></div>
-<p>The code is different from previous one! Seemingly not too much
-but there one suspicious detail: offsets now are very large.
-Let’s look at our <strong>-5</strong> example again:</p>
+<p>The code is different from the previous one! Seemingly not too much but
+there one suspicious detail: offsets now are very large. Let’s look at
+our <code>-5</code> example again:</p>
 <div class="sourceCode" id="cb33"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co">; point r14 at __some_table:</span></span>
 <span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>movl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>__some_table<span class="op">#)</span></span>
 <span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span> <span class="kw">r14</span> <span class="op">=</span> r1<span class="op">,</span> <span class="kw">r14</span></span>
@@ -1007,16 +995,15 @@ Let’s look at our <strong>-5</strong> example again:</p>
 <span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a><span class="bu">shl</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r8</span><span class="op">,</span> <span class="dv">24</span></span>
 <span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a><span class="bu">or</span> <span class="kw">r8</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="kw">r8</span></span>
 <span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a><span class="co">; ...</span></span></code></pre></div>
-<p>The offset <strong>0x1ffffffffffffffb</strong> (2305843009213693947) used
-here is incorrect. It should have been <strong>0xfffffffffffffffb</strong>
-(-5).</p>
-<p>We encounter (arguably) a compiler bug known as
-<a href="https://gcc.gnu.org/PR84184">PR84184</a>. Upstream says struct
-handling is different enough from direct array dereferences
-to trick <strong>gcc</strong> into generating incorrect byte offsets.</p>
-<p>One day I’ll take a closer look at it to understand mechanics.</p>
-<p>Let’s explore one more example: what if we add bigger alignment
-to <strong>__some_table</strong> without changing it’s type?</p>
+<p>The offset <code>0x1ffffffffffffffb</code> (2305843009213693947) used here is
+incorrect. It should have been <code>0xfffffffffffffffb</code> (-5).
+We encounter (arguably) a compiler bug known as
+<a href="https://gcc.gnu.org/PR84184">PR84184</a>. Upstream says struct handling is
+different enough from direct array dereferences to trick <code>gcc</code> into
+generating incorrect byte offsets.
+One day I’ll take a closer look at it to understand mechanics.</p>
+<p>Let’s explore one more example: what if we add bigger alignment to
+<code>__some_table</code> without changing it’s type?</p>
 <div class="sourceCode" id="cb34"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> __some_table<span class="op">[]</span> __attribute__<span class="op">((</span>visibility<span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">)))</span> __attribute<span class="op">((</span>aligned<span class="op">(</span><span class="dv">8</span><span class="op">)));</span></span>
 <span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span> <span class="dt">long</span> v<span class="op">;</span> <span class="op">};</span></span>
 <span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="kw">struct</span> s <span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>v<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
@@ -1033,11 +1020,11 @@ to <strong>__some_table</strong> without changing it’s type?</p>
 <span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
 <span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">]</span></span>
 <span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
-<p>Exactly as our original clean and fast example: single aligned
-load at offset <strong>-8</strong>.</p>
-<p>Now we have a simple workaround!</p>
-<p>What if we pass our array in a register instead of using a
-global reference? (effectively uninlining array address)</p>
+<p>Exactly as our original clean and fast example: single aligned load at
+offset <code>-8</code>.
+Now we have a simple workaround!
+What if we pass our array in a register instead of using a global
+reference? (effectively uninlining array address)</p>
 <div class="sourceCode" id="cb36"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span> <span class="dt">long</span> v<span class="op">;</span> <span class="op">};</span></span>
 <span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span> end<span class="op">(</span><span class="dt">char</span> <span class="op">*</span> __some_table<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">((</span><span class="kw">struct</span> s <span class="op">*)</span>__some_table<span class="op">)[-</span><span class="dv">1</span><span class="op">].</span>v<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
 <div class="sourceCode" id="cb37"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="co">; ia64-unknown-linux-gnu-gcc-8.2.0 -O2 -S a.c</span></span>
@@ -1049,47 +1036,45 @@ global reference? (effectively uninlining array address)</p>
 <span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
 <span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r8</span> <span class="op">=</span> <span class="op">[</span>r32<span class="op">]</span></span>
 <span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
-<p>Also works! Note how compiler promotes alignment after a type
-cast from 1 to 8.</p>
-<p>In this case a few things happen at the same time to trigger
-bad code generation:</p>
+<p>Also works! Note how compiler promotes alignment after a type cast from
+1 to 8.
+In this case a few things happen at the same time to trigger bad code
+generation:</p>
 <ul>
-<li>gcc infers that <strong>char __end_unwind[]</strong> is an array literal
-with alignment 1</li>
-<li>gcc inlines <strong>__end_unwind</strong> into <strong>init_unwind_table</strong> and
-demotes alignment from 8 (<strong>const struct unw_table_entry</strong>) to 1 (<strong>extern char []</strong>)</li>
-<li>gcc assumes that <strong>__end_unwind</strong> can’t have negative
-subscript and generates invalid (and inefficient) code</li>
+<li><code>gcc</code> infers that <code>char __end_unwind[]</code> is an array literal with
+alignment 1</li>
+<li><code>gcc</code> inlines <code>__end_unwind</code> into <code>init_unwind_table</code> and demotes
+alignment from 8 (<code>const struct unw_table_entry</code>) to 1 (<code>extern   char []</code>)</li>
+<li><code>gcc</code> assumes that <code>__end_unwind</code> can’t have negative subscript and
+generates invalid (and inefficient) code</li>
 </ul>
-<h1 id="workarounds-aka-hacks-time">Workarounds (aka hacks) time!</h1>
-<p>We can workaround corner-case conditions above in a
-few different ways:</p>
+<h2 id="workarounds-aka-hacks-time">Workarounds (aka hacks) time!</h2>
+<p>We can workaround corner-case conditions above in a few different ways:</p>
 <ul>
-<li>[hack] forbid inlining of <strong>init_unwind_table()</strong>: <a href="https://lkml.org/lkml/2018/3/9/976">lkml patch v1</a></li>
-<li>[better fix] expose real alignment of <strong>__end_unwind</strong>:
-<a href="https://lkml.org/lkml/2018/2/2/914">lkml patch v2</a></li>
+<li><code>[hack]</code> forbid inlining of <code>init_unwind_table()</code>: <a href="https://lkml.org/lkml/2018/3/9/976">lkml patch
+v1</a></li>
+<li><code>[better fix]</code> expose real alignment of <code>__end_unwind</code>: <a href="https://lkml.org/lkml/2018/2/2/914">lkml
+patch v2</a></li>
 </ul>
-<p>Fix is still not perfect as negative subscript it used. But at
-least the load is aligned.</p>
-<p>Note that <strong>void __init unw_init()</strong> is called early in kernel
-startup sequence even before console is initialized.</p>
-<p>This code generation bug causes either garbage read from some
-memory location or kernel crash trying to access unmapped
-memory.</p>
-<p>That is the <strong>strace</strong> breakage mechanics.</p>
-<h1 id="parting-words">Parting words</h1>
+<p>Fix is still not perfect as negative subscript it used. But at least the
+load is aligned.
+Note that <code>void __init unw_init()</code> is called early in kernel startup
+sequence even before console is initialized.
+This code generation bug causes either garbage read from some memory
+location or kernel crash trying to access unmapped memory.
+That is the <code>strace</code> breakage mechanics.</p>
+<h2 id="parting-words">Parting words</h2>
 <ul>
-<li>Task switch on <strong>x86_64</strong> and on <strong>ia64</strong> is fun :)</li>
-<li>On <strong>x86_64</strong> implementation of <strong>ptrace(PTRACE_GETREGS, …)</strong>
-is very straightforward: almost a memcpy from predefined
-location.</li>
-<li>On <strong>ia64</strong> <strong>ptrace(PTRACE_GETREGS, …)</strong> requires many
-moving parts:
+<li>Task switch on <code>x86_64</code> and on <code>ia64</code> is fun :)</li>
+<li>On <code>x86_64</code> implementation of <code>ptrace(PTRACE_GETREGS, ...)</code> is
+very straightforward: almost a <code>memcpy()</code> from predefined location.</li>
+<li>On <code>ia64</code> <code>ptrace(PTRACE_GETREGS, ...)</code> requires many moving
+parts:
 <ul>
-<li>call stack unwinder for kernel (involving linker
-scripts to define <strong>__end_unwind</strong> and <strong>__start_unwind</strong>)</li>
-<li>bytecode generator and bytecode interpreter to speedup
-unwinding for every <strong>ptrace()</strong> call</li>
+<li>call stack unwinder for kernel (involving linker scripts to define
+<code>__end_unwind</code> and <code>__start_unwind</code>)</li>
+<li>byte code generator and byte code interpreter to speed up unwinding for
+every <code>ptrace()</code> call</li>
 </ul></li>
 <li>Unaligned load of register-sized value is a tricky and fragile
 business</li>

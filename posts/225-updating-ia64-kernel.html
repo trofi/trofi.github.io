@@ -29,94 +29,100 @@
                 <div class="info">August  7, 2021</div>
             
 
-            <p>Gentoo has one alive <strong>ia64</strong> machine: <strong>HP rx3600</strong> nicknamed <strong>guppy</strong>.
-It’s an old box, and yet it’s specs are not too different from my
-10 years old desktop: 32 GB RAM, 2 cores x 2 hyperthreads each.</p>
-<p>Thus it’s suitable for on-host debugging of all sorts up to building
-and running <strong>gcc</strong> testsuites or remote X client apps like pre-rust
-version of firefox.</p>
-<h1 id="kernel-upgrade">kernel upgrade</h1>
+            <p><code>gentoo</code> has one alive <code>ia64</code> machine: <code>HP rx3600</code> nicknamed
+<code>guppy</code>. It’s an old box, and yet it’s specs are not too different
+from my 10 years old desktop: 32 GB RAM, 2 cores x 2 hyperthreads each.
+Thus it’s suitable for on-host debugging of all sorts up to building
+and running <code>gcc</code> test suites or remote X client apps like pre-rust
+version of <code>firefox</code>.</p>
+<h2 id="kernel-upgrade">kernel upgrade</h2>
 <p>There were a few major upstream kernel changes that made me a bit
-nervous to update kernel on that machine from <strong>4.9</strong>:</p>
+nervous to update kernel on that machine from <code>4.9</code>:</p>
 <ul>
-<li><strong>cciss</strong> SCSI driver was removed in favour of <strong>hpsa</strong> one
-(which among other things changed <strong>/dev/</strong> paths for device)</li>
-<li>large scale memory management cleanups broke kernel build on
-<strong>ia64</strong> for some memory models and that slipped to release tarball
-prompting questions of <strong>ia64</strong> support status.</li>
+<li><code>cciss</code> SCSI driver was removed in favor of <code>hpsa</code> one (which
+among other things changed <code>/dev/</code> paths for device)</li>
+<li>large scale memory management cleanups broke kernel build on <code>ia64</code>
+for some memory models and that slipped to release tarball prompting
+questions of <code>ia64</code> support status.</li>
 </ul>
-<p>Fast forward a few years and we were running <strong>4.9</strong> kernel in 2021.
-Whoops. No fancy new <strong>statx()</strong> syscalls or modern container whistles.</p>
-<p>Also John Paul Adrian started asking question if Gentoo were seeing
-NUMA-related boot failures. I decided to upgrade a kernel to one of
-recent releases.</p>
-<p>First I attempted to upgrade straight to then most recent <strong>5.10</strong> (it
-took me a while to write about it). Built <strong>5.10</strong> and booted
-it without any problems (<strong>grub</strong>++ for ease of messing with <strong>root=</strong>
-over BMC). I rebuilt a few hevyweight packages to check basic ability
-to roll back if needed. No problems! Phew! End of the story!</p>
+<p>Fast forward a few years and we were running <code>4.9</code> kernel in 2021.
+Whoops. No fancy new <code>statx()</code> syscalls or modern container whistles.
+Also John Paul Adrian started asking question if <code>gentoo</code> were seeing
+<code>NUMA</code>-related boot failures.</p>
+<p>I decided to upgrade a kernel to one of
+recent releases.
+First I attempted to upgrade straight to then most recent <code>5.10</code> (it
+took me a while to write about it). Built <code>5.10</code> and booted it without
+any problems (<code>grub</code>++ for ease of messing with <code>root=</code> over <code>BMC</code>). I
+rebuilt a few heavyweight packages to check basic ability to roll back if
+needed. No problems! Phew! End of the story!</p>
 <p>Or not.</p>
-<h1 id="the-quest-of-strace">the quest of strace</h1>
-<p>A few days after kernel upgrade Dmitry (<strong>strace</strong> upstream maintainer)
-reported a bug uncovered by <strong>strace</strong> testsuite: <a href="https://bugs.gentoo.org/769614">https://bugs.gentoo.org/769614</a>.
-Many tests started failing for invalid syscall parameters as seen by
-<strong>ptrace()</strong>.</p>
-<p>Dmitry noticed that sometimes syscall parameters were off-by-one:</p>
+<h2 id="the-quest-of-strace">the quest of <code>strace</code></h2>
+<p>A few days after kernel upgrade Dmitry (<code>strace</code> upstream maintainer)
+reported a bug uncovered by <code>strace</code> test suite:
+<a href="https://bugs.gentoo.org/769614" class="uri">https://bugs.gentoo.org/769614</a>. Many tests started failing for invalid
+syscall parameters as seen by <code>ptrace()</code>.
+Dmitry noticed that sometimes syscall parameters were off-by-one:</p>
 <ul>
 <li>expected: <code>sys_foo(a1,a2,a3,...)</code></li>
 <li>observed: <code>sys_foo(__NR_foo,a1,a2,a3,...)</code></li>
 </ul>
 <p>Looks like a trivial bug, right?</p>
-<p>Quiz: pause here for a minute and try to guess the nature of this bug.
+<p><strong>Quiz</strong>: pause here for a minute and try to guess the nature of this bug.
 It’s ok (and encouraged!) not to have any prior knowledge of kernels,
-<strong>ptrace()</strong> facility or <strong>ia64</strong> architecture.</p>
+<code>ptrace()</code> facility or <code>ia64</code> architecture.</p>
 <p>What kind of kernel change could trigger failures and what was the real
 cause of the observed discrepancy? A few distractors to chose for you:</p>
 <ul>
-<li>mechanical coding bug in recent kernel (like using wrong register during
-unwind)</li>
-<li>subtle failed assumption like stack handling direction or syscall argument
-passing</li>
-<li>a dormant <strong>strace</strong> bug</li>
+<li>mechanical coding bug in recent kernel (like using wrong register
+during unwind)</li>
+<li>subtle failed assumption like stack handling direction or syscall
+argument passing</li>
+<li>a dormant <code>strace</code> bug</li>
 <li>CPU hardware failure</li>
 <li>something else</li>
 </ul>
-<h1 id="the-clues">the clues</h1>
-<p>At first I thought it to be a simpler form of
-<a href="../posts/211-page-fault-handling-on-alpha.html">alpha’s off-by-one bug</a> where we
-encoded incorrect offsets to <strong>struct pt_regs</strong>.</p>
-<p>The fun and scary thing about <strong>ia64</strong> compared to many other arches
-is that it’s use of <strong>pt_regs</strong> is a lot more <a href="../posts/210-ptrace-and-accidental-boot-fix-on-ia64.html">involved</a>:
-register access requires kernel stack unwindind up to the userspace boundary.
-But complex unwinnding also happens to make it more uniform compared to other arches:
-most of the time you just use slow unwinder instead of hardcoding anything
-fast or special cased.</p>
-<p>I hoped the fix would be a simpler variant of the alpha bug. With that bit of
-experience I hoped it would help.</p>
-<p>The presence of unexpected syscall number in syscall parameters for
-<strong>ptrace()</strong> bothered me a bit. Why does it appear in such a strange
-place?</p>
-<p>I skimmed through <strong>arch/ia64</strong> kernel commits in <strong>4.9..5.10</strong> range related
-to <strong>ptrace()</strong>, found 5 of them, stared a lot at them and did not find anything
-suspicious.</p>
-<p>Then I skimmed through kernel’s side of intercepting syscall parameters. I looked
-at a <strong>break</strong> trapping instruction handling. <strong>break</strong> instruction is similar
-to <strong>x86</strong>’s <strong>int</strong>: it trigger interrupt style switch to kernel context. With
-a caveat that everything on <strong>ia64</strong> is special.</p>
-<p><strong>ptrace()</strong> handling path looked straightforward:</p>
+<h2 id="the-clues">the clues</h2>
+<p>At first I thought it to be a simpler form of <a href="../posts/211-page-fault-handling-on-alpha.html">alpha’s off-by-one
+bug</a> where we encoded
+incorrect offsets to <code>struct pt_regs</code>.
+The fun and scary thing about <code>ia64</code> compared to many other arches is
+that it’s use of <code>pt_regs</code> is a lot more
+<a href="../posts/210-ptrace-and-accidental-boot-fix-on-ia64.html">involved</a>:
+register access requires kernel stack unwindind up to the user space
+boundary. But complex unwinding also happens to make it more uniform
+compared to other arches: most of the time you just use slow unwinder
+instead of hardcoding anything fast or special cased.
+I hoped the fix would be a simpler variant of the <code>alpha</code> bug. With that
+bit of experience I hoped it would help.
+The presence of unexpected syscall number in syscall parameters for
+<code>ptrace()</code> bothered me a bit. Why does it appear in such a strange
+place?
+I skimmed through <code>arch/ia64</code> kernel commits in <code>4.9..5.10</code> range
+related to <code>ptrace()</code>, found 5 of them, stared a lot at them and did
+not find anything suspicious.
+Then I skimmed through kernel’s side of intercepting syscall
+parameters. I looked at a <code>break</code> trapping instruction handling.
+<code>break</code> instruction is similar to <code>x86</code> <code>int</code>: it trigger
+interrupt style switch to kernel context. With a caveat that everything
+on <code>ia64</code> is special.
+Looking at the source code <code>ptrace()</code> handling path looked
+straightforward:</p>
 <p>Tracee:</p>
 <ul>
-<li>entry point is <strong>ENTRY(break_fault)</strong> (at <strong>arch/ia64/kernel/ivt.S</strong>)
+<li>entry point is <code>ENTRY(break_fault)</code> (at <code>arch/ia64/kernel/ivt.S</code>)
 <ul>
-<li>save only part of <strong>struct pt_regs</strong></li>
-<li><strong>GLOBAL_ENTRY(ia64_trace_syscall)</strong> (at <strong>arch/ia64/kernel/entry.S</strong>):
+<li>save only part of <code>struct pt_regs</code></li>
+<li><code>GLOBAL_ENTRY(ia64_trace_syscall)</code> (at
+<code>arch/ia64/kernel/entry.S</code>):
 <ul>
-<li><strong>PT_REGS_SAVES</strong>: create new frame worth of <strong>struct pt_regs</strong></li>
-<li><strong>f6-f11</strong> FPUs regs are saved</li>
-<li><strong>syscall_trace_enter</strong> (asm-&gt;C boundary is crossed here, registers are
-passed as arguments) (at <strong>arch/ia64/kernel/ptrace.c</strong>)
+<li><code>PT_REGS_SAVES</code>: create new frame worth of <code>struct pt_regs</code></li>
+<li><code>f6-f11</code> <code>FPU</code> registers are saved</li>
+<li><code>syscall_trace_enter</code> (<code>asm-&gt;C</code> boundary is crossed here,
+registers are passed as arguments) (at
+<code>arch/ia64/kernel/ptrace.c</code>)
 <ul>
-<li><strong>tracehook_report_syscall_entry</strong> communicates state to tracer</li>
+<li><code>tracehook_report_syscall_entry</code> communicates state to tracer</li>
 <li>tracer resumes and gets data</li>
 </ul></li>
 </ul></li>
@@ -124,21 +130,21 @@ passed as arguments) (at <strong>arch/ia64/kernel/ptrace.c</strong>)
 </ul>
 <p>Tracer:</p>
 <ul>
-<li><strong>ptrace_get_syscall_info_entry</strong>
+<li><code>ptrace_get_syscall_info_entry</code>
 <ul>
-<li><strong>info-&gt;entry.nr = syscall_get_nr(child, regs);</strong> // regs-&gt;r15</li>
+<li><code>info-&gt;entry.nr = syscall_get_nr(child, regs);</code> // regs-&gt;r15</li>
 </ul></li>
 </ul>
-<p>The complication here is to find out which of two paths is buggy:
-tracer path or tracee path? Tracee path looks more involved and
-has a higher chance to fail. I needed to poke at a real example
-to match expected and observed states.</p>
-<p>I attempted to reproduce the bug on <strong>strace</strong> test suite and
-instantly got the same result. Yay! Sharing the machine with
-the reporter is very convenient :)</p>
-<p>I started sprinkling <strong>printk()</strong> statement all over the kernel.
-Most interesting result was for <strong>syscall_get_set_args_cb()</strong> in
-<strong>arch/ia64/kernel/ptrace.c</strong>.</p>
+<p>The complication here is to find out which of two paths is buggy: tracer
+path or tracee path? Tracee path looks more involved and has a higher
+chance to fail. I needed to poke at a real example to match expected and
+observed states.
+I attempted to reproduce the bug on <code>strace</code> test suite and instantly
+got the same result. Yay! Sharing the machine with the reporter is very
+convenient :)
+I started sprinkling <code>printk()</code> statement all over the kernel. Most
+interesting result was for <code>syscall_get_set_args_cb()</code> in
+<code>arch/ia64/kernel/ptrace.c</code>.</p>
 <pre><code>syscall_get_set_args_cb: krbs: 0xe000000103800ec0
 syscall_get_set_args_cb: ndirty: 0x0
 syscall_get_set_args_cb: count: 6
@@ -154,24 +160,25 @@ syscall_get_set_args_cb:args[2]: 0xbad1fed1
 syscall_get_set_args_cb:args[3]: 0xbad2fed2
 syscall_get_set_args_cb:args[4]: 0xbad3fed3
 syscall_get_set_args_cb:args[5]: 0xbad4fed4</code></pre>
-<p>Here <strong>krbs</strong> is kernel’s register backing store in memory.</p>
-<p><strong>RBS</strong> memory area (pointed at <strong>ar.bsp</strong> and <strong>ar.bspstore</strong> registers)
-is where rotating registers are spilled on user’s request or automatically.
-In case of <strong>ptrace()</strong> registers are spilled on kernel’s request with
-<strong>flushrs</strong> instruction to make sure we can read them from memory.</p>
-<p>Normally <strong>krbs</strong> should contain syscall arguments and maybe
-local function variables. <strong>args</strong> array is actual syscall args.
-We still see <strong>0x402</strong> (<strong>__NR_read</strong>) as first argument. That is probably
-a manifestation of the bug we trace.</p>
-<p>Fun fact: for some reason <strong>ia64</strong> linux syscalls start from 1024
-(<strong>0x400</strong>). Perhaps lower numbers are reserved for binary
-compatibility with <strong>HPUX</strong>?</p>
-<h1 id="bisecting-the-kernel">bisecting the kernel</h1>
+<p>Here <code>krbs</code> is kernel’s register backing store in memory.
+<code>RBS</code> memory area (pointed at <code>ar.bsp</code> and <code>ar.bspstore</code>
+registers) is where rotating registers are spilled on user’s request or
+automatically. In case of <code>ptrace()</code> registers are spilled on
+kernel’s request with <code>flushrs</code> instruction to make sure we can read
+them from memory.
+Normally <code>krbs</code> should contain syscall arguments and maybe local
+function variables. <code>args</code> array is actual syscall arguments. We still
+see <code>0x402</code> (<code>__NR_read</code>) as first argument. That is probably a
+manifestation of the bug we trace.
+Fun fact: for some reason <code>ia64</code> <code>linux</code> syscalls start from 1024
+(<code>0x400</code>). Perhaps lower numbers are reserved for binary compatibility
+with <code>HPUX</code>?</p>
+<h2 id="bisecting-the-kernel">bisecting the kernel</h2>
 <p>I still did not get anything obvious. Why did syscall number kept
-getting in the list? I decided to bisect the kernel.</p>
-<p>I rebooted back to <strong>4.9</strong> kernel and made sure that bug disappeared.
-Ok, that meant it’s not at least some parallel userspace update.</p>
-<p>I bisected the kernel down to the following commit:</p>
+getting in the list? I decided to bisect the kernel.
+I rebooted back to <code>4.9</code> kernel and made sure that bug disappeared.
+Ok, that meant it’s not at least some parallel user space update.
+I bisected the kernel down to the following commit:</p>
 <pre><code>commit 201766a20e30f982ccfe36bebfad9602c3ff574a
 Author: Elvira Khabirova &lt;lineprinter@altlinux.org&gt;
 Date:   Tue Jul 16 16:29:42 2019 -0700
@@ -186,103 +193,112 @@ Date:   Tue Jul 16 16:29:42 2019 -0700
  kernel/ptrace.c                               | 101 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
  tools/testing/selftests/seccomp/seccomp_bpf.c |  13 +++++++++----
  4 files changed, 150 insertions(+), 8 deletions(-)</code></pre>
-<p>Tl;DR is: it’s a new <strong>ptrace()</strong> API to fetch traced syscall arguments.</p>
-<p>This means it’s not strictly a regression of existing code:</p>
+<p>Tl;DR is: it’s a new <code>ptrace()</code> API to fetch traced syscall
+arguments.
+This means it’s not strictly a regression of existing code:</p>
 <ul>
-<li>before the kernel change <strong>strace</strong> used to manually
-extract syscall arguments from <strong>ptrace(PTRACE_GETREGS)</strong>
-knowing the syscall ABI for an architecture</li>
-<li>after the change it calls <strong>ptrace(PTRACE_GET_SYSCALL_INFO)</strong> and gets
-all the arguments as a nice portable array. No need to deal with register
-numbers!</li>
+<li>before the kernel change <code>strace</code> used to manually extract syscall
+arguments from <code>ptrace(PTRACE_GETREGS)</code> knowing the syscall ABI for
+an architecture</li>
+<li>after the change it calls <code>ptrace(PTRACE_GET_SYSCALL_INFO)</code> and gets
+all the arguments as a nice portable array. No need to deal with
+register numbers!</li>
 </ul>
-<p>That looked even more confusing! Arch-specific <strong>ptrace()</strong> code was not changed
-in that commit and yet some part of <strong>ptrace()</strong> is somehow broken.
-It meant that something was probably broken forever.</p>
-<p>What next? I had to fall back to debugging the issue from the first
+<p>That looked even more confusing! Arch-specific <code>ptrace()</code> code was not
+changed in that commit and yet some part of <code>ptrace()</code> is somehow
+broken. It meant that something was probably broken forever.
+What next? I had to fall back to debugging the issue from the first
 principles: carefully trace syscall entry into the kernel to debug
-<strong>ptrace()</strong> hook being called and check how syscall arguments are
-extracted.</p>
-<p>Sounds tedious but straightforward.</p>
-<h1 id="syscalls-on-ia64">syscalls on ia64</h1>
-<p>So what IS the syscall ABI on <strong>ia64</strong>? I never looked into too much details
-besides knowing that “it looks very close to calling a C function”. Is it
-true though?</p>
-<p>Actually, <strong>ia64</strong> has not one but two close but different syscall ABIs:</p>
+<code>ptrace()</code> hook being called and check how syscall arguments are
+extracted.
+Sounds tedious but straightforward.</p>
+<h2 id="syscalls-on-ia64">syscalls on <code>ia64</code></h2>
+<p>So what IS the syscall ABI on <code>ia64</code>? I never looked into too much
+details besides knowing that “it looks very close to calling a C
+function”. Is it true though?
+Actually, <code>ia64</code> has not one but two close but different syscall ABIs:</p>
 <ul>
-<li><strong>break</strong> instruction based kernel entry (similar to interrupt trap)</li>
-<li><strong>epc</strong> magic instruction based (also called <strong>fsys</strong> mode, “fast syscall”)</li>
+<li><code>break</code> instruction based kernel entry (similar to interrupt trap)</li>
+<li><code>epc</code> magic instruction based (also called <code>fsys</code> mode, “fast
+syscall”)</li>
 </ul>
-<p><strong>break</strong> ABI is roughly the following:</p>
+<p><code>break</code> ABI is roughly the following:</p>
 <ul>
-<li>syscall number is placed into <strong>r15</strong> (non-rotating register)</li>
-<li>syscall arguments go into rotating registers for output (not input or local)</li>
-<li><strong>break 0x10000</strong> is executed to switch into kernel mode via
-<strong>break</strong> interrupt vector <strong>ENTRY(break_fault)</strong> (at arch/ia64/kernel/ivt.S)</li>
+<li>syscall number is placed into <code>r15</code> (non-rotating register)</li>
+<li>syscall arguments go into rotating registers for output (not input or
+local)</li>
+<li><code>break 0x10000</code> is executed to switch into kernel mode via <code>break</code>
+interrupt vector <code>ENTRY(break_fault)</code> (at <code>arch/ia64/kernel/ivt.S</code>)</li>
 </ul>
-<p>Here argument layout for syscall matches argument layour for a standard C function
-on <strong>i64</strong>. Only syscall number is passed via unusual <strong>r15</strong>.</p>
-<p><strong>glibc</strong> syscall wrapper fully illustrates typical call:</p>
-<pre><code>ENTRY(syscall)
-      /* We are called like so:
-         {out0,out1,...,out6} registers -&gt; {NR, arg1, ..., arg6}
-         Shift the register window so that {out1...out6} are available
-         in {out0...out5} like the kernel syscall handler expects.  */
-      alloc r2=ar.pfs,1,0,8,0
-      mov r15=r32             /* syscall number */
-      break __IA64_BREAK_SYSCALL
-      ;;
-      cmp.ne p6,p0=-1,r10     /* r10 = -1 on error */
-(p6)  ret
-      br.cond.spnt.few __syscall_error</code></pre>
-<p>Not to go into too many details <strong>syscall’s</strong> proto is <strong>syscall(NR, arg1, arg2, arg3,…,arg8)</strong>
-and kernel handles it as <strong>sys_NR(arg1,arg2,arg3,…,arg8)</strong>.</p>
-<p>At this point I thought, “aha! off-by-one!”. But tracing through all the paths
-of <strong>ia64</strong> assembly I was not able to find any problems. I had to read on stack
-handling in branch calls and interrupts in excellent software development intel’s
-manual to make sure I don’t miss any special cases. Nothing stood out.</p>
-<p>Adding more debugging I realized <strong>break</strong> mechanism was not used at all
+<p>Here argument layout for syscall matches argument layout for a standard
+<code>c</code> function on <code>i64</code>. Only syscall number is passed via unusual
+<code>r15</code>.
+<code>glibc</code> syscall wrapper fully illustrates typical call:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span><span class="op">(</span>syscall<span class="op">)</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>      /* We are called like so<span class="op">:</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>         <span class="op">{</span>out0<span class="op">,</span>out1<span class="op">,...,</span>out6<span class="op">}</span> registers <span class="op">-&gt;</span> <span class="op">{</span>NR<span class="op">,</span> arg1<span class="op">,</span> <span class="op">...,</span> arg6<span class="op">}</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>         Shift the register window so that <span class="op">{</span>out1<span class="op">...</span>out6<span class="op">}</span> are available</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>         <span class="bu">in</span> <span class="op">{</span>out0<span class="op">...</span>out5<span class="op">}</span> like the kernel syscall handler expects<span class="op">.</span>  <span class="op">*/</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      alloc r2<span class="op">=</span>ar<span class="op">.</span>pfs<span class="op">,</span><span class="dv">1</span><span class="op">,</span><span class="dv">0</span><span class="op">,</span><span class="dv">8</span><span class="op">,</span><span class="dv">0</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>      <span class="bu">mov</span> <span class="kw">r15</span><span class="op">=</span>r32             <span class="op">/*</span> syscall number <span class="op">*/</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>      <span class="pp">break</span> __IA64_BREAK_SYSCALL</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      <span class="co">;;</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>      <span class="bu">cmp</span><span class="op">.</span>ne p6<span class="op">,</span>p0<span class="op">=-</span><span class="dv">1</span><span class="op">,</span><span class="kw">r10</span>     <span class="op">/*</span> <span class="kw">r10</span> <span class="op">=</span> <span class="op">-</span><span class="dv">1</span> on error <span class="op">*/</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>(p6<span class="op">)</span>  ret</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>      br<span class="op">.</span>cond<span class="op">.</span>spnt<span class="op">.</span>few __syscall_error</span></code></pre></div>
+<p>Not to go into too many details <code>syscall</code> prototype is <code>syscall(NR, arg1, arg2, arg3, ..., arg8)</code> and kernel handles it as
+<code>sys_NR(arg1,arg2,arg3,...,arg8)</code>.</p>
+<p>At this point I thought, “aha! off-by-one!”. But tracing through all
+the paths of <code>ia64</code> assembly I was not able to find any problems. I
+had to read on stack handling in branch calls and interrupts in
+excellent software development intel’s manual to make sure I don’t
+miss any special cases. Nothing stood out.
+Adding more debugging I realized <code>break</code> mechanism was not used at all
 in failing cases!</p>
-<p>After a bit of debugging I discovered that most of glibc syscalls are
-actually done via <strong>epc</strong> (not <strong>break</strong>) mechanism! Gah! I never had
-a chance to have a closer look at it and always assumed it’s an unimplemented
-feature. So much for being a local expert in <strong>ia64-linux</strong> :D</p>
-<p><strong>epc</strong> ABI is unusual: <strong>epc</strong> instruction (Enter Privileged Code)
-itself does only one thing: it changes privileges of current execution from
-userspace to kernel level and executes next instruction right after it.
-This means no context switch, no traps executed. It’s almost like a <strong>nop</strong>.
-next few instructions after <strong>epc</strong> need to manually perform all the necessary
-context operations. Which might be none for simplest syscalls like <strong>getpid()</strong>!</p>
-<p>If userspace could call <strong>epc</strong> from anywhere that would be a good way
-to negate any kernel protection. Thus CPU has a few restrictions: code page
-with <strong>epc</strong> needs to be marked as privileged for MMU so kernel could provide
-safe code that is not easy to turn into an arbitrry privilege escalation</p>
-<p>In practice kernel provides such a page as part of <strong>vDSO</strong>. <strong>linux</strong> calls it
-<strong>GATE</strong> page. <strong>glibc</strong> finds the <strong>vDSO</strong> out and uses it as syscall
-implementation. Linux calls the whole ABI an <strong>fsys</strong> mechanism:
-<a href="https://www.kernel.org/doc/html/latest/ia64/fsys.html">https://www.kernel.org/doc/html/latest/ia64/fsys.html</a></p>
-<p>The <strong>__kernel_syscall_via_epc()</strong> kernel entry in <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/gate.S#n300">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/gate.S#n300</a>
+<p>After a bit of debugging I discovered that most of <code>glibc</code> syscalls are
+actually done via <code>epc</code> (not <code>break</code>) mechanism! Gah! I never had a
+chance to have a closer look at it and always assumed it’s an
+unimplemented feature. So much for being a local expert in
+<code>ia64-linux</code> :D</p>
+<p><code>epc</code> ABI is unusual: <code>epc</code> instruction (Enter Privileged Code)
+itself does only one thing: it changes privileges of current execution
+from user space to kernel level and executes next instruction right after
+it. This means no context switch, no traps executed. It’s almost like a
+<code>nop</code>. Next few instructions after <code>epc</code> need to manually perform
+all the necessary context operations. Which might be none for simplest
+syscalls like <code>getpid()</code>!
+If user space could call <code>epc</code> from anywhere that would be a good way
+to negate any kernel protection. Thus CPU has a few restrictions: code
+page with <code>epc</code> needs to be marked as privileged for MMU so kernel
+could provide safe code that is not easy to turn into an arbitrary
+privilege escalation.
+In practice kernel provides such a page as part of <code>vDSO</code>. <code>linux</code>
+calls it <code>GATE</code> page. <code>glibc</code> finds the <code>vDSO</code> out and uses it as
+syscall implementation. Linux calls the whole ABI an <code>fsys</code> mechanism:
+<a href="https://www.kernel.org/doc/html/latest/ia64/fsys.html" class="uri">https://www.kernel.org/doc/html/latest/ia64/fsys.html</a>
+The <code>__kernel_syscall_via_epc()</code> kernel entry in
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/gate.S#n300" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/ia64/kernel/gate.S#n300</a>
 looks roughly like that:</p>
-<pre><code>GLOBAL_ENTRY(__kernel_syscall_via_epc)
-  .prologue
-  .altrp b6
-  .body
-  /*
-   * Note: the kernel cannot assume that the first two instructions in this
-   * bundle get executed.  The remaining code must be safe even if
-   * they do not get executed.
-   */
-  adds r17=-1024,r15       // A
-  mov r10=0                // A default to successful syscall execution
-  epc                      // B causes split-issue
-  ;;
-  RSM_PSR_BE_I(r20, r22)   // M2 (5 cyc to srlz.d)
-  LOAD_FSYSCALL_TABLE(r14) // X
-  ...</code></pre>
-<h1 id="the-argument-layout-bug">the argument layout bug</h1>
-<p>Digging through <strong>break</strong> vs. <strong>epc</strong> mechanism I found that <strong>ptrace()</strong>
-gets the syscall register frame in slightly different states:</p>
-<p>for <strong>break</strong> the layout is:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>GLOBAL_ENTRY<span class="op">(</span>__kernel_syscall_via_epc<span class="op">)</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  .prologue</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  .altrp b6</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  .body</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  /*</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>   * Note<span class="op">:</span> the kernel cannot assume that the first two instructions in this</span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>   * bundle get executed<span class="op">.</span>  The remaining code must be safe even if</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>   * they do <span class="op">not</span> get executed<span class="op">.</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>   */</span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  adds r17<span class="op">=-</span><span class="dv">1024</span><span class="op">,</span><span class="kw">r15</span>       <span class="op">//</span> A</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>  <span class="bu">mov</span> <span class="kw">r10</span><span class="op">=</span><span class="dv">0</span>                <span class="op">//</span> A default to successful syscall execution</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>  epc                      <span class="op">//</span> B causes split<span class="op">-</span>issue</span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">;;</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>  RSM_PSR_BE_I<span class="op">(</span>r20<span class="op">,</span> r22<span class="op">)</span>   <span class="op">//</span> M2 <span class="op">(</span><span class="dv">5</span> cyc to srlz<span class="op">.</span>d<span class="op">)</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>  LOAD_FSYSCALL_TABLE<span class="op">(</span><span class="kw">r14</span><span class="op">)</span> <span class="op">//</span> X</span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
+<h2 id="the-argument-layout-bug">the argument layout bug</h2>
+<p>Digging through <code>break</code> vs. <code>epc</code> mechanism I found that
+<code>ptrace()</code> gets the syscall register frame in slightly different
+states. For <code>break</code> the layout is:</p>
 <pre><code>outputs:
 - arg8
 - arg7
@@ -295,7 +311,7 @@ locals:
 
 inputs:
 - NR</code></pre>
-<p><strong>epc</strong>:</p>
+<p>For <code>epc</code>:</p>
 <pre><code>outputs:
 - arg8
 - arg7
@@ -308,35 +324,37 @@ locals:
 
 inputs:
 &lt;none&gt;</code></pre>
-<p>Both are perfectly valid states prepared to pass arguments to callee function.
-And both require a <strong>br.call</strong> instruction to rotate <strong>outputs</strong> to the <strong>inputs</strong>
-of callee target.</p>
-<p>In normal syscall handling case (without <strong>ptrace()</strong> attached) <strong>br.call</strong>
-is called for passing the control to syscall handler written in C. All arguments
-are present in their <strong>r32,r33,…</strong> locations.</p>
-<p>In tracing case <strong>ptrace()</strong> is executed right before <strong>br.call</strong>. There we
-need to inspect syscall arguments (and possibly modify on user’s request)
-in <strong>outputs regs</strong> part of the active register set.</p>
-<p>The bug was in the fact that <strong>ia64</strong>-specific <strong>ptrace()</strong> code assumed that
-locals are never present (as in <strong>break</strong> <strong>glibc</strong>’s wrapper case).</p>
-<p>Once we know the problem the fix is easy: skip locals and always use <strong>output</strong>
-regs when inspecting syscall arguments:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0ceb1ace4a2778e34a5414e5349712ae4dc41d85">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0ceb1ace4a2778e34a5414e5349712ae4dc41d85</a></p>
-<p>Tl;DR of a patch: <strong>ia64</strong> has a <strong>cr.ifs</strong> register that tells us how many
-inputs, local and output regusters are used in current function (register’s
-value is maintained by <strong>alloc</strong> and <strong>br.call</strong> / <strong>br.ret</strong> instructions).
-Before the change we collected both <strong>locals</strong> + <strong>outputs</strong>, after the change - only <strong>outputs</strong>.</p>
+<p>Both are perfectly valid states prepared to pass arguments to callee
+function. And both require a <code>br.call</code> instruction to rotate
+<code>outputs</code> to the <code>inputs</code> of callee target.
+In normal syscall handling case (without <code>ptrace()</code> attached)
+<code>br.call</code> is called for passing the control to syscall handler written
+in <code>c</code>. All arguments are present in their <code>r32,r33,...</code> locations.
+In tracing case <code>ptrace()</code> is executed right before <code>br.call</code>. There
+we need to inspect syscall arguments (and possibly modify on user’s
+request) in <code>outputs</code> registers part of the active register set.
+The bug was in the fact that <code>ia64</code>-specific <code>ptrace()</code> code assumed
+that locals are never present (as in <code>break</code> <code>glibc</code> wrapper case).
+Once we know the problem the fix is easy: skip locals and always use
+<code>output</code> registers when inspecting syscall arguments:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0ceb1ace4a2778e34a5414e5349712ae4dc41d85" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0ceb1ace4a2778e34a5414e5349712ae4dc41d85</a></p>
+<p>Tl;DR of a patch: <code>ia64</code> has a <code>cr.ifs</code> register that tells us how
+many inputs, local and output registers are used in current function
+(register’s value is maintained by <code>alloc</code> and <code>br.call</code> /
+<code>br.ret</code> instructions). Before the change we collected both
+<code>locals</code> + <code>outputs</code>, after the change - only <code>outputs</code>.</p>
 <p>Are we done?</p>
-<h1 id="the-error-handling-bug">the error handling bug</h1>
-<p>After the above patch applied I ran the <strong>strace</strong> test suite again.
-It was a lot healtier with just a few failures. This time the error was in
-syscall exit code (also new addition) of <strong>ptrace(PTRACE_SYSCALL_INFO_EXIT)</strong>.
-This time sign of <strong>errno</strong> error was wrong.</p>
-<p>Here we have a chance to see how <strong>ia64</strong> syscalls return status back to userspace:
-two fixed registers are used for that:</p>
+<h2 id="the-error-handling-bug">the error handling bug</h2>
+<p>After the above patch applied I ran the <code>strace</code> test suite again. It
+was a lot healthier with just a few failures. This time the error was in
+syscall exit code (also new addition) of
+<code>ptrace(PTRACE_SYSCALL_INFO_EXIT)</code>. This time sign of <code>errno</code> error
+was wrong.
+Here we have a chance to see how <code>ia64</code> syscalls return status back to
+user space: two fixed registers are used for that:</p>
 <ul>
-<li><strong>r10</strong> for fail-or-not status</li>
-<li><strong>r8</strong> for status-or-error.</li>
+<li><code>r10</code> for fail-or-not status</li>
+<li><code>r8</code> for status-or-error.</li>
 </ul>
 <p>Here is the original code to set and get the status:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">long</span> syscall_get_error<span class="op">(</span><span class="kw">struct</span> task_struct <span class="op">*</span>task<span class="op">,</span></span>
@@ -365,18 +383,18 @@ two fixed registers are used for that:</p>
 <span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
 <span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>6 lines of code. Simple, eh? Can you spot the error?</p>
-<p>Note how <strong>syscall_get_error()</strong> does not remove negation
-added in <strong>syscall_set_return_value()</strong>.</p>
-<p>The fix was obvious:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=61bf318eac2c13356f7bd1c6a05421ef504ccc8a">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=61bf318eac2c13356f7bd1c6a05421ef504ccc8a</a></p>
-<p>Surely done now?</p>
-<h1 id="signal-handling-bug">signal handling bug</h1>
-<p>A few more test failures revealed another fun bug: signal handlers return
-wrong signal masks.</p>
-<p>In this case failed tests complained about status of blocked signals
-in tracing <strong>rt_sigreturn()</strong> syscall.</p>
-<p>When signal is delivered to userspace processes memory stack gets an extra
-struct that describes delivered signal and a bit of context (on any arch AFAIU):</p>
+<p>Note how <code>syscall_get_error()</code> does not remove negation added in
+<code>syscall_set_return_value()</code>. The fix was obvious:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=61bf318eac2c13356f7bd1c6a05421ef504ccc8a" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=61bf318eac2c13356f7bd1c6a05421ef504ccc8a</a>
+Surely done now?</p>
+<h2 id="signal-handling-bug">signal handling bug</h2>
+<p>A few more test failures revealed another fun bug: signal handlers
+return wrong signal masks.
+In this case failed tests complained about status of blocked signals in
+tracing <code>rt_sigreturn()</code> syscall.
+When signal is delivered to user space processes memory stack gets an
+extra struct that describes delivered signal and a bit of context (on
+any arch AFAIU):</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> sigframe <span class="op">{</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> arg0<span class="op">;</span> <span class="co">/* signum */</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> arg1<span class="op">;</span> <span class="co">/* siginfo pointer */</span></span>
@@ -391,21 +409,23 @@ struct that describes delivered signal and a bit of context (on any arch AFAIU):
 <span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
 <span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>    sigset_t sc_mask<span class="op">;</span> <span class="co">/* signal mask to restore after handler returns */</span></span>
 <span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
-<p>Somehow <strong>sc_mask</strong> had unexpected value. Was it incorrectly populated by kernel?</p>
-<p><strong>ia64</strong> has two userspace stacks:</p>
+<p>Somehow <code>sc_mask</code> had unexpected value. Was it incorrectly populated
+by kernel? <code>ia64</code> has two user space stacks:</p>
 <ul>
-<li>usual C memory stack (tracked by <strong>r12</strong> register), userspace usually
-keps there function-local buffers, variables that don’t fit in registers, etc.</li>
-<li>register backing store stack (<strong>ar.bsp</strong> and friends point to it), this area is
-managed by CPU to maintain rotating registers contents on <strong>br.call</strong> / <strong>br.ret</strong>.
-It’s actually quite hard to interpret it’s contents even in steady state due to
-fancy alignment restrictions, boundary framing with NaT marking. It’s memory
-is also not synchronized with CPUs view of that memory to speed things up. You
-almost never want to mess with it for something like passing a struct around.</li>
+<li>usual <code>c</code> memory stack (tracked by <code>r12</code> register), user space usually
+keeps there function-local buffers, variables that don’t fit in
+registers, etc.</li>
+<li>register backing store stack (<code>ar.bsp</code> and friends point to it),
+this area is managed by CPU to maintain rotating registers contents on
+<code>br.call</code> / <code>br.ret</code>. It’s actually quite hard to interpret it’s
+contents even in steady state due to fancy alignment restrictions,
+boundary framing with <code>NaT</code> marking. It’s memory is also not
+synchronized with CPUs view of that memory to speed things up. You
+almost never want to mess with it for something like passing a struct
+around.</li>
 </ul>
-<p>When it’s in <strong>rt_sigreturn()</strong> syscall return that is the simplest way to look at
-sigframe on stack. Where stack is present as one of <strong>struct ptrace_syscall_info</strong>
-fields:</p>
+<p>When it’s in <code>rt_sigreturn()</code> syscall return that is the simplest way
+to look at <code>sigframe</code> on stack. Where stack is present as one of <code>struct ptrace_syscall_info</code> fields:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> ptrace_syscall_info <span class="op">{</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    __u8 op<span class="op">;</span>        <span class="co">/* Type of system call stop */</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    __u32 arch<span class="op">;</span>     <span class="co">/* AUDIT_ARCH_* value; see seccomp(2) */</span></span>
@@ -432,9 +452,9 @@ fields:</p>
 <span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> seccomp<span class="op">;</span></span>
 <span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
 <span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
-<p>So which of two stacks should be present in <strong>stack_pointer</strong> field? <strong>r12</strong>
-or <strong>ar.bspstore</strong>? As a result
-our frame is something like that:</p>
+<p>So which of two stacks should be present in <code>stack_pointer</code> field?
+<code>r12</code> or <code>ar.bspstore</code>? As a result our frame is something like
+that:</p>
 <pre><code>+-------
 | ... &lt;registers for outer functions, their cfm, predicates&gt;
 +-------
@@ -451,18 +471,16 @@ our frame is something like that:</p>
 | &lt;16-bytes of scratch area&gt;
 | &lt;rest of memory stack&gt;
 +-------</code></pre>
-<p>Kernel had to pick one and picked wrong <strong>ar.bspstore</strong>. It contains no
-valid data at all. It consists of leftover values for previous register
-flushes and loads.</p>
-<p>As a result <strong>ptrace()</strong> looked at a part of register backing store to look up <strong>rt_sigreturn()</strong>.</p>
-<p>Once this mismatch became clear the fix was obvious:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7ad1e366167837daeb93d0bacb57dee820b0b898">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7ad1e366167837daeb93d0bacb57dee820b0b898</a></p>
-<p>By then strace testsuite passed all tests o/</p>
-<p>Can we cautiosly declare the endeavour done?</p>
-<h1 id="plot-twist">plot twist</h1>
-<p>Well, strace test suite now started hanging whole box on almost every
-testsuite run. Looks like before it did not manage to get that far to destroy
-kernel’s internal state. Example crash:</p>
+<p>Kernel had to pick one and picked wrong: <code>ar.bspstore</code>. It contains no
+valid data at all. It consists only of leftover values for previous
+register flushes and loads.
+As a result <code>ptrace()</code> looked at a part of register backing store to
+look up <code>rt_sigreturn(). Once this mismatch became clear the fix was obvious: &lt;https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7ad1e366167837daeb93d0bacb57dee820b0b898&gt; By then</code>strace` test suite passed all tests!
+Can we cautiously declare the endeavor done?</p>
+<h2 id="plot-twist">plot twist</h2>
+<p>Well, <code>strace</code> test suite now started hanging whole box on almost every
+test suite run. Looks like before it did not manage to get that far to
+destroy kernel’s internal state. Example crash:</p>
 <pre><code>Unable to handle kernel NULL pointer dereference (address 0000000000000338)
 sock_filter-v-X[6171]: Oops 11012296146944 [18]
 Modules linked in: usb_storage e1000 acpi_ipmi ipmi_si ipmi_devintf ipmi_msghandler rtc_efi
@@ -510,45 +528,46 @@ Call Trace:
                                 sp=e00000010f2d58c0 bsp=e00000010f2d34c8
  [&lt;a0000001000287b0&gt;] die+0x3b0/0x3c0
                                 sp=e00000010f2d58d0 bsp=e00000010f2d3488</code></pre>
-<p>It’s a <strong>NULL</strong> pointer dereference. How hard could it be to nail down and fix
-(or at least workaround)?</p>
-<p>To make the box less unstable I sprintled a few <strong>if (p == NULL) { WARN_ON(1); return; }</strong>
-around. That allowed surviving a few strace testsuite runs in a row. Woohoo!</p>
-<p><strong>guppy</strong> was able to survive a few days and then crashed with even more dire
-and inscrutable panic.</p>
-<p>Before digging into more details I first synced to latest kernel git to ease
-upstreaming things bit by bit and using Latest and Greatest code.</p>
-<p>Surprisingly latest <strong>linux.git</strong> did not even boot.</p>
-<p>One of failures Jens quickly fixed right after successful bisection related
-to task-level flag handling:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f5f4fc4649ae542b1a25670b17aaf3cbb6187acc">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f5f4fc4649ae542b1a25670b17aaf3cbb6187acc</a></p>
-<p>Another failure was use of atomics against unaligned <strong>bool</strong> struct field
-in a <strong>hpsa</strong> disk driver, was also easy to fix with help of Don and others:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=02ec144292bc424a5800d45d4cb472c66e97c520">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=02ec144292bc424a5800d45d4cb472c66e97c520</a></p>
-<p>I was “lucky” to find those failures before another kernel release (or another
-few years of negligence).</p>
-<p>Latest <strong>linux.git</strong> was still crashing the box.</p>
-<h1 id="more-kernel-debugging">more kernel debugging</h1>
-<p>As a next step I enabled everything I could find related to memory corruption
-debugging in linux kernel:</p>
+<p>It’s a <code>NULL</code> pointer dereference. How hard could it be to nail down
+and fix (or at least workaround)?
+To make the box less unstable I sprinkled a few <code>if (p == NULL) { WARN_ON(1); return; }</code> around. That allowed surviving a few <code>strace</code>
+test suite runs in a row. Woohoo!
+<code>guppy</code> was able to survive a few days and then crashed with even more
+dire and inscrutable panic.
+Before digging into more details I first synced to latest kernel git to
+ease upstreaming things easier bit by bit and using Latest and Greatest
+code. Surprisingly latest <code>linux.git</code> did not even boot.</p>
+<p>One of failures Jens quickly fixed right after successful bisection
+related to task-level flag handling:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f5f4fc4649ae542b1a25670b17aaf3cbb6187acc" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f5f4fc4649ae542b1a25670b17aaf3cbb6187acc</a></p>
+<p>Another failure was use of <code>atomic</code> against unaligned <code>bool</code> struct
+field in a <code>hpsa</code> disk driver. It was also easy to fix with help of Don
+and others:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=02ec144292bc424a5800d45d4cb472c66e97c520" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=02ec144292bc424a5800d45d4cb472c66e97c520</a></p>
+<p>I was “lucky” to find those failures before another kernel release (or
+another few years of negligence).
+Latest <code>linux.git</code> was still crashing the box under <code>strace</code> test suite.</p>
+<h2 id="more-kernel-debugging">more kernel debugging</h2>
+<p>As a next step I enabled everything I could find related to memory
+corruption debugging in <code>linux</code> kernel:</p>
 <ul>
-<li><strong>CONFIG_VM_DEBUG</strong></li>
-<li><strong>page_poison=on</strong></li>
-<li><strong>init_on_alloc=1</strong> <strong>init_on_free=1</strong></li>
-<li><strong>page_owner=on</strong></li>
-<li><strong>hardened_usercopy=1</strong></li>
-<li><strong>memblock=debug</strong></li>
+<li><code>CONFIG_VM_DEBUG</code></li>
+<li><code>page_poison=on</code></li>
+<li><code>init_on_alloc=1</code> <code>init_on_free=1</code></li>
+<li><code>page_owner=on</code></li>
+<li><code>hardened_usercopy=1</code></li>
+<li><code>memblock=debug</code></li>
 <li>various slab debugs</li>
 </ul>
-<p>As a result I got kernel to unbootable state /o\.</p>
-<p>I hoped boot failures were related to underlying problem I observed.
-One of the annoyances was that kernel silently crashed and did not
-print errors to BMC’s serial output. I disabled most of debugging
-flags back and left <strong>page_poison=on</strong> <strong>init_on_alloc=1</strong> <strong>init_on_free=1</strong>.</p>
-<p>This allowed catching and fixing some minor warnings like:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2a419cf495f95cac49ea289318b833477e1a0e2">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2a419cf495f95cac49ea289318b833477e1a0e2</a>.</p>
-<p>After a while (about a day) I started seeing the reports of arbitrarily corrupted
-memory:</p>
+<p>As a result I got kernel to an unbootable state again /o\.
+I hoped boot failures were related to underlying problem I observed. One
+of the annoyances was that kernel silently crashed and did not print
+errors to <code>BMC</code> serial output. I disabled most of debugging flags back
+and left <code>page_poison=on</code> <code>init_on_alloc=1</code> <code>init_on_free=1</code>.
+This allowed catching and fixing some minor warnings like:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2a419cf495f95cac49ea289318b833477e1a0e2" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2a419cf495f95cac49ea289318b833477e1a0e2</a>.</p>
+<p>After a while (about a day) I started seeing the reports of arbitrarily
+corrupted memory:</p>
 <pre><code>pagealloc: memory corruption
 000000004a763954: 05 00 00 00 00 00 00 00 f8 b5 b0 ff ff 0f 00 60  ...............`
 00000000b3626ed1: 60 b7 b0 ff ff 0f 00 60 50 68 1c 00 08 00 00 20  `......`Ph.....
@@ -580,57 +599,62 @@ Call Trace:
  [&lt;a00000010005da50&gt;] ia64_do_page_fault+0x1f0/0xb80
  [&lt;a00000010000ca00&gt;] ia64_leave_kernel+0x0/0x270</code></pre>
 <p>Yay! Maybe that’s it?</p>
-<p>The backtrace tells us it’s a page fault handling code faulting in a page that
-used to be in page freelist, but it’s already in a corruptted state: it should
-be full of <strong>aa</strong> values, but it clearly has some unrelated data like
-<strong>Exceeded MaxStartups</strong>.</p>
-<p>I prepared for a deep dive into virtual memory management in **linux*:</p>
+<p>The backtrace tells us it’s a page fault handling code faulting in a
+page that used to be in page freelist. But it’s already in a corrupted
+state: page should be full of <code>aa</code> values, but it clearly has some
+unrelated data like <code>Exceeded MaxStartups</code>.
+I prepared for a deep dive into virtual memory management in <code>linux</code>:</p>
 <ul>
-<li>got basic understanding of page fault handling on <strong>ia64</strong>, <strong>TLB</strong> population
-(<strong>VHPT</strong>, <strong>TR</strong>, and <strong>TC</strong> registers management)</li>
-<li>got basic understanding of memory management layout on <strong>ia64</strong>: where linear
-mapping starts (aka “identity” + base offset), where vmalloc() starts it’s
-address, how and when it gets freed</li>
-<li>got basic understanding of linux 3-4-5 level page tables are maintained
-and synced back to architecture-specific <strong>TLB</strong>.</li>
+<li>got basic understanding of page fault handling on <code>ia64</code>, <code>TLB</code>
+population (<code>VHPT</code>, <code>TR</code>, and <code>TC</code> registers management)</li>
+<li>got basic understanding of memory management layout on <code>ia64</code>: where
+linear mapping starts (aka “identity” + base offset), where
+<code>vmalloc()</code> starts it’s address, how and when it gets freed</li>
+<li>got basic understanding of <code>linux</code> 3-4-5 level page tables are
+maintained and synced back to architecture-specific <code>TLB</code>.</li>
 </ul>
-<p>And after much debugging I found that this corruption is a bug in debugging
-mechanism /o\</p>
-<p><strong>init_on_alloc=1</strong>, <strong>init_on_free=1</strong> and <strong>page_poison=on</strong> are in direct
-conflict (and a bit of redundancy) with each other:</p>
+<p>And after much debugging I found that this corruption is a bug in
+debugging mechanism:
+<code>init_on_alloc=1</code>, <code>init_on_free=1</code> and <code>page_poison=on</code> are in
+direct conflict (and a bit of redundancy) with each other:</p>
 <ul>
-<li>redundancy: if you have freed a page on <strong>init_on_free=1</strong> system then memory
-page can be allocated without <strong>memset(0)</strong> even on <strong>init_on_alloc=1</strong> system
-because <strong>init_on_free=1</strong> already guarantees it!</li>
-<li>conflict: <strong>init_on_free=1</strong> does <strong>memset(0)</strong> while <strong>page_poison=1</strong> does <strong>memset(aa)</strong>.
-Which one has more priority?</li>
+<li>redundancy: if you have freed a page on <code>init_on_free=1</code> system then
+memory page can be allocated without <code>memset(0)</code> even on
+<code>init_on_alloc=1</code> system because <code>init_on_free=1</code> already
+guarantees it!</li>
+<li>conflict: <code>init_on_free=1</code> does <code>memset(0)</code> while
+<code>page_poison=1</code> does <code>memset(0xaa)</code>. Which one has more priority?</li>
 </ul>
-<p>The problem was that <strong>init_on_alloc=1</strong> + <strong>init_on_free=1</strong> + <strong>debug_pagealloc=1</strong>
-led to page freeing with <strong>memset(aa)</strong> and allocation without any <strong>memset()</strong> at all.
-This caused two problems:</p>
+<p>The problem was that <code>init_on_alloc=1</code> + <code>init_on_free=1</code> +
+<code>debug_pagealloc=1</code> led to page freeing with <code>memset(aa)</code> and
+allocation without any <code>memset(0)</code> at all. This caused two problems:</p>
 <ul>
 <li>reports on corruption where it should not be</li>
-<li>return pages with garbage data to the system even if system requested <strong>alloc_page(__GFP_ZERO)</strong></li>
+<li>return pages with garbage data to the system even if system requested
+`alloc_page(__GFP_ZERO)</li>
 </ul>
-<p>In our case <strong>alloc_page(__GFP_ZERO)</strong> was used for page table (<strong>PTE</strong>) allocations
-and instead of returning <strong>PTE</strong> of no pages it was full of bits that looked like
-pointers to other pages.</p>
-<p>Once this conflict was understood it was easy to report the bug and fix
-it with help of <strong>mm</strong> folks:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9df65f522536719682bccd24245ff94db956256c">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9df65f522536719682bccd24245ff94db956256c</a></p>
-<p>There are many nuances when exactly the bug could happen. For example architecture must
-not support <strong>CONFIG_ARCH_SUPPORTS_DEBUG_PAGEALLOC</strong> (<strong>x86_64</strong> was not
-affected by the bug). Otherwise different mechanisms kick in.</p>
-<p>On a positive side a few month later I managed to fix a mirror image bug
-on <strong>x86_64</strong>:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=69e5d322a2fb86173fde8bad26e8eb38cad1b1e9">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=69e5d322a2fb86173fde8bad26e8eb38cad1b1e9</a></p>
-<p>I’ll spare you the details why there is a complication of handling static keys
-and early parameters in a way that it could go out of sync like that.</p>
-<h1 id="another-yak-pageowner">another yak: page<span id="owner">owner</span></h1>
-<p>Linux kernel has a very cool facility enabled by both <strong>CONFIG_PAGE_OWNER=y</strong>
-and <strong>page_owner=on</strong> boot option. It’s idea is to keep the history of most recent
-callers who freed and who allocated the page including full backtrace and
-page flags. You can see full state for each page in <strong>/sys/kernel/debug/page_owner</strong>:</p>
+<p>In our case <code>alloc_page(__GFP_ZERO)</code> was used for page table
+(<code>PTE</code>) allocations and instead of returning <code>PTE</code> of no pages it
+was full of bits that looked like pointers to other pages.
+Once this conflict was understood it was easy to report the bug and fix
+it with help of <code>mm</code> folks:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9df65f522536719682bccd24245ff94db956256c" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9df65f522536719682bccd24245ff94db956256c</a>
+There are many nuances when exactly the bug could happen. For example
+architecture must not support <code>CONFIG_ARCH_SUPPORTS_DEBUG_PAGEALLOC</code>
+(<code>x86_64</code> was not affected by the bug). Otherwise different mechanisms
+kick in.
+On a positive side a few month later I managed to fix a mirror image bug
+on <code>x86_64</code>:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=69e5d322a2fb86173fde8bad26e8eb38cad1b1e9" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=69e5d322a2fb86173fde8bad26e8eb38cad1b1e9</a>.
+I’ll spare you the details why there is a complication of handling
+static keys and early parameters in a way that it could go out of sync
+like that.</p>
+<h2 id="another-yak-page_owner">another yak: <code>page_owner</code></h2>
+<p>Linux kernel has a very cool facility enabled by both
+<code>CONFIG_PAGE_OWNER=y</code> and <code>page_owner=on</code> boot option. It’s idea is
+to keep the history of most recent callers who freed and who allocated
+the page including full backtrace and page flags. You can see full state
+for each page in <code>/sys/kernel/debug/page_owner</code>:</p>
 <pre><code># cat /sys/kernel/debug/page_owner
   ...
   Page allocated via order 0, mask 0x12cc0(GFP_KERNEL|__GFP_NOWARN|__GFP_NORETRY),
@@ -652,29 +676,35 @@ page flags. You can see full state for each page in <strong>/sys/kernel/debug/pa
    kernel_init+0x16/0x110
    ret_from_fork+0x1f/0x30
  ...</code></pre>
-<p>Initially I hoped to use <strong>page_owner</strong> to dump at corruption detection time
-and at random times when I want to see past page history manually (say,
-at NULL-corruption detection time).</p>
-<p>The problem was that setting <strong>page_owner=on</strong> rendered <strong>ia64</strong>
-unbootable. It happened because on <strong>ia64</strong> stack unwinder requires memory
-allocation (and gets into infinite recursion) while on other arches it’s not
-required.</p>
-<p>Fun fact: actually storing stack trace for page owner itself does require
-memory allocation as well (on any architecture). It could have a potential
-getting into recursion. <strong>page_owner</strong> code tried to prevent it by scanning
-current backtrace for duplicate address entries.</p>
-<p>I sidestepped <strong>page_owner=on</strong> recursion by storing single bit in currently running
-task: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8e9b16c47680f6e7d6e5864a37f313f905a91cf5">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8e9b16c47680f6e7d6e5864a37f313f905a91cf5</a></p>
-<p>It should be slightly faster now.</p>
-<p>While I have such a nice corruption reporter I attempted to explore and fix
-a few tools available to debug it efficintly:</p>
+<p>Initially I hoped to use <code>page_owner</code> to dump at corruption detection
+time and at random times when I want to see past page history manually
+(say, at <code>NULL</code>-corruption detection time).
+The problem was that setting <code>page_owner=on</code> rendered <code>ia64</code>
+unbootable. It happened because on <code>ia64</code> stack unwinder requires
+memory allocation (and gets into infinite recursion). On <code>x86_64</code> for
+example the stack unwinder does not need extra memory allocation.
+Fun fact: actually storing stack trace for page owner itself does
+require memory allocation as well (on any architecture). It could have a
+potential getting into recursion. <code>page_owner</code> code tried to prevent
+it by scanning current backtrace for duplicate address entries.
+I sidestepped <code>page_owner=on</code> recursion by storing single bit in
+currently running task:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8e9b16c47680f6e7d6e5864a37f313f905a91cf5" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8e9b16c47680f6e7d6e5864a37f313f905a91cf5</a>
+It should also be slightly faster now.
+While I have such a nice corruption reporter I attempted to explore and
+fix a few tools available to debug it efficiently:</p>
 <ul>
-<li>added <strong>page_owner</strong> info reporting on detected page corruption: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f58bd538e6a2deb2bcdfe527d9ed45643348a4e6">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f58bd538e6a2deb2bcdfe527d9ed45643348a4e6</a></li>
-<li>fixed <strong>page_owner=on</strong> to work the same as <strong>page_owner=1</strong> (for consistency): <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=608b5d668c8ea6734594a401c9adab4093ad9847">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=608b5d668c8ea6734594a401c9adab4093ad9847</a></li>
-<li>fixed ia64-specific symbolizer crash on function descriptors: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=99e729bd40fb3272fa4b0140839d5e957b58588a">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=99e729bd40fb3272fa4b0140839d5e957b58588a</a></li>
+<li>added <code>page_owner</code> info reporting on detected page corruption:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f58bd538e6a2deb2bcdfe527d9ed45643348a4e6" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f58bd538e6a2deb2bcdfe527d9ed45643348a4e6</a></li>
+<li>fixed <code>page_owner=on</code> to work the same as <code>page_owner=1</code> (for
+consistency):
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=608b5d668c8ea6734594a401c9adab4093ad9847" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=608b5d668c8ea6734594a401c9adab4093ad9847</a></li>
+<li>fixed <code>ia64</code>-specific symbolizer crash on function descriptors:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=99e729bd40fb3272fa4b0140839d5e957b58588a" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=99e729bd40fb3272fa4b0140839d5e957b58588a</a></li>
 </ul>
-<h1 id="back-to-strace-killer">back to strace killer</h1>
-<p>strace testsuite was still able to kill the box. Example crash looked like:</p>
+<h2 id="back-to-strace-killer">back to <code>strace</code> killer</h2>
+<p><code>strace</code> test suite was still able to kill the box. Example crash looked
+like:</p>
 <pre><code>Unable to handle kernel paging request at virtual address aaaaaaaaaaaaaab2
 swapper/0[0]: Oops 8813272891392 [1]
 Modules linked in: acpi_ipmi e1000 usb_storage ipmi_si ipmi_devintf ipmi_msghandler rtc_efi
@@ -727,18 +757,18 @@ Call Trace:
 Disabling lock debugging due to kernel taint
 Kernel panic - not syncing: Fatal exception
 ---[ end Kernel panic - not syncing: Fatal exception ]---</code></pre>
-<p>This time the victim is a <strong>swapper</strong> thread that happens to execute
-deferred <strong>sk_filter_release_rcu</strong> execution: strace test allocated <strong>sk_filter</strong>
-and someone else failed to free it. Virtual address <strong>aaaaaaaaaaaaaab2</strong> says
-that it’s probably an use-after-free case.</p>
-<p>Should be simple to debug, right?</p>
-<p>As I already spent A Lot of time spelunking through memory management in
-<strong>ia64</strong> I dropped a bit of dead code around <strong>DISCONTIGMEM</strong>:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9187592b96385e5060dfb2b182aa9ec93d5c0332">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9187592b96385e5060dfb2b182aa9ec93d5c0332</a></p>
-<p>From now on <strong>ia64</strong> is just a <strong>SPARSEMEM</strong> architecture (or <strong>FLATMEM</strong> if
-you are lucky to get contiguous physical address layout, I am not: <strong>rx3600</strong>
-has 1TB gap for me).</p>
-<p>I minimized <strong>strace</strong> killer example down to:</p>
+<p>This time the victim is a <code>swapper</code> thread that happens to execute
+deferred <code>sk_filter_release_rcu</code> execution: <code>strace</code> test allocated
+<code>sk_filter</code> and someone else failed to free it. Virtual address
+<code>aaaaaaaaaaaaaab2</code> says that it’s probably a use-after-free case.
+Should be simple to debug, right?
+As I already spent A Lot of time spelunking through memory management in
+<code>ia64</code> I dropped a bit of dead code around <code>DISCONTIGMEM</code>:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9187592b96385e5060dfb2b182aa9ec93d5c0332" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9187592b96385e5060dfb2b182aa9ec93d5c0332</a>
+From now on <code>ia64</code> is just a <code>SPARSEMEM</code> architecture. Or
+<code>FLATMEM</code> if you are lucky to get contiguous physical address layout (
+I am not: <code>rx3600</code> has 1TB gap in physical memory ranges for me).</p>
+<p>I minimized <code>strace</code> killer example down to:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;unistd.h&gt;</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;netinet/in.h&gt;</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;sys/socket.h&gt;</span></span>
@@ -757,18 +787,19 @@ has 1TB gap for me).</p>
 <span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>    setsockopt<span class="op">(</span>fd<span class="op">,</span> SOL_SOCKET<span class="op">,</span> SO_ATTACH_FILTER<span class="op">,</span> <span class="op">&amp;</span>prog<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>prog<span class="op">));</span></span>
 <span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>This crashes guppy in a second (usually takes 8 runs):</p>
+<p>This crashes <code>guppy</code> in a second (usually takes 8 iterations of the
+loop below):</p>
 <pre><code>$ gcc bug.c -o bug; while ./bug; do echo again; done</code></pre>
-<p>The sample program creates IPv4 socket and attackes BPF program to it.
-Kernel crashes at the cleanup time.</p>
+<p>The sample program creates IPv4 socket and attaches <code>BPF</code> program to it.
+Kernel crashes at the socket memory cleanup time.</p>
 <p>Socket filters are special in kernel because they use slightly different
-virtual memory freeing policy compared to rest of vmalloc()’ed regions:
-it’s called <strong>VM_FLUSH_RESET_PERMS</strong>. This flag should eagerly unmap memory
-and eagerly flush <strong>TLB</strong>. From my understanding it’s a security feature
-that slightly pessimizes performance and does not affect correctness
-(modulo bugs we probably observe here).</p>
-<p>To get <strong>ia64</strong> box into a fully stable state I ignore any <strong>VM_FLUSH_RESET_PERMS</strong>
-mappings with the following hack:</p>
+virtual memory freeing policy compared to rest of <code>vmalloc()</code>’ed regions:
+it’s called <code>VM_FLUSH_RESET_PERMS</code>. This flag should eagerly unmap
+memory and eagerly flush <code>TLB</code>. From my understanding it’s a security
+feature that slightly decreases performance and does not affect
+correctness (modulo bugs we probably observe here).
+To get <code>ia64</code> box into a fully stable state I ignore any
+<code>VM_FLUSH_RESET_PERMS</code> mappings with the following hack:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/mm/vmalloc.c</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/mm/vmalloc.c</span></span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2214,6 +2214,9 @@ static void vm_remove_mappings(struct vm_struct *area, int deallocate_pages)</span></span>
@@ -781,23 +812,24 @@ mappings with the following hack:</p>
 <span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>    /* If this is not VM_FLUSH_RESET_PERMS memory, no need for the below. */</span>
 <span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>    if (!flush_reset)</span>
 <span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>        return;</span></code></pre></div>
-<p>Unfortunately I don’t know yet why crash happens and can only speculate at
-this point. I suspect that <strong>mm</strong> code lacks a barrier somewhere that allows
-page reuse before <strong>TLB</strong> flush happens.</p>
-<p>To be continued.</p>
-<h1 id="parting-words">Parting Words</h1>
-<p><strong>strace</strong> has a great test suite to detect all sorts of corner cases in linux kernel.</p>
-<p>Random factoids:</p>
+<p>Unfortunately I don’t know yet why crash happens and can only speculate
+at this point. I suspect that <code>mm</code> code lacks a barrier somewhere that
+allows page reuse before <code>TLB</code> flush happens. To be continued.</p>
+<h2 id="parting-words">Parting Words</h2>
+<p><code>strace</code> has a great test suite to detect all sorts of corner cases in
+<code>linux</code> kernel. Random factoids:</p>
 <ul>
-<li><strong>ia64</strong> linux syscalls start from <strong>1024</strong>.</li>
-<li><strong>ia64</strong> got even better <strong>ptrace()</strong> support.</li>
-<li><strong>page_owner=on</strong> is now usable on <strong>ia64</strong>!</li>
-<li>I still did not get to the bottom of it. But it feels I’m very close :)</li>
-<li><strong>VM_FLUSH_RESET_PERMS</strong> is a thing.</li>
+<li><code>ia64</code> <code>linux</code> syscalls start from <code>1024</code>.</li>
+<li><code>ia64</code> got even better <code>ptrace()</code> support.</li>
+<li><code>page_owner=on</code> is now usable on <code>ia64</code>!</li>
+<li>I still did not get to the bottom of it. But it feels I’m very close
+:)</li>
+<li><code>VM_FLUSH_RESET_PERMS</code> is a thing.</li>
 <li>It took me about 2 months to get some progress on this problem.</li>
-<li>It took <strong>guppy</strong> about 350 reboots to recover from machine lockups. I suspect it’s more
-than this machine ever saw in it’s previous life.</li>
-<li>Debugging tools can corrupt your data sometimes even if original setup is not supposed to.</li>
+<li>It took <code>guppy</code> about 350 reboots to recover from machine lockups. I
+suspect it’s more than this machine ever saw in it’s previous life.</li>
+<li>Debugging tools can corrupt your data sometimes even if original setup
+is not supposed to.</li>
 </ul>
 <p>Have fun!</p>
         </div>

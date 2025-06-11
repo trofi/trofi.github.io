@@ -29,13 +29,13 @@
                 <div class="info">November 14, 2021</div>
             
 
-            <p>Having updated locally new <strong>NixOS</strong> system to <strong>gcc-11.2.0</strong> I decided
-I’m familiar enough with <strong>NixOS</strong> to try yet unreleased <strong>gcc-12</strong> on
-a main system.</p>
-<p>Would it just work? That would be boring :)</p>
-<p>First I added new <strong>gcc</strong> snapshot to <strong>nixpkgs</strong> locally. It was only a
-matter of pulling in <strong>flex</strong> as a dependency (<strong>gcc</strong> does not provide
-genrated lexers for snapshots, only does fore releases and release candidates):</p>
+            <p>Having updated locally new <code>NixOS</code> system to <code>gcc-11.2.0</code> I decided
+I’m familiar enough with <code>NixOS</code> to try yet unreleased <code>gcc-12</code> on
+a main system. Would it just work? That would be boring :)</p>
+<p>First I added new <code>gcc</code> snapshot to <code>nixpkgs</code> locally. It was only a
+matter of pulling in <code>flex</code> as a dependency (<code>gcc</code> does not provide
+generated lexers for snapshots, only does fore releases and release
+candidates):</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- pkgs/development/compilers/gcc/11/default.nix       2021-10-27 07:15:23.996869137 +0100</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ pkgs/development/compilers/gcc/12/default.nix       2021-11-14 07:34:59.850516073 +0000</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -34,6 +34,9 @@</span></span>
@@ -80,37 +80,40 @@ genrated lexers for snapshots, only does fore releases and release candidates):<
 <span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>     ++ (optional (perl != null) perl)</span>
 <span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>     ++ (optional langAda gnatboot)</span>
 <span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>;</span></code></pre></div>
-<p>And a few more lines to set <strong>gcc-12</strong> as a default.</p>
-<p>I attempted to rebuild packages in my system with <strong>nix build -f nixos system</strong>.</p>
-<p>First failure was a mysterious early <strong>ed-1.17</strong> test failure. I updated
-<strong>ed</strong> to <strong>1.18-pre3</strong> locally and that fixed the test. I made a mental note
-to get back to it a bit later to find out what fixed the test.</p>
+<p>And a few more lines to set <code>gcc-12</code> as a default.
+I attempted to rebuild packages in my system with <code>nix build -f nixos system</code>.
+First failure was a mysterious early <code>ed-1.17</code> test failure. I updated
+<code>ed</code> to <code>1.18-pre3</code> locally and that fixed the test. I made a mental
+note to get back to it a bit later to find out what fixed the test.</p>
 <p>Then there was a long list of minor failures related to standard library
-header interdependencies where fix is a one-liner to add required header.
-A few examples are:</p>
+header interdependencies where fix is a one-liner to add required
+header. A few examples are:</p>
 <ul>
-<li>oggvideotools: <a href="https://sourceforge.net/p/oggvideotools/bugs/13/">https://sourceforge.net/p/oggvideotools/bugs/13/</a></li>
-<li>libopenmpt: <a href="https://github.com/OpenMPT/openmpt/pull/8">https://github.com/OpenMPT/openmpt/pull/8</a></li>
-<li>jfx</li>
+<li><code>oggvideotools</code>: <a href="https://sourceforge.net/p/oggvideotools/bugs/13/" class="uri">https://sourceforge.net/p/oggvideotools/bugs/13/</a></li>
+<li><code>libopenmpt</code>: <a href="https://github.com/OpenMPT/openmpt/pull/8" class="uri">https://github.com/OpenMPT/openmpt/pull/8</a></li>
+<li><code>jfx</code></li>
 </ul>
 <p>This is the most typical breakage for compiler updates.</p>
-<p>Then there were a few failures related to now forbidden <strong>std::string(NULL)</strong>
-constructor. The fix is to use simpler <strong>std::string()</strong> constructor.
-A few affected projects are:</p>
+<p>Then there were a few failures related to now forbidden
+<code>std::string(NULL)</code> constructor. The fix is to use simpler
+<code>std::string()</code> constructor. A few affected projects are:</p>
 <ul>
-<li>binutils: <a href="https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=068a039b8bd7c7386bb0d88f0ae245b0fe4132e9">https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=068a039b8bd7c7386bb0d88f0ae245b0fe4132e9</a></li>
-<li>nlohmann/json (bug only): <a href="https://github.com/nlohmann/json/issues/3138">https://github.com/nlohmann/json/issues/3138</a></li>
-<li>ccache</li>
+<li><code>binutils</code>:
+<a href="https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=068a039b8bd7c7386bb0d88f0ae245b0fe4132e9" class="uri">https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=068a039b8bd7c7386bb0d88f0ae245b0fe4132e9</a></li>
+<li><code>nlohmann/json</code> (bug only):
+<a href="https://github.com/nlohmann/json/issues/3138" class="uri">https://github.com/nlohmann/json/issues/3138</a></li>
+<li><code>ccache</code></li>
 </ul>
-<p>Then I noticed another change in ADL resolution, where <strong>operator&lt;&lt;</strong> was not
-searched in current namespace if none of arguments are in current namespace.
-<strong>clang</strong> had this behaviour for a while. Now <strong>gcc</strong> follows the lead.
-Only one project is affected so far:</p>
+<p>Then I noticed another change in <code>ADL</code> resolution, where <code>operator&lt;&lt;</code>
+was not searched in current namespace if none of arguments are in
+current namespace. <code>clang</code> had this behavior for a while. Now <code>gcc</code>
+follows the lead. Only one project is affected so far:</p>
 <ul>
-<li>source-highlighting: <a href="https://git.savannah.gnu.org/cgit/src-highlite.git/commit/?id=ab9fe5cb9b85c5afab94f2a7f4b6d7d473c14ee9">https://git.savannah.gnu.org/cgit/src-highlite.git/commit/?id=ab9fe5cb9b85c5afab94f2a7f4b6d7d473c14ee9</a></li>
+<li><code>source-highlighting</code>:
+<a href="https://git.savannah.gnu.org/cgit/src-highlite.git/commit/?id=ab9fe5cb9b85c5afab94f2a7f4b6d7d473c14ee9" class="uri">https://git.savannah.gnu.org/cgit/src-highlite.git/commit/?id=ab9fe5cb9b85c5afab94f2a7f4b6d7d473c14ee9</a></li>
 </ul>
-<p>After getting through this trivia I got an unusual build failure for <strong>libX11</strong>.
-Here is a shorter example:</p>
+<p>After getting through this trivia I got an unusual build failure for
+<code>libX11</code>. Here is a shorter example:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> extract<span class="op">(</span><span class="dt">char</span><span class="op">*);</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> XReadBitmapFileData <span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
@@ -128,7 +131,7 @@ Here is a shorter example:</p>
 <span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>It took me a while to wrap my head around what is being done here. And
 after that while I still got it wrong :) (but not by too much).</p>
-<p>Here is what <strong>gcc-12</strong> has to say about the code:</p>
+<p>Here is what <code>gcc-12</code> has to say about the code:</p>
 <pre><code># ok:
 $ gcc-11.2.0 -Wall -Werror=array-bounds -fno-strict-aliasing -O2 -c bug.c -o bug.o
 # bad:
@@ -141,60 +144,62 @@ bug.c:4:14: note: at offset [0, 253] into object 'name_and_type' of size 255
     4 |         char name_and_type[255];
       |              ^~~~~~~~~~~~~
 cc1: some warnings being treated as errors</code></pre>
-<p>Note: it’s normally just a warning. But <strong>libX11</strong> explicitly uses
-“-Werror=array-bounds” as part of it’s build system assuming this
-warning can catch important problems.</p>
-<p>The error makes no sense in tis case: a) there is no array dereference,
+<p>Note: it’s normally just a warning. But <code>libX11</code> explicitly uses
+<code>-Werror=array-bounds</code> as part of its build system assuming this
+warning can catch important problems.
+The error makes no sense in this case: a) there is no array dereference,
 b) there should be no out-of-bounds pointers here.</p>
-<p>I was also not sure if <strong>(type– == name_and_type || type– == name_and_type)</strong>
-is a valid construct. I filed <a href="https://gcc.gnu.org/PR103215">https://gcc.gnu.org/PR103215</a>. There Andrew
-explained that <strong>||</strong> is a sequence point and it has expected defined
-behaviour. In hindsight it’s obvious as <strong>||</strong> is also a lazy evaluation
-device.</p>
-<p>Apparently this build failure is somewhat common. Same failure on
+<p>I was also not sure if <code>(type-- == name_and_type || type-- == name_and_type)</code> is a valid construct. I filed
+<a href="https://gcc.gnu.org/PR103215" class="uri">https://gcc.gnu.org/PR103215</a>. There Andrew explained that <code>||</code> is
+a sequence point and it has expected defined behavior. In hindsight
+it’s obvious as <code>||</code> is also a lazy evaluation device.
+Apparently this build failure is somewhat common. Same failure on
 identical code is present in:</p>
 <ul>
-<li>libXmu</li>
-<li>gdk-pixbuf</li>
+<li><code>libXmu</code></li>
+<li><code>gdk-pixbuf</code></li>
 </ul>
-<p>Having sorted the above I returned to <strong>ed-1.17</strong> failure. I assumed it
-was some ancient undefined behaviour in <strong>ed</strong> uncovered by new <strong>gcc</strong>
-optimisations (like recent <strong>modref</strong> improvements). I looked at
-the diff between <strong>ed-1.17</strong> and <strong>ed-1.18-pre3</strong> tarballs but found
-nothing suspicious.</p>
-<p><strong>ed</strong> is an old and short codebase. Instead of staring a lot at generated
-assembly I decided to shrink it down to something I could easily understand
-and possibly fix. In the hindsight it was a good decision.</p>
-<p>After I arrived to a 2KB self-contained example of C code I still could
-not see what exactly <strong>gcc-12</strong> does to it to make it fail.</p>
-<p>I filed <a href="https://gcc.gnu.org/PR103202">https://gcc.gnu.org/PR103202</a> and Aldy instantly fixed very obscure
-<strong>PHI</strong> importing order bug. From what I understand we used stale variable
-names before a “rename” and used incorrect metadata attached to them
-(like value ranges).</p>
-<p>These kinds of bugs are very hard to extract from large projects. Even for
-<strong>ed</strong> case it took me 3 evenings. On a positive side now I know <strong>ed</strong>’s
-editor model :)</p>
-<p>After getting <strong>ed</strong> fixed I encountered an (already fixed) ICE on
-<strong>gperftools</strong>: <a href="https://gcc.gnu.org/PR103099">https://gcc.gnu.org/PR103099</a>.</p>
-<p>Currently I can build almost all packages for my system with <strong>gcc-12</strong>.
+<p>Having sorted the above I returned to <code>ed-1.17</code> failure. I assumed it
+was some ancient undefined behavior in <code>ed</code> uncovered by new <code>gcc</code>
+optimisations (like recent <code>modref</code> improvements). I looked at the
+diff between <code>ed-1.17</code> and <code>ed-1.18-pre3</code> tarballs but found nothing
+suspicious.</p>
+<p><code>ed</code> is an old and short codebase. Instead of staring a lot at
+generated assembly I decided to shrink it down to something I could
+easily understand and possibly fix. In the hindsight it was a good
+decision.</p>
+<p>After I arrived to a <code>2KB</code> self-contained example of <code>c</code> code I still
+could not see what exactly <code>gcc-12</code> does to it to make it fail.
+I filed <a href="https://gcc.gnu.org/PR103202" class="uri">https://gcc.gnu.org/PR103202</a> and Aldy instantly fixed very
+obscure <code>PHI</code> importing order bug. From what I understand we used
+stale variable names before a “rename” and used incorrect metadata
+attached to them (like value ranges).
+These kinds of bugs are very hard to extract from large projects. Even
+for <code>ed</code> case it took me 3 evenings. On a positive side now I know
+<code>ed</code> editor model :)</p>
+<p>After getting <code>ed</code> fixed I encountered an (already fixed) ICE on
+<code>gperftools</code>: <a href="https://gcc.gnu.org/PR103099" class="uri">https://gcc.gnu.org/PR103099</a>.</p>
+<p>Currently I can build almost all packages for my system with <code>gcc-12</code>.
 I have a few local hacks too dirty to share, but they are mostly about
 getting headers imported correctly and getting around too aggressive
-warnings-as-errors in a few packages libe <strong>libjxl</strong>.</p>
-<p>The only yet unsolved mystery is 4 newly failing tests on <strong>llvm-13</strong>
-package. Somehow <strong>llvm</strong> generates FunctionLength=0 unwind information
-for learly non-empty functions. I suspect (hope) it’s another <strong>gcc</strong> bug.
-I’m trying to debug it right now. <strong>UPDATE:</strong> confirmed and extracted
-example to illustrate <strong>gcc</strong> bug <a href="https://gcc.gnu.org/PR103266">https://gcc.gnu.org/PR103266</a></p>
-<h1 id="fun-facts">Fun facts</h1>
+warnings-as-errors in a few packages like <code>libjxl</code>.</p>
+<p>The only yet unsolved mystery is 4 newly failing tests on <code>llvm-13</code>
+package. Somehow <code>llvm</code> generates <code>FunctionLength=0</code> unwind information
+for early non-empty functions. I suspect (hope) it’s another <code>gcc</code>
+bug. I’m trying to debug it right now. <strong>UPDATE:</strong> confirmed and
+extracted example to illustrate <code>gcc</code> bug
+<a href="https://gcc.gnu.org/PR103266" class="uri">https://gcc.gnu.org/PR103266</a></p>
+<h2 id="fun-facts">Fun facts</h2>
 <ul>
-<li>It took me 2.5 months to get to gcc-from-git after switching the distribution :)</li>
+<li>It took me 2.5 months to get to <code>gcc-from-git</code> after switching the
+distribution :)</li>
 <li>Not too much was broken for these past two months.</li>
-<li>Most package failures are legitimate code bugs: missing includes, invalid or
-tautological code.</li>
-<li>Some failures against <strong>gcc-12</strong> are still good old compiler bugs :)</li>
-<li>Package test on <strong>nixpkgs</strong> are great at catching real bugs.</li>
+<li>Most package failures are legitimate code bugs: missing includes,
+invalid or tautological code.</li>
+<li>Some failures against <code>gcc-12</code> are still good old compiler bugs :)</li>
+<li>Package test on <code>nixpkgs</code> are great at catching real bugs.</li>
 </ul>
-<p>I think <strong>gcc-12</strong> is quite usable for early experiments.</p>
+<p>I think <code>gcc-12</code> is quite usable for early experiments.</p>
 <p>Have fun!</p>
         </div>
     </body>

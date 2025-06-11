@@ -29,11 +29,11 @@
                 <div class="info">July 14, 2018</div>
             
 
-            <p>I’ve bought my current desktop machine around 2011 (7 years ago)
-and mostly had no problems with it save one exception: occasionally
-(once 2-3 months) firefox, liferea or gcc would mysteriously crash.</p>
-<h1 id="bad-pte">Bad PTE</h1>
-<p><strong>dmesg</strong> reports would claim that page table entries refer to already
+            <p>I’ve bought my current desktop machine around 2011 (7 years ago) and
+mostly had no problems with it save one exception: occasionally (once
+2-3 months) <code>firefox</code>, <code>liferea</code> or <code>gcc</code> would mysteriously crash.</p>
+<h2 id="bad-pte">Bad <code>PTE</code></h2>
+<p><code>dmesg</code> reports would claim that page table entries refer to already
 freed physical memory:</p>
 <pre><code>Apr 24 03:59:17 sf kernel: BUG: Bad page map in process cc1  pte:200000000 pmd:2f9d0d067
 Apr 24 03:59:17 sf kernel: addr:00000000711a7136 vm_flags:00000875 anon_vma:          (null) mapping:000000003882992c index:101a
@@ -63,70 +63,69 @@ Apr 24 03:59:18 sf kernel: R10: 0000000000000008 R11: 0000000000000246 R12: 0000
 Apr 24 03:59:18 sf kernel: R13: 0000000000000038 R14: 00007f7a03cd5608 R15: 0000000000000000
 Apr 24 03:59:18 sf kernel: Disabling lock debugging due to kernel taint
 Apr 24 03:59:18 sf kernel: BUG: Bad rss-counter state mm:000000004fac8a77 idx:2 val:-1</code></pre>
-<p>It’s not something that is easy to debug or reproduce.</p>
-<p><a href="https://lwn.net/Articles/359158/">**Transparent Hugepages**</a>
-were a new thing at that time and I was using it systemwide via
-<strong>CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y</strong> kernel option.</p>
-<p>After those crashes I decided to switch it back to
-<strong>CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y</strong> only. Crashes became more
-rare: once in a 5-6 months.</p>
-<p>Enabling more debugging facilities in the kernel did not change anything
+<p>It’s not something that is easy to debug or reproduce.
+<a href="https://lwn.net/Articles/359158/"><code>Transparent Hugepages</code></a> was a
+new thing at that time and I was using it systemwide via
+<code>CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y</code> kernel option.
+After those crashes I decided to switch it back to
+<code>CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y</code> only. Crashes became more
+rare: once in a 5-6 months.
+Enabling more debugging facilities in the kernel did not change anything
 and I moved on.</p>
 <p>A few years later I set up nightly builds on this machine to build and
 test packages in an automatic way. Things were running smoothly except
-for a few memory-hungry tests that crashed once in a while: <strong>firefox</strong>,
-<strong>rust</strong> and <strong>webkit</strong> builds every other night hit internal compiler
-errors in <strong>gcc</strong>.</p>
-<p>Crashes were very hard to isolate or reproduce: every time <strong>SIGSEGV</strong>
-happened on a new source file being compiled. I tried to run the same failed gcc
-command in a loop for hours to try to reproduce the crash but never succeeded.
-It is usually a strong sign of flaky hardware. At that point I tried <strong>memtest86+-5.01</strong>
-and <strong>memtester</strong> tools to validate <strong>RAM</strong> chips. Tools claimed <strong>RAM</strong>
-to be fine.
-My conclusion was that crashes are the result of an obscure software problem causing
-memory corruption (probably in the kernel). I had no idea how to debug that and
+for a few memory-hungry tests that crashed once in a while: <code>firefox</code>,
+<code>rust</code> and <code>webkit</code> builds every other night hit internal compiler
+errors in <code>gcc</code>.
+Crashes were very hard to isolate or reproduce: every time <code>SIGSEGV</code>
+happened on a new source file being compiled. I tried to run the same
+failed <code>gcc</code> command in a loop for hours to try to reproduce the crash but
+never succeeded. It is usually a strong sign of flaky hardware. At that
+point I tried <code>memtest86+-5.01</code> and <code>memtester</code> tools to validate
+<code>RAM</code> chips. Tools claimed <code>RAM</code> to be fine. My conclusion was that
+crashes are the result of an obscure software problem causing memory
+corruption (probably in the kernel). I had no idea how to debug that and
 kept on using this system. For day-to-day use it was perfectly stable.</p>
-<h1 id="a-new-clue">A new clue</h1>
-<p>[years later]</p>
-<p>Last year I joined Gentoo’s toolchain@ project and started caring a bit more
-about <strong>glibc</strong> and <strong>gcc</strong>. dilfridge@ did a fantastic job on making
-<strong>glibc</strong> testsuite work on amd64 (and also many other things not directly
-related to this post).</p>
-<p>One day I made a <a href="https://bugs.gentoo.org/657760">major change</a> in how
-<strong>CFLAGS</strong> are handled in <strong>glibc</strong> ebuild and broke a few users with
-<strong>CFLAGS=-mno-sse4.2</strong>.
-That day I ran <strong>glibc</strong> testsuite to check if I made things worse.
-There was only one test failing: <strong>string/test-memmove</strong>.</p>
-<p>Of all the obscure things that <strong>glibc</strong> checks for only one simple
-<strong>memmove()</strong> test refused to work!</p>
-<p>The failure occured only on 32-bit version of <strong>glibc</strong> and looked like
+<h2 id="a-new-clue">A new clue</h2>
+<p>Years later.</p>
+<p>Last year I joined <code>gentoo</code> <code>toolchain</code> project and started caring a bit
+more about <code>glibc</code> and <code>gcc</code>. <code>dilfridge</code> did a fantastic job on
+making <code>glibc</code> test suite work on <code>amd64</code> (and on many other things not
+directly related to this post).
+One day I made a <a href="https://bugs.gentoo.org/657760">major change</a> in how
+<code>CFLAGS</code> are handled in <code>glibc</code> <code>ebuild</code> and broke a few users with
+<code>CFLAGS=-mno-sse4.2</code>. That day I ran <code>glibc</code> test suite to check if I
+made things worse. There was only one test failing:
+<code>string/test-memmove</code>.
+Of all the obscure things that <code>glibc</code> checks for only one simple
+<code>memmove()</code> test refused to work!
+The failure occurred only on 32-bit version of <code>glibc</code> and looked like
 this:</p>
 <pre><code>$ elf/ld.so --inhibit-cache --library-path . string/test-memmove
 simple_memmove  __memmove_ssse3_rep     __memmove_ssse3 __memmove_sse2_unaligned        __memmove_ia32
 string/test-memmove: Wrong result in function __memmove_sse2_unaligned dst &quot;0x70000084&quot; src &quot;0x70000000&quot; offset &quot;43297733&quot;</code></pre>
-<p>This command runs <strong>string/test-memmove</strong> binary using <strong>./libc.so.6</strong> and
-<strong>elf/ld.so</strong> as a loader.</p>
-<p>The good thing is that I was somewhat able to reproduce the failure:
-every few
-runs the error popped up. Test was not failing deterministically. Every
-time test failed it was always <strong>__memmove_sse2_unaligned</strong> but
-<strong>offset</strong> was different.</p>
-<p>Here is the <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=string/test-memmove.c;h=64e3651ba40604e47ddf6d633f4d0aea4644f60a;hb=HEAD">test source code</a>.
-The test basically runs <strong>memmove()</strong> and checks if all memory was moved
-as expected. Originally test was written to check how <strong>memmove()</strong>
+<p>This command runs <code>string/test-memmove</code> binary using <code>./libc.so.6</code>
+and <code>elf/ld.so</code> as a loader.
+The good thing is that I was somewhat able to reproduce the failure:
+every few runs the error popped up. Test was not failing
+deterministically. Every time test failed it was always
+<code>__memmove_sse2_unaligned</code> but <code>offset</code> was different.
+Here is the <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=string/test-memmove.c;h=64e3651ba40604e47ddf6d633f4d0aea4644f60a;hb=HEAD">test source
+code</a>.
+The test basically runs <code>memmove()</code> and checks if all memory was moved
+as expected. Originally test was written to check how <code>memmove()</code>
 handles memory ranges that span signed/unsigned address boundary around
-address <strong>0x80000000</strong>. Hence the unusual <strong>mmap(addr=0x70000000, size=0x20000000)</strong>
-as a way to allocate memory.</p>
+address <code>0x80000000</code>. Hence the unusual <code>mmap(addr=0x70000000, size=0x20000000)</code> as a way to allocate memory.</p>
 <p>Now the fun thing: the error disappeared as soon as I rebooted the
-machine.
-And came back one day later (after the usual nightly tests run). To
-explore
-the breakage and make a fix I had to find a faster way to
-reproduce the failure.</p>
-<p>At that point the fastest way to make the test fail again was to run
-firefox build process first. It took “only” 40 minutes to get the
+machine. And came back one day later (after the usual nightly tests
+run). To explore the breakage and make a fix I had to find a faster way
+to reproduce the failure.
+At that point the fastest way to make the test fail again was to run
+<code>firefox</code> build process first. It took “only” 40 minutes to get the
 machine in a state when I could reproduce the failure.</p>
-<p>Once in that state I started shrinking down <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/i386/i686/multiarch/memcpy-sse2-unaligned.S;h=9aa17de99c9c3415a9b5ac28fd9f1eb4457f916d;hb=HEAD#l1">**__memmove_sse2_unaligned** implementation</a>
+<p>Once in that state I started shrinking down
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/i386/i686/multiarch/memcpy-sse2-unaligned.S;h=9aa17de99c9c3415a9b5ac28fd9f1eb4457f916d;hb=HEAD#l1"><code>__memmove_sse2_unaligned</code>
+implementation</a>
 to check where exactly data gets transferred incorrectly. 600 lines of
 straightforward code is not that much.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">; check if the copied block is smaller than cache size</span></span>
@@ -150,25 +149,24 @@ straightforward code is not that much.</p>
 <span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>...</span>
 <span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="co">; store 128 bits to destination avoiding cache</span></span>
 <span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>249         <span class="bu">movntdq</span> <span class="op">%</span><span class="kw">xmm0</span><span class="op">,</span> <span class="op">-</span><span class="dv">64</span><span class="op">(%</span><span class="kw">ecx</span><span class="op">)</span></span></code></pre></div>
-<p>Note: <strong>memcpy()</strong>’s behaviour depends on CPU cache size. When the block
-of copied memory is small (less than CPU cache size, <strong>8MB</strong> in my case)
-<strong>memcpy()</strong> does not do anything special. Otherwise <strong>memcpy()</strong> tries
-to avoid cache pollution and uses <strong>non-temporal</strong> variant of store
-instruction: <strong>movntdq</strong> instead of usual <strong>movaps</strong>.</p>
-<p>While I was poking at this code I found a reliable workaround to make
-<strong>memcpy()</strong> never fail on my machine: change <strong>movntdq</strong> to <strong>movdqa</strong>:</p>
+<p>Note: <code>glibc</code> <code>memcpy()</code> behavior depends on CPU cache size. When the
+block of copied memory is small (less than CPU cache size, <code>8MB</code> in my
+case) <code>memcpy()</code> does not do anything special. Otherwise <code>memcpy()</code>
+tries to avoid cache pollution and uses <strong>non-temporal</strong> variant of
+store instruction: <code>movntdq</code> instead of usual <code>movaps</code>.
+While I was poking at this code I found a reliable workaround to make
+<code>memcpy()</code> never fail on my machine: change <code>movntdq</code> to <code>movdqa</code>:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/sysdeps/i386/i686/multiarch/memcpy-sse2-unaligned.S</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/sysdeps/i386/i686/multiarch/memcpy-sse2-unaligned.S</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -26,0 +27 @@</span></span>
 <span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="va">+#define movntdq movdqa /* broken CPU? */</span></span></code></pre></div>
-<p>I was pondering if I should patch <strong>binutils</strong> locally to avoid
-<strong>movntdq</strong> instruction entirely but eventually discarded it and
-focused on finding the broken component instead. Who knows what
-else can be there.</p>
-<p>I was so close!</p>
-<h1 id="a-minimal-reproducer">A minimal reproducer</h1>
-<p>I attempted to craft a testcase that does not depend on <strong>glibc</strong>’s
-<strong>memcpy()</strong> and got this:</p>
+<p>I was pondering if I should patch <code>binutils</code> locally to avoid
+<code>movntdq</code> instruction entirely but eventually discarded it and focused
+on finding the broken component instead. Who knows what else can be
+there. I was so close!</p>
+<h2 id="a-minimal-reproducer">A minimal reproducer</h2>
+<p>I attempted to craft a test case that does not depend on <code>glibc</code>
+<code>memcpy()</code> and got this:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;emmintrin.h&gt;</span><span class="pp"> </span><span class="co">/* movdqu, sfence, movntdq */</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> memmove_si128u <span class="op">(</span>__m128i_u <span class="op">*</span> dest<span class="op">,</span> __m128i_u <span class="dt">const</span> <span class="op">*</span>src<span class="op">,</span> <span class="dt">size_t</span> items<span class="op">)</span></span>
@@ -194,11 +192,11 @@ else can be there.</p>
 <span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>This code assumes quite a few things from the caller:</p>
 <ul>
-<li><strong>dest &gt; src</strong> as copying happens right-to-left</li>
-<li><strong>dest</strong> has to be 16-byte aligned</li>
-<li>block size must be a multiple of 16-bytes.</li>
+<li><code>dest &gt; src</code> as copying happens right-to-left</li>
+<li><code>dest</code> has to be 16-byte aligned</li>
+<li>block size must be a multiple of 16-bytes</li>
 </ul>
-<p>Here is what C code compiles to with <strong>-O2 -m32 -msse2</strong>:</p>
+<p>Here is what C code compiles to with <code>-O2 -m32 -msse2</code>:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>(gdb<span class="op">)</span> disassemble memmove_si128u</span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>Dump of assembler code for function memmove_si128u<span class="op">(</span>__m128i_u<span class="op">*,</span> __m128i_u const<span class="op">*,</span> size_t<span class="op">):</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>   0x000008f0 &lt;+0&gt;:     <span class="bu">push</span>   <span class="op">%</span><span class="kw">ebx</span></span>
@@ -223,7 +221,7 @@ else can be there.</p>
 <span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>   0x00000923 &lt;+51&gt;:    <span class="bu">sfence</span> </span>
 <span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>   0x00000926 &lt;+54&gt;:    <span class="bu">pop</span>    <span class="op">%</span><span class="kw">ebx</span></span>
 <span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>   0x00000927 &lt;+55&gt;:    <span class="cf">ret</span></span></code></pre></div>
-<p>And with <strong>-O2 -m64 -mavx2</strong>:</p>
+<p>And with <code>-O2 -m64 -mavx2</code>:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>(gdb<span class="op">)</span> disassemble memmove_si128u</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>Dump of assembler code for function memmove_si128u<span class="op">(</span>__m128i_u<span class="op">*,</span> __m128i_u const<span class="op">*,</span> size_t<span class="op">):</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>   0x0000000000000ae0 &lt;+0&gt;:     <span class="bu">sfence</span> </span>
@@ -246,37 +244,37 @@ else can be there.</p>
 <span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>   0x0000000000000b1c &lt;+60&gt;:    <span class="cf">jne</span>    <span class="bn">0xb08</span> <span class="op">&lt;</span>memmove_si128u<span class="op">(</span>__m128i_u<span class="op">*,</span> __m128i_u const<span class="op">*,</span> size_t<span class="op">)+</span><span class="dv">40</span><span class="op">&gt;</span></span>
 <span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>   0x0000000000000b1e &lt;+62&gt;:    <span class="bu">sfence</span> </span>
 <span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>   0x0000000000000b21 &lt;+65&gt;:    retq</span></code></pre></div>
-<p>Surprisingly (or not so surprisingly) both <strong>-m32</strong>/**-m64** tests started
-failing on my machine.</p>
-<p>It was always second bit of a 128-bit value that was corrupted.</p>
-<p>On 128MB blocks this test usually caused one incorrect bit to be copied
+<p>Surprisingly (or not so surprisingly) both <code>-m32</code> / <code>-m64</code> tests
+started failing on my machine.
+It was always second bit of a 128-bit value that was corrupted.
+On <code>128MB</code> blocks this test usually caused one incorrect bit to be copied
 once in a few runs. I tried to run exactly the same test on other
 hardware I have access to. None of it failed.</p>
-<p>I started to suspect the kernel to corrupt <strong>SSE</strong> cpu context on
-context switch. But why only <strong>non-temporal</strong> instruction is affected?
+<p>I started to suspect the kernel to corrupt <code>SSE</code> CPU context on
+context switch. But why only non-temporal instruction is affected?
 And why only a single bit and not a full 128-bit chunk? Could it be that
-the kernel forgot to issue <strong>mfence</strong> on context switch and all in-flight
-<strong>non-temporal</strong> instructions stored garbage? That would be a sad race
-condition. But the single bit flip did not line up with it.</p>
-<p>Sounds more like kernel would arbitrarily flip one bit in userspace. But
-why only when <strong>movntdq</strong> is involved?</p>
-<p>I suspected CPU bug and upgraded CPU firmware, switched machine from
-<strong>BIOS</strong>-compatible mode to native <strong>UEFI</strong> hoping to fix it. Nope.
-Nothing changed. Same failure persisted: single bit corruption after
-a heavy load on the machine.</p>
-<p>I started thinking on how to speed my test up to avoid firefox
+the kernel forgot to issue <code>mfence</code> on context switch and all
+in-flight non-temporal instructions stored garbage? That would be a
+sad race condition. But the single bit flip did not line up with it.
+Sounds more like kernel would arbitrarily flip one bit in user space. But
+why only when <code>movntdq</code> is involved?
+I suspected CPU bug and upgraded CPU firmware, switched machine from
+<code>BIOS</code>-compatible mode to native <code>UEFI</code> hoping to fix it. Nope.
+Nothing changed. Same failure persisted: single bit corruption after a
+heavy load on the machine.
+I started thinking on how to speed my test up to avoid <code>firefox</code>
 compilation as a trigger.</p>
-<h1 id="back-to-square-one">Back to square one</h1>
-<p>My suspect was bad <strong>RAM</strong> again. I modified my test all <strong>RAM</strong> by
-allocating 128MB chunks at a time and run <strong>memmove()</strong> on newly
-allocated <strong>RAM</strong> to cover all available pages. Test would either
-find bad memory or <strong>OOM</strong>-fail.</p>
-<p>Full program source is at <a href="https://github.com/trofi/xmm-ram-test">https://github.com/trofi/xmm-ram-test</a>.</p>
-<p>And bingo! It took only 30 seconds to reproduce the failure. The test
-usually started reporting the first problem when it got to 17GB of
-<strong>RAM</strong> usage.</p>
-<p>I have <strong>4x8GB</strong> <strong>DDR3-DIMM</strong>s. I started brute-forcing
-various configurations of <strong>DIMM</strong> order on motherboard slots:</p>
+<h2 id="back-to-square-one">Back to square one</h2>
+<p>My suspect was bad <code>RAM</code> again. I modified my test to use all <code>RAM</code> by
+allocating <code>128MB</code> chunks at a time and run <code>memmove()</code> on newly
+allocated <code>RAM</code> to cover all available pages. Test would either find
+bad memory or <code>OOM</code>-fail.
+Full program source is at <a href="https://github.com/trofi/xmm-ram-test" class="uri">https://github.com/trofi/xmm-ram-test</a>.
+And bingo! It took only 30 seconds to reproduce the failure. The test
+usually started reporting the first problem when it got to <code>17GB</code> of
+<code>RAM</code> usage.</p>
+<p>I have <code>4x8GB</code> <code>DDR3-DIMM</code> modules. I started brute-forcing various
+configurations of <code>DIMM</code> order on motherboard slots:</p>
 <pre><code>A      B      A      B
 DIMM-1 -      -      -      : works
 DIMM-2 -      -      -      : works
@@ -289,47 +287,47 @@ DIMM-3 -      DIMM-1 -      : fails (dual channel mode)
 -      DIMM-3 -      DIMM-1 : fails (dual channel mode)
 -      DIMM-1 -      DIMM-3 : fails (dual channel mode)
 -      DIMM-2 -      DIMM-3 : fails (dual channel mode)</code></pre>
-<p>And many other combinations of <strong>DIMM-3</strong> with others.</p>
-<p>It was obvious <strong>DIMM-3</strong> did not like team work. I booted from livecd
+<p>And many other combinations of <code>DIMM-3</code> with others.
+It was obvious <code>DIMM-3</code> did not like teamwork. I booted from live <code>CD</code>
 to double-check it’s not my kernel causing all of this. The error was
-still there.</p>
-<p>I bought and plugged in a new pair of <strong>RAM</strong> modules in place of
-<strong>DIMM-1</strong> and <strong>DIMM-3</strong>. And had no mysterious failures since!</p>
-<p>Time to flip <strong>CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y</strong> back on :)</p>
-<h1 id="speculations-and-open-questions">Speculations and open questions</h1>
+still there.
+I bought and plugged in a new pair of <code>RAM</code> modules in place of
+<code>DIMM-1</code> and <code>DIMM-3</code>. And had no mysterious failures since!
+Time to flip <code>CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS=y</code> back on :)</p>
+<h2 id="speculations-and-open-questions">Speculations and open questions</h2>
 <p>It seems that dual-channel mode and cache coherency has something to do
-with it. A few thoughs:</p>
+with it. A few thoughts:</p>
 <ol type="1">
-<li>Single <strong>DDR3-DIMM</strong> can perform only 64-bit wide loads and stores.</li>
-<li>In dual-channel mode two 64-bit wide stores can happen at a time
-and require presence of two <strong>DIMM</strong>s.</li>
-<li><strong>movntdq</strong> stores directly into <strong>RAM</strong>
-possibly evicting existing value from cache. That can cause further
-writeback to <strong>RAM</strong> to free dirty cache line.</li>
-<li><strong>movdqa</strong> stores to cache. But eventually
-cache pressure will also trigger store back to RAM in chunks of cache
-line size of Last Line Cache (64-bytes=512-bits for me). Why do we
-not see corruption happening in this case?</li>
+<li>Single <code>DDR3-DIMM</code> can perform only 64-bit wide loads and stores.</li>
+<li>In dual-channel mode two 64-bit wide stores can happen at a time and
+require presence of two <code>DIMM</code>s.</li>
+<li><code>movntdq</code> stores directly into <code>RAM</code> possibly evicting existing
+value from cache. That can cause further write back to <code>RAM</code> to
+free dirty cache line.</li>
+<li><code>movdqa</code> stores to cache. But eventually cache pressure will also
+trigger store back to <code>RAM</code> in chunks of cache line size of Last Line
+Cache (64-bytes=512-bits for me). Why do we not see corruption
+happening in this case?</li>
 </ol>
 <p>It feels like there should be not much difference between
-<strong>non-temporal</strong> and normal instructions in terms of size of data being
-written at a time over memory bus. What likely changes is access sequence
-of physical addresses under two workloads. But I don’t know how to look
-into it in detail.</p>
+non-temporal and normal instructions in terms of size of data being
+written at a time over memory bus. What likely changes is access
+sequence of physical addresses under two workloads. But I don’t know
+how to look into it in detail.</p>
 <p>Mystery!</p>
-<h1 id="parting-words">Parting words</h1>
+<h2 id="parting-words">Parting words</h2>
 <ul>
 <li>This crash took me 7 years to figure out :)</li>
 <li>Fix didn’t require a single line of code :)</li>
-<li>Bad <strong>RAM</strong> happens. Even if <strong>memtest86+-5.01</strong> disagrees.</li>
-<li>As I was running <strong>memtest86+</strong> in <strong>qemu</strong> I found a bunch of
-unrelated bugs in <strong>tianocore</strong> implementation of <strong>UEFI</strong> and
-<strong>memtest86+</strong> gentoo ebuild: hybrid ISO is not recognized as an ISO
-at all. <strong>memtest86+</strong> crashes at statrup for yet unknown reason
+<li>Bad <code>RAM</code> happens. Even if <code>memtest86+-5.01</code> disagrees.</li>
+<li>As I was running <code>memtest86+</code> in <code>qemu</code> I found a bunch of
+unrelated bugs in <code>tianocore</code> implementation of <code>UEFI</code> and
+<code>memtest86+</code> <code>gentoo</code> <code>ebuild</code>: hybrid ISO is not recognized as an ISO
+at all. <code>memtest86+</code> crashes at startup for yet unknown reason
 (likely needs to be fixed against newer toolchain).</li>
-<li><strong>non-temporal</strong> instructions are a thing and have their own
-memory I/O engine.</li>
-<li>C-level wrappers around <strong>SSE</strong> and <strong>AVX</strong> instructions are easy to
+<li>non-temporal instructions are a thing and have their own memory
+I/O engine.</li>
+<li>C-level wrappers around <code>SSE</code> and <code>AVX</code> instructions are easy to
 use!</li>
 </ul>
 <p>Have fun!</p>

@@ -29,19 +29,22 @@
                 <div class="info">June 26, 2017</div>
             
 
-            <p>This is another horror story with lots of technical details
-on how <strong>glibc</strong> was unhappy (again!) on <strong>ia64</strong>.</p>
-<p>A week ago I’ve decided to give <strong>ia64</strong> more love in gentoo
-by cleaning up backlog of bugs related to ia64 team: <a href="https://bugs.gentoo.org/buglist.cgi?email2=ia64%40gentoo.org&amp;emailassigned_to2=1&amp;emailcc2=1&amp;emailtype2=substring&amp;list_id=3571042&amp;order=opendate%2Cbug_id&amp;query_format=advanced&amp;resolution=---">hotlist</a>
+            <p>This is another horror story with lots of technical details on how
+<code>glibc</code> was unhappy (again!) on <code>ia64</code>.
+A week ago I’ve decided to give <code>ia64</code> more love in <code>gentoo</code> by
+cleaning up backlog of bugs related to <code>ia64</code> team:
+<a href="https://bugs.gentoo.org/buglist.cgi?email2=ia64%40gentoo.org&amp;emailassigned_to2=1&amp;emailcc2=1&amp;emailtype2=substring&amp;list_id=3571042&amp;order=opendate%2Cbug_id&amp;query_format=advanced&amp;resolution=---">hotlist</a>
 The backlog was not too large: about 150 bugs.</p>
-<h1 id="ruby-garbage-collection-bug">ruby garbage collection bug</h1>
-<p>Many bugs were blocked on <a href="https://bugs.gentoo.org/show_bug.cgi?id=561780">SIGSEGVing ruby</a>.</p>
-<p>The curious fact is that <strong>ruby-2.1.9</strong> used to work on <strong>ia64</strong>
-and broke at some point. These kinds of bugs (as opposed to bring
-software support for the first time) are usually easy to fix.
-Something got slightly off and exposed a SIGSEGV. We need to find
-that something and tweak it a tiny bit.</p>
-<p>Let’s look at the <strong>SIGSEGV</strong> (it happens as you compile <strong>ruby</strong> on <strong>ia64</strong>):</p>
+<h2 id="ruby-garbage-collection-bug">ruby garbage collection bug</h2>
+<p>Many bugs were blocked on <a href="https://bugs.gentoo.org/561780"><code>SIGSEGV</code>ing
+<code>ruby</code></a>.
+The curious fact is that <code>ruby-2.1.9</code> used to work on <code>ia64</code> and
+broke at some point. These kinds of bugs (as opposed to bring software
+support for the first time) are usually easy to fix. Something got
+slightly off and exposed a <code>SIGSEGV</code>. We need to find that something and
+tweak it a tiny bit.
+Let’s look at the <code>SIGSEGV</code> (it happens as you compile <code>ruby</code> on
+<code>ia64</code>):</p>
 <pre><code>Program received signal SIGSEGV, Segmentation fault.
 mark_locations_array (objspace=0x6000000000045db0, x=0x0, n=864692227966763116) at gc.c:3297
 3297            v = *x;
@@ -64,16 +67,17 @@ mark_locations_array (objspace=0x6000000000045db0, x=0x0, n=864692227966763116) 
 #15 0x40000000000f6b60 in ruby_setup () at eval.c:54
 #16 0x40000000000f6f50 in ruby_init () at eval.c:75
 #17 0x400000000001b010 in main (argc=9, argv=0x60000fffffffb1d8) at main.c:35</code></pre>
-<p>I’ve added a bunch of <strong>printf</strong> calls into <strong>ruby</strong> runtime to figure out
-where NULL pointer dereference comes from. It became immediately obvious:
-one of <strong>ia64</strong>-specific pointers was not initialized and kept default <strong>NULL</strong>.</p>
-<p>While I was adding <strong>printf</strong> calls I’ve noticed a lot of <strong>#ifdef __ia64</strong>
-in every place that deals with threads: thread creation, thread switch,
-garbage colection. I had almost no idea what code is supposed to do but
-very basic understanding of how garbage collection works suggested
-variable <strong>native_main_thread.register_stack_start</strong> should never
-be <strong>NULL</strong> on <strong>ia64</strong>.</p>
-<p>Cooking up the fix was trivial (proposed <a href="https://github.com/ruby/ruby/pull/1625">pull request upstream</a>):</p>
+<p>I’ve added a bunch of <code>printf</code> calls into <code>ruby</code> runtime to figure
+out where <code>NULL</code> pointer dereference comes from. It became immediately
+obvious: one of <code>ia64</code>-specific pointers was not initialized and kept
+default <code>NULL</code>.
+While I was adding <code>printf</code> calls I’ve noticed a lot of <code>#ifdef __ia64</code> in every place that deals with threads: thread creation,
+thread switch, garbage collection. I had almost no idea what code is
+supposed to do but very basic understanding of how garbage collection
+works suggested variable <code>native_main_thread.register_stack_start</code>
+should never be <code>NULL</code> on <code>ia64</code>.
+Cooking up the fix was trivial (proposed <a href="https://github.com/ruby/ruby/pull/1625">pull request
+upstream</a>):</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/thread_pthread.c b/thread_pthread.c</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/thread_pthread.c</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/thread_pthread.c</span></span>
@@ -174,11 +178,11 @@ be <strong>NULL</strong> on <strong>ia64</strong>.</p>
 <span id="cb2-98"><a href="#cb2-98" aria-hidden="true" tabindex="-1"></a>        }</span>
 <span id="cb2-99"><a href="#cb2-99" aria-hidden="true" tabindex="-1"></a>     }</span>
 <span id="cb2-100"><a href="#cb2-100" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
-<p>The fix is to move initializaton code before exit from function happens.</p>
-<p>I think <strong>ruby_init_stack</strong> used to work because <strong>MAINSTACKADDR_AVAILABLE</strong>
-was not defined in older <strong>glibc</strong>. Perhaps due to missing <strong>HAVE_PTHREAD_GETATTR_NP</strong>
-support or something similar. See how compilate detection of <strong>STACKADDR_AVAILABLE</strong>
-is:</p>
+<p>The fix is to move initialization code before exit from function happens.
+I think <code>ruby_init_stack</code> used to work because
+<code>MAINSTACKADDR_AVAILABLE</code> was not defined in older <code>glibc</code>. Perhaps
+due to missing <code>HAVE_PTHREAD_GETATTR_NP</code> support or something similar.
+See how complicate detection of <code>STACKADDR_AVAILABLE</code> is:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined HAVE_PTHREAD_GETATTR_NP || defined HAVE_PTHREAD_ATTR_GET_NP</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#    define STACKADDR_AVAILABLE </span><span class="dv">1</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined HAVE_PTHREAD_GET_STACKADDR_NP &amp;&amp; defined HAVE_PTHREAD_GET_STACKSIZE_NP</span></span>
@@ -196,12 +200,14 @@ is:</p>
 <span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif defined __ia64 &amp;&amp; defined _HPUX_SOURCE</span></span>
 <span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="pp">#    include </span><span class="im">&lt;sys/dyntune.h&gt;</span></span>
 <span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span></code></pre></div>
-<p>But now <strong>STACKADDR_AVAILABLE</strong> is defined and <strong>goto bound_check</strong> skips
-<strong>native_main_thread.register_stack_start</strong> initialization completely.</p>
-<p>My patch worked and I was happy. But still it was slightly confusing to see
-all that <strong>ia64</strong>-specific code for stack handling. What is so special about
-it’s stack?</p>
-<p>Let’s look at a code example in <strong>cont.c</strong> file that scans stack for heap pointers:</p>
+<p>But now <code>STACKADDR_AVAILABLE</code> is defined and <code>goto bound_check</code>
+skips <code>native_main_thread.register_stack_start</code> initialization
+completely.
+My patch worked and I was happy. But still it was slightly confusing to
+see all that <code>ia64</code>-specific code for stack handling. What is so
+special about it’s stack?
+Let’s look at a code example in <code>cont.c</code> file that scans stack for
+heap pointers:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>cont_mark<span class="op">(</span><span class="dt">void</span> <span class="op">*</span>ptr<span class="op">)</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -248,15 +254,19 @@ it’s stack?</p>
 <span id="cb4-44"><a href="#cb4-44" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-45"><a href="#cb4-45" aria-hidden="true" tabindex="-1"></a>    RUBY_MARK_LEAVE<span class="op">(</span><span class="st">&quot;cont&quot;</span><span class="op">);</span></span>
 <span id="cb4-46"><a href="#cb4-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Additional code under <strong>#ifdef __ia64</strong> looked unusual but it didn’t seem to
-harm any <strong>ruby</strong> tests and I moved on.</p>
-<h1 id="binutils-out-of-bounds-bug">binutils out-of-bounds bug</h1>
-<p>Next bug was lurking in <strong>binutils-2.28</strong> package which occasionally <a href="https://sourceware.org/bugzilla/show_bug.cgi?id=21669">crashed strip program</a>.
-In my case crash was happening only when I was building <strong>gcc</strong>. <strong>gcc</strong>’s build system
-happens to call <strong>strip</strong> binary when compares <strong>stage2</strong> and <strong>stage3</strong> as one of stages
-was built with debugging sections (using <strong>-gtoggle</strong> switch).</p>
-<p>The <strong>strip</strong> <strong>SIGSEGV</strong> fix was also surprisingly trivial and not directly related to stack (or even <strong>ia64</strong>) specifics
-(<a href="https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;a=commitdiff;h=5cc4ca837deac7dc962d8a3741aa120c50ab41da">upstream commit</a>):</p>
+<p>Additional code under <code>#ifdef __ia64</code> looked unusual but it didn’t
+seem to harm any <code>ruby</code> tests and I moved on.</p>
+<h2 id="binutils-out-of-bounds-bug"><code>binutils</code> out-of-bounds bug</h2>
+<p>Next bug was lurking in <code>binutils-2.28</code> package which occasionally
+<a href="https://sourceware.org/PR21669">crashed <code>strip</code>
+program</a>. In my
+case crash was happening only when I was building <code>gcc</code>. <code>gcc</code>
+build system happens to call <code>strip</code> binary when compares <code>stage2</code>
+and <code>stage3</code> as one of stages was built with debugging sections (using
+<code>-gtoggle</code> switch).
+The <code>strip</code> <code>SIGSEGV</code> fix was also surprisingly trivial and not
+directly related to stack (or even <code>ia64</code>) specifics (<a href="https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;a=commitdiff;h=5cc4ca837deac7dc962d8a3741aa120c50ab41da">upstream
+commit</a>):</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/bfd/elf.c b/bfd/elf.c</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>index 5f37e7f79c..76c6a5c6a7 100644</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/bfd/elf.c</span></span>
@@ -276,14 +286,15 @@ was built with debugging sections (using <strong>-gtoggle</strong> switch).</p>
 <span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="va">+      &amp;&amp; oheaders[hint] != NULL</span></span>
 <span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>       &amp;&amp; section_match (oheaders[hint], iheader))</span>
 <span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>     return hint;</span></code></pre></div>
-<p>Here a mysterious <strong>hint</strong> was used to refer to out-of-bounds area and that caused <strong>SIGSEGV</strong>s.
-My guess why it triggered mostly on <strong>ia64</strong> is because <strong>ia64</strong> has many more <strong>ELF</strong>-sections
-than other architectures (<strong>160</strong> versus <strong>32</strong>).</p>
-<h1 id="glibc-pthreadcreate-bug">glibc pthread<span id="create">create</span> bug</h1>
-<p>The next failure happened for <strong>glibc-2.24</strong> package (<strong>glibc-2.23</strong> worked fine).
-It looked like every threaded program crashed around
-program shutdown (<a href="https://sourceware.org/PR21672">upstream bug</a>).</p>
-<p>That small reproducer was enough to make program crash:</p>
+<p>Here a mysterious <code>hint</code> was used to refer to out-of-bounds area and
+that caused <code>SIGSEGV</code>. My guess why it triggered mostly on <code>ia64</code>
+is because <code>ia64</code> has many more <code>ELF</code>-sections than other
+architectures (<code>160</code> versus <code>32</code>).</p>
+<h2 id="glibc-pthread_create-bug"><code>glibc</code> <code>pthread_create</code> bug</h2>
+<p>The next failure happened for <code>glibc-2.24</code> package (<code>glibc-2.23</code>
+worked fine). It looked like every threaded program crashed around
+program shutdown (<a href="https://sourceware.org/PR21672">upstream bug</a>).
+That small reproducer was enough to make program crash:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// how to crash: gcc -O0 -ggdb3 -o r bug.c -pthread &amp;&amp; ./r</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;pthread.h&gt;</span></span>
@@ -301,9 +312,9 @@ program shutdown (<a href="https://sourceware.org/PR21672">upstream bug</a>).</p
 <span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>    pthread_join <span class="op">(</span>t<span class="op">,</span> NULL<span class="op">);</span></span>
 <span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here we create a no-op thread and wait for it’s shutdown.
-The <strong>SIGSEGV</strong> happened at address <strong>0x8</strong> (another <strong>NULL</strong>-pointer dereference).</p>
-<p>Backtrace was not very informative:</p>
+<p>Here we create a no-op thread and wait for it’s shutdown. The
+<code>SIGSEGV</code> happened at address <code>0x8</code> (another <code>NULL</code>-pointer
+dereference). Backtrace was not very informative:</p>
 <pre><code>$ gcc -O0 -ggdb3 -o r bug.c -pthread &amp;&amp; ./r
 Segmentation fault (core dumped)
 
@@ -336,20 +347,26 @@ Program terminated with signal SIGSEGV, Segmentation fault.
         freesize = &lt;optimized out&gt;
         __PRETTY_FUNCTION__ = &quot;start_thread&quot;
 #1  0x0000000000000000 in ?? ()</code></pre>
-<p>This crash did not make much sense. At first I thought it was caused by <strong>pd-&gt;stackblock</strong>
-code where <strong>pd</strong> was somehow turned into <strong>NULL</strong>. But if we look a few lines above (<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=nptl/pthread_create.c;h=7a970ffc5bc6123bbad7d2e38e974ffd2bf859f9;hb=3f823e87ccbf3723eb4eeb63b0619f1a0ceb174e#l561">source link</a>)
-<strong>pd</strong> is used in that function all over the places. <strong>strace</strong> run also suggested that crash
-happened after <strong>madvise</strong> syscall returned successfully (<strong>pd-&gt;stackblock</strong> has a sane value).</p>
-<p>The whole <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=nptl/pthread_create.c;h=7a970ffc5bc6123bbad7d2e38e974ffd2bf859f9;hb=3f823e87ccbf3723eb4eeb63b0619f1a0ceb174e#l378">start_thread function</a>
+<p>This crash did not make much sense. At first I thought it was caused by
+<code>pd-&gt;stackblock</code> code where <code>pd</code> was somehow turned into <code>NULL</code>.
+But if we look a few lines above (<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=nptl/pthread_create.c;h=7a970ffc5bc6123bbad7d2e38e974ffd2bf859f9;hb=3f823e87ccbf3723eb4eeb63b0619f1a0ceb174e#l561">source
+link</a>)
+<code>pd</code> is used in that function all over the places. <code>strace</code> run also
+suggested that crash happened after <code>madvise</code> syscall returned
+successfully (<code>pd-&gt;stackblock</code> has a sane value).
+The whole <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=nptl/pthread_create.c;h=7a970ffc5bc6123bbad7d2e38e974ffd2bf859f9;hb=3f823e87ccbf3723eb4eeb63b0619f1a0ceb174e#l378"><code>start_thread</code>
+function</a>
 is quite large but very straightforward. It does tree main things:</p>
 <ol type="1">
-<li>setup environment for current thread: locale data, futex robust<span id="lists">lists</span> (efficient mutex runtime support), signal masks</li>
-<li>run user’s code with this one line: <strong>THREAD_SETMEM (pd, result, pd-&gt;start_routine (pd-&gt;arg));</strong></li>
-<li>teardown environment: call thread-local destructors, call futex robust<span id="lists">lists</span> and free thread’s stack</li>
+<li>setup environment for current thread: locale data, <code>futex     robust_lists</code> (efficient <code>mutex</code> runtime support), signal masks</li>
+<li>run user’s code with this one line: <code>THREAD_SETMEM (pd, result,     pd-&gt;start_routine (pd-&gt;arg));</code></li>
+<li>teardown environment: call thread-local destructors, call <code>futex     robust_lists</code> and free thread’s stack</li>
 </ol>
-<p>Our crash happens in <strong>3. teardown environment</strong> phase right at the place of thread’s stack teardown.</p>
-<p>glibc’s stack teardown is interesting: it does not free all the stack because code responsible
-for stack cleanup uses that very same stack. Let’s look at the code in detail:</p>
+<p>Our crash happens in <code>3. teardown environment</code> phase right at the
+place of thread’s stack teardown.
+<code>glibc</code> stack teardown is interesting: it does not free all the stack
+because code responsible for stack cleanup uses that very same stack.
+Let’s look at the code in detail:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*   Mark the memory of the stack as usable to the kernel.  We free</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="co">     everything except for the space used for the TCB itself.  */</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">size_t</span> pagesize_m1 <span class="op">=</span> __getpagesize <span class="op">()</span> <span class="op">-</span> <span class="dv">1</span><span class="op">;</span></span>
@@ -375,15 +392,19 @@ for stack cleanup uses that very same stack. Let’s look at the code in detail:
 <span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>      __madvise <span class="op">(</span>freeblock<span class="op">,</span> freesize<span class="op">,</span> MADV_DONTNEED<span class="op">);</span></span>
 <span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
 <span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
-<p>Here we see two major branches: <strong>_STACK_GROWS_DOWN</strong> and the <strong>#else</strong> one (not used on <strong>ia64</strong>).
-<strong>pd</strong> knows precisely where thread’s stack resides: it’s in <strong>[pd-&gt;stackblock, pd-&gt;stackblock + pd-&gt;stackblock_size)</strong> range.
-<strong>_STACK_GROWS_DOWN</strong> means that stack starts at address around <strong>pd-&gt;stackblock + pd-&gt;stackblock_size</strong>
-and grows in backward direction (to clarify: stack pointer decreases when value is pushed to stack).</p>
-<p>So far so good, no magic here. <strong>x86_64</strong> does the same.</p>
-<h1 id="first-clue">First clue</h1>
-<p>But why <strong>madvise()</strong> affects anyting? Isn’t it just a hint to kernel’s memory that can’t go wrong
-even if you messed up the arguments?</p>
-<p>Does page deallocation happen at all? It’s just a <strong>madvise</strong> after all. From <strong>man 2 madvise</strong>:</p>
+<p>Here we see two major branches: <code>_STACK_GROWS_DOWN</code> and the <code>#else</code>
+one (not used on <code>ia64</code>). <code>pd</code> knows precisely where thread’s stack
+resides: it’s in <code>[pd-&gt;stackblock, pd-&gt;stackblock + pd-&gt;stackblock_size)</code> range. <code>_STACK_GROWS_DOWN</code> means that stack
+starts at address around <code>pd-&gt;stackblock + pd-&gt;stackblock_size</code> and
+grows in backward direction (to clarify: stack pointer decreases when
+value is pushed to stack).
+So far so good, no magic here. <code>x86_64</code> does the same.</p>
+<h2 id="first-clue">First clue</h2>
+<p>But why <code>madvise()</code> affects anyting? Isn’t it just a hint to
+kernel’s memory that can’t go wrong even if you messed up the
+arguments?
+Does page deallocation happen at all? It’s just a <code>madvise</code> after
+all. From <code>man 2 madvise</code>:</p>
 <pre><code>Conventional advice values
 
     The  advice  values  listed below allow an application to tell the kernel how it expects to use
@@ -413,39 +434,42 @@ even if you messed up the arguments?</p>
            (Pages  marked with the kernel-internal VM_PFNMAP flag are special memory areas that are
            not managed by the virtual memory subsystem.  Such pages are typically created by device
            drivers that map the pages into user space.)</code></pre>
-<p>Tl;DR variant: <strong>madvise(p, size, MADV_DONTNEED)</strong> works as <strong>memset(p, 0, size)</strong>. And it’s the only <strong>advice</strong> value that changes program semantics.</p>
-<p>That was the first clue: perhaps we are zeroing out some crucial data structure?
-I’ve commented out <strong>__madvise</strong> call and <strong>SIGSEGV</strong> disappeared. Gah!</p>
-<p>I’ve decided to check if <strong>ia64</strong> is an indeed a <strong>_STACK_GROWS_DOWN</strong> platform:</p>
-<pre><code>#include &lt;pthread.h&gt;
-#include &lt;stdio.h&gt;
-#include &lt;unistd.h&gt;
-
-static void g(int a, int b, int c, int d, int e, int f)
-{
-    int v;
-    printf (&quot;sp   = %p\n&quot;, &amp;v);
-}
-
-static void * f (void * p)
-{
-    int v;
-    printf (&quot;sp   = %p\n&quot;, &amp;v);
-    g(1,2,3,4,5,6);
-
-    return NULL;
-}
-
-int main (int argc, const char ** argv)
-{
-    printf (&quot;page = %u\n&quot;, getpagesize());
-
-    pthread_t t;
-    pthread_create (&amp;t, NULL, &amp;f, NULL);
-
-    pthread_join (t, NULL);
-    return 0;
-}</code></pre>
+<p><code>Tl;DR</code> variant: <code>madvise(p, size, MADV_DONTNEED)</code> works as <code>memset(p, 0, size)</code>. And it’s the only <code>advice</code> value that changes program
+semantics.</p>
+<p>That was the first clue: perhaps we are zeroing out some crucial data
+structure? I’ve commented out <code>__madvise</code> call and <code>SIGSEGV</code>
+disappeared!
+I’ve decided to check if <code>ia64</code> is an indeed a <code>_STACK_GROWS_DOWN</code>
+platform:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;pthread.h&gt;</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;unistd.h&gt;</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> g<span class="op">(</span><span class="dt">int</span> a<span class="op">,</span> <span class="dt">int</span> b<span class="op">,</span> <span class="dt">int</span> c<span class="op">,</span> <span class="dt">int</span> d<span class="op">,</span> <span class="dt">int</span> e<span class="op">,</span> <span class="dt">int</span> f<span class="op">)</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> v<span class="op">;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;sp   = </span><span class="sc">%p\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">&amp;</span>v<span class="op">);</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> <span class="op">*</span> f <span class="op">(</span><span class="dt">void</span> <span class="op">*</span> p<span class="op">)</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> v<span class="op">;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;sp   = </span><span class="sc">%p\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="op">&amp;</span>v<span class="op">);</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>    g<span class="op">(</span><span class="dv">1</span><span class="op">,</span><span class="dv">2</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span><span class="dv">4</span><span class="op">,</span><span class="dv">5</span><span class="op">,</span><span class="dv">6</span><span class="op">);</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">**</span> argv<span class="op">)</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;page = </span><span class="sc">%u\n</span><span class="st">&quot;</span><span class="op">,</span> getpagesize<span class="op">());</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>    pthread_t t<span class="op">;</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>    pthread_create <span class="op">(&amp;</span>t<span class="op">,</span> NULL<span class="op">,</span> <span class="op">&amp;</span>f<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>    pthread_join <span class="op">(</span>t<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <pre><code>$ ia64-unknown-linux-gnu-gcc -O0 -ggdb3 -o stack stack.c -pthread &amp;&amp; ./stack
 page = 65536
 sp   = 0x2000000000b7e860
@@ -454,15 +478,17 @@ sp   = 0x2000000000b7e830
 madvise(start=0x20000000003b0000, len=0x790000, flags=0x4)</code></pre>
 <p>We see a few facts here:</p>
 <ul>
-<li>stack indeed grows by decreasing <strong>sp</strong> (aka <strong>_STACK_GROWS_DOWN</strong>)</li>
-<li><strong>ia64</strong> pages are 64K</li>
-<li>madvise does not touch <strong>sp</strong> itself and stops at 3 pages away (<strong>PTHREAD_STACK_MIN</strong> value): <strong>0x20000000003b0000 + 0x790000 = 0x2000000000B40000</strong></li>
+<li>stack indeed grows by decreasing <code>sp</code> (aka <code>_STACK_GROWS_DOWN</code>)</li>
+<li><code>ia64</code> pages are 64K</li>
+<li>madvise does not touch <code>sp</code> itself and stops at 3 pages away
+(<code>PTHREAD_STACK_MIN</code> value): <code>0x20000000003b0000 + 0x790000 =   0x2000000000B40000</code></li>
 </ul>
-<p>So why do things fail? I’ve tried to add more debug statements into kernel’s <strong>sys_madvise</strong> implementation
-and ran it under <a href="http://trofi.github.io/posts/199-ia64-machine-emulation.html">ski emulator</a>.
-<strong>SIGSEGV</strong> was still reproducible.</p>
-<p>Then I’ve recalled strange <strong>bsp</strong> business and additional stack area
-tracked by ruby’s garbage collector. I wondered wher that additional
+<p>So why do things fail? I’ve tried to add more debug statements into
+kernel’s <code>sys_madvise</code> implementation and ran it under <a href="../posts/199-ia64-machine-emulation.html"><code>ski</code>
+emulator</a>.
+<code>SIGSEGV</code> was still reproducible.
+Then I’ve recalled strange <code>bsp</code> business and additional stack area
+tracked by <code>ruby</code> garbage collector. I wondered where that additional
 memory region resides:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;pthread.h&gt;</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
@@ -500,8 +526,8 @@ bsp  = 0x2000000000380090
 sp   = 0x2000000000b7e830
 bsp  = 0x20000000003800b8
 madvise(start=0x20000000003b0000, len=0x790000, flags=0x4)</code></pre>
-<p>See what happens here? <strong>sp</strong> and <strong>bsp</strong> grow from opposite directions of stack block
-towards one another both staring the same stack area:</p>
+<p>See what happens here? <code>sp</code> and <code>bsp</code> grow from opposite directions
+of stack block towards one another both staring the same stack area:</p>
 <pre><code>+--------------------------+
 | bsp_start:  0x2...3b0000 |
 | ...                      |
@@ -515,14 +541,16 @@ towards one another both staring the same stack area:</p>
 | ...                      |
 | sp_start:   0x2...b80000 |
 +--------------------------+</code></pre>
-<p><strong>BSP</strong> means Backing Store Pointer. That memory area is used by CPU to backup
-and restore CPU register values (but not other local variables) for each procedure
-call/return for caller-save registers. Usually C programs dont need to care
-about <strong>bsp</strong> value or area contents.</p>
-<p>It means that we should try hard not to lose <strong>bsp</strong> area when we are tearing down
-the stack because register spilling/loading hapens at unusual times: CPU can
-defer or avoid spilling/reloading registers to speed up performance.</p>
-<p>Thus the fix could look like that (<a href="https://sourceware.org/ml/libc-alpha/2017-06/msg01265.html">proposed upstream</a>):</p>
+<p><code>BSP</code> means Backing Store Pointer. That memory area is used by CPU to
+back up and restore CPU register values (but not other local variables)
+for each procedure call/return for caller-save registers. Usually C
+programs don’t need to care about <code>bsp</code> value or area contents.
+It means that we should try hard not to lose <code>bsp</code> area when we are
+tearing down the stack because register spilling/loading happens at
+unusual times: CPU can defer or avoid spilling/reloading registers to
+speed up performance.
+Thus the fix could look like that (<a href="https://sourceware.org/ml/libc-alpha/2017-06/msg01265.html">proposed
+upstream</a>):</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/nptl/pthread_create.c b/nptl/pthread_create.c</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>index 7a970ffc5b..6e3f6db5b1 100644</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/nptl/pthread_create.c</span></span>
@@ -554,16 +582,18 @@ defer or avoid spilling/reloading registers to speed up performance.</p>
 <span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a> #else</span>
 <span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>   /* Page aligned start of memory to free (higher than or equal</span>
 <span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>      to current sp plus the minimum stack size).  */</span></code></pre></div>
-<p>Here we skip <strong>PTHREAD_STACK_MIN</strong> bytes from both beginning and end of <strong>pd-&gt;stackblock</strong>.
-This fixed pthread<span id="create">create</span> <strong>SIGSEGV</strong>s. Why it did not exhibit before? I have no idea!
-My guess would be that older glibc used less stack space and didn’t bother to reload
-from <strong>bsp</strong> after <strong>madvise</strong> call.</p>
-<h1 id="random-facts-about-ia64">Random facts about ia64</h1>
+<p>Here we skip <code>PTHREAD_STACK_MIN</code> bytes from both beginning and end of
+<code>pd-&gt;stackblock</code>. This fixed <code>pthread_create</code> <code>SIGSEGV</code>. Why it did
+not exhibit before? I have no idea! My guess would be that older <code>glibc</code>
+used less stack space and didn’t bother to reload from <code>bsp</code> after
+<code>madvise</code> call.</p>
+<h2 id="random-facts-about-ia64">Random facts about <code>ia64</code></h2>
 <ul>
-<li>default page size on linux is <strong>64K</strong></li>
+<li>default page size on <code>linux</code> is <code>64K</code></li>
 <li>rare (unique?) setup of two stacks growing in opposite directions</li>
-<li>many garbage collector implementations have to special-case for <strong>bsp</strong> area as additional pointers can lurk there</li>
-<li>thread shutdown is delicate in <strong>glibc</strong></li>
+<li>many garbage collector implementations have to special-case for
+<code>bsp</code> area as additional pointers can lurk there</li>
+<li>thread shutdown is delicate in <code>glibc</code></li>
 </ul>
 <p>Have fun!</p>
         </div>

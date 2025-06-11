@@ -29,43 +29,42 @@
                 <div class="info">December  6, 2020</div>
             
 
-            <p>Sometimes I test gcc toolchains against less popular targets
-like <strong>i686-w64-mingw32</strong> (32-bit windows). As a cheap run time
-test I use <a href="https://www.winehq.org/">Wine</a>. Today I tried to
-run a simple executable:</p>
+            <p>Sometimes I test <code>gcc</code> toolchains against less popular targets like
+<code>i686-w64-mingw32</code> (32-bit windows). As a cheap runtime test I use
+<a href="https://www.winehq.org/"><code>wine</code></a>. Today I tried to run a simple
+executable:</p>
 <pre><code>$ echo 'int main() {}' | i686-w64-mingw32-gcc -x c - -o a.exe -ggdb3 &amp;&amp; wine a.exe
 Segmentation fault</code></pre>
-<p>It crashed! I attempted to run standard <strong>wine</strong> programs.
-That also did not work:</p>
+<p>It crashed! I attempted to run standard <code>wine</code> programs. That also did
+not work:</p>
 <pre><code>$ winecfg
 Segmentation fault</code></pre>
-<p>Maybe <strong>wine</strong> itself is broken? (and not just runtime
-linked into my <strong>a.exe</strong>).</p>
-<p>The new quest has started \o/.</p>
-<h1 id="what-is-wine">What is Wine?</h1>
-<p><strong>wine</strong> is a rare sort of software: it executes
-windows binaries on native system directly as much as reasonably
-possible. No instruction level emulation is involved.</p>
-<p><strong>wine</strong> loads
-<a href="https://en.wikipedia.org/wiki/Portable_Executable">PE/COFF</a>
-(windows native) executable file formats on systems that don’t
-support it (Linux native format is
-<a href="https://en.wikipedia.org/wiki/Executable_and_Linkable_Format">ELF</a>
-for example).</p>
-<p>Simpler windows-specific library calls are re-implemented in terms
-of linux library calls. More complicated calls are implemented
-by communicating with <strong>wineserver</strong> standalone daemon.</p>
-<h1 id="debugging">Debugging</h1>
-<p>I never investigated program crashes under wine before. Internetz say
-<strong>wine</strong> comes with
-<a href="https://wiki.winehq.org/Wine_Developer%27s_Guide/Debugging_Wine">winedbg</a>
+<p>Maybe <code>wine</code> itself is broken? (and not just runtime linked into my
+<code>a.exe</code>). The new quest has started \o/.</p>
+<h2 id="what-is-wine">What is Wine?</h2>
+<p><code>wine</code>* is a rare sort of software: it executes windows binaries on
+native system directly as much as reasonably possible. No instruction
+level emulation is involved.
+<code>wine</code> loads
+<a href="https://en.wikipedia.org/wiki/Portable_Executable"><code>PE/COFF</code></a> (windows
+native) executable file formats on systems that don’t support it (Linux
+native format is
+<a href="https://en.wikipedia.org/wiki/Executable_and_Linkable_Format"><code>ELF</code></a> for
+example).
+Simpler windows-specific library calls are re-implemented in terms of
+<code>linux</code> library calls. More complicated calls are implemented by
+communicating with <code>wineserver</code> standalone daemon.</p>
+<h2 id="debugging">Debugging</h2>
+<p>I never investigated program crashes under wine before. Internet says
+<code>wine</code> comes with
+<a href="https://wiki.winehq.org/Wine_Developer%27s_Guide/Debugging_Wine"><code>winedbg</code></a>
 tool that might help with that. I tried it:</p>
 <pre><code>$ winedbg a.exe
 Segmentation fault
 $ winedbg
 Segmentation fault</code></pre>
-<p>No luck. Why did <strong>winedbg</strong> fail? I tried to find something
-I could attach <strong>gdb</strong> to:</p>
+<p>No luck. Why did <code>winedbg</code> fail? I tried to find something I could
+attach <code>gdb</code> to:</p>
 <pre><code>$ file $(which winedbg)
 /usr/bin/winedbg: symbolic link to /usr/bin/winedbg-vanilla-5.22
 $ file $(which /usr/bin/winedbg-vanilla-5.22)
@@ -84,13 +83,13 @@ Segmentation fault
 
 $ file /usr/lib/wine-vanilla-5.22/wine/fakedlls/winedbg.exe
 /usr/lib/wine-vanilla-5.22/wine/fakedlls/winedbg.exe: PE32 executable (console) Intel 80386, for MS Windows</code></pre>
-<p>The above says <strong>/usr/bin/winedbg</strong> is a shell wrapper around
-<strong>winedbg.exe</strong> <strong>PE/COFF</strong> executable (ran through <strong>wine</strong>).
-It makes <strong>windbg</strong> even more complex program than <strong>a.exe</strong>.</p>
-<p>This is yet another hint at problems in <strong>wine</strong> itself. I settled
-on debugging simpler <strong>a.exe</strong> program.</p>
-<h1 id="getting-clues">Getting clues</h1>
-<p>To get some idea what binary actually crashes I used <strong>strace</strong>:</p>
+<p>The above says <code>/usr/bin/winedbg</code> is a shell wrapper around
+<code>winedbg.exe</code> <code>PE/COFF</code> executable (ran through <code>wine</code>). It makes
+<code>windbg</code> even more complex program than <code>a.exe</code>.
+This is yet another hint at problems in <code>wine</code> itself. I settled on
+debugging simpler <code>a.exe</code> program.</p>
+<h2 id="getting-clues">Getting clues</h2>
+<p>To get some idea what binary actually crashes I used <code>strace</code>:</p>
 <pre><code>$ strace -s 10000 -f -etrace=execve wine a.exe
 execve(&quot;/usr/bin/wine&quot;, [&quot;wine&quot;, &quot;a.exe&quot;], 0x7ffd82e380d8 /* 83 vars */) = 0
 execve(&quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, [&quot;/usr/lib/wine-vanilla-5.22/bin/wine&quot;, &quot;a.exe&quot;], 0x55a3215c07c0 /* 81 vars */) = 0
@@ -116,24 +115,26 @@ $ file /usr/lib64/wine-vanilla-5.22/wine/fakedlls/conhost.exe
 /usr/lib64/wine-vanilla-5.22/wine/fakedlls/conhost.exe: PE32+ executable (GUI) x86-64, for MS Windows</code></pre>
 <p>Here we see a few interesting bits:</p>
 <ul>
-<li><p>before catching <strong>SIGSEGV</strong> our program <strong>execve()</strong>s twice:</p>
+<li><p>before catching <code>SIGSEGV</code> our program <code>execve()</code>s twice:</p>
 <ul>
-<li><strong>wine</strong> shell script execs <strong>wine</strong> binary</li>
-<li><strong>wine</strong> binary execs <strong>wine-preloader</strong> binary</li>
+<li><code>wine</code> shell script execs <code>wine</code> binary</li>
+<li><code>wine</code> binary execs <code>wine-preloader</code> binary</li>
 </ul></li>
-<li><p>it also <strong>fork()</strong>s and execs <strong>wine64-preloader</strong> to run <strong>conhost.exe</strong></p>
+<li><p>it also <code>fork()</code>s and <code>exec()</code>s <code>wine64-preloader</code> to run
+<code>conhost.exe</code></p>
 <pre><code>- wine a.exe -&gt; exec &quot;wine-preloader wine a.exe&quot;
   ` -&gt; fork -&gt; exec &quot;wine64-preloader conhost.exe&quot;</code></pre></li>
-<li><p><strong>wine-preloader</strong> is a 32-bit static <strong>ELF</strong> executable. It’s address space
-will host our future <strong>a.exe</strong>.</p></li>
-<li><p><strong>wine64-preloader</strong> is a 64-bit static <strong>ELF</strong> executable. It’s address space
-will host some 64-bit <strong>conhost.exe</strong> process. <strong>conhost.exe</strong> seems to be an
-equivalent of virtual terminal for windows.</p></li>
+<li><p><code>wine-preloader</code> is a 32-bit static <code>ELF</code> executable. It’s
+address space will host our future <code>a.exe</code>.</p></li>
+<li><p><code>wine64-preloader</code> is a 64-bit static <code>ELF</code> executable. It’s
+address space will host some 64-bit <code>conhost.exe</code> process.
+<code>conhost.exe</code> seems to be an equivalent of virtual terminal for
+windows.</p></li>
 </ul>
-<p>We see a <strong>SIGSEGV</strong> only for 32-bit <strong>wine-preloader</strong>. 64-bit
-processes seem to work fine.</p>
-<p>I rebuilt <strong>wine</strong> with <strong>CFLAGS+=-ggdb3</strong> to get plenty of
-debugging symbols and ran <strong>wine</strong> under <strong>gdb</strong>:</p>
+<p>We see a <code>SIGSEGV</code> only for 32-bit <code>wine-preloader</code>. 64-bit
+processes seem to work fine.
+I rebuilt <code>wine</code> with <code>CFLAGS+=-ggdb3</code> to get plenty of debugging
+symbols and ran <code>wine</code> under <code>gdb</code>:</p>
 <pre><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
@@ -165,11 +166,11 @@ Program received signal SIGSEGV, Segmentation fault.
 #7  0x7bc58e38 in ?? ()
 #8  0x00000000 in ?? ()</code></pre>
 <p>That is not a very useful backtrace. Why none of the addresses are
-resolved?</p>
-<p>Looks like <strong>gdb</strong> does not know anything about dynamically loaded
-modules (handled by <strong>wine-preloader</strong> ?). As a workaround we can
-manually add them.</p>
-<p>The <strong>2325141</strong> debugged process is not yet finished and we can poke at
+resolved?
+Looks like <code>gdb</code> does not know anything about dynamically loaded
+modules (handled by <code>wine-preloader</code> ?). As a workaround we can
+manually add them.
+The <code>2325141</code> debugged process is not yet finished and we can poke at
 it’s address map:</p>
 <pre><code>$ cat /proc/2325141/maps
 00010000-00110000 rw-p 00000000 00:00 0
@@ -211,8 +212,8 @@ f7ffc000-f7ffe000 r-xp 00000000 00:00 0                                  [vdso]
 f8000000-ffcd0000 ---p 00000000 00:00 0
 ffcd0000-fffd0000 rw-p 00000000 00:00 0
 fffdc000-ffffe000 rw-p 00000000 00:00 0                                  [stack]</code></pre>
-<p>This is a huge list of objects present in our address space.</p>
-<p>Now looking at <strong>gdb</strong>’s view:</p>
+<p>This is a huge list of objects present in our address space.
+Now looking at <code>gdb</code> view:</p>
 <pre><code>(gdb) info files
 Symbols from &quot;/usr/lib/wine-vanilla-5.22/bin/wine-preloader&quot;.
 Native process:
@@ -227,10 +228,10 @@ Local exec file:
         0x7d404000 - 0x7d40400c is .got.plt
         0x7d404020 - 0x7d404060 is .data
         0x7d404060 - 0x7d404490 is .bss</code></pre>
-<p><strong>gdb</strong> onlysees <strong>wine-preloader</strong> binary,
-but our backtrace contains addresses like <strong>0x7bc714dd</strong> which looks
-suspiciously close to <strong>ntdll.dll.so</strong> range from <strong>/proc/$pid/maps</strong>.</p>
-<p>Let’s add <strong>ntdll.dll.so</strong> symbols into our session:</p>
+<p><code>gdb</code> only sees <code>wine-preloader</code> binary, but our backtrace contains
+addresses like <code>0x7bc714dd</code> which looks suspiciously close to
+<code>ntdll.dll.so</code> range from <code>/proc/$pid/maps</code>.
+Let’s add <code>ntdll.dll.so</code> symbols into our session:</p>
 <pre><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so
 add symbol table from file &quot;/usr/lib/wine-vanilla-5.22/wine/ntdll.dll.so&quot;
 (y or n) y
@@ -260,13 +261,15 @@ gs             0x6b                107
 #0  0x7bc714dd in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
     doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:581
 Backtrace stopped: Cannot access memory at address 0xfffffffc</code></pre>
-<p>We got a function name! But our backtrace became even worse:
-only one frame is visible instead of 8 frames before. What is wrong?</p>
-<p>The stack pointer (<strong>esp 0xfffffffc</strong>) is incorrect and looks more like
-a <strong>NULL</strong> pointer dereference with small negative offset than a real
-stack pointer. No chance to get 8 frames here.</p>
-<p>Perhaps <strong>gdb</strong> used frame pointer (<strong>ebp 0x61ed88</strong>) before we loaded symbols?</p>
-<p>Let’s try to fake stack pointer to be closer to frame pointer with a hack:</p>
+<p>We got a function name! But our backtrace became even worse: only one
+frame is visible instead of 8 frames before. What is wrong?
+The stack pointer (<code>esp 0xfffffffc</code>) is incorrect and looks more like
+a <code>NULL</code> pointer dereference with small negative offset than a real
+stack pointer. No chance to get 8 frames here.
+Perhaps <code>gdb</code> used frame pointer (<code>ebp 0x61ed88</code>) before we loaded
+symbols?
+Let’s try to fake stack pointer to be closer to frame pointer with a
+hack:</p>
 <pre><code>(gdb) set $esp=$ebp
 
 (gdb) bt
@@ -278,10 +281,11 @@ stack pointer. No chance to get 8 frames here.</p>
 #5  0x7bc52d86 in call_dll_entry_point ()
 #6  0x7ffc2c00 in ?? ()
 Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
-<p>This looks more plausible. It’s still probably wrong as stack pointer within function
-is likely off by a few values. But it’s better that nothing.</p>
-<p>Let’s add symbols for address <strong>0x7b03c0de</strong> from <strong>/proc/2325141/maps</strong>.
-<strong>kernelbase.dll.so</strong> looks closest.</p>
+<p>This looks more plausible. It’s still probably wrong as stack pointer
+within function is likely off by a few values. But it’s better that
+nothing.
+Let’s add symbols for address <code>0x7b03c0de</code> from
+<code>/proc/2325141/maps</code>. <code>kernelbase.dll.so</code> looks closest.</p>
 <pre><code>(gdb) add-symbol-file /usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so
 add symbol table from file &quot;/usr/lib/wine-vanilla-5.22/wine/kernelbase.dll.so&quot;
 (y or n) y
@@ -302,14 +306,15 @@ Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/wine/kernelbase.d
 #8  0x0000ffff in ?? ()
 #9  0x000000b8 in ?? ()
 #10 0x00000000 in ?? ()</code></pre>
-<p>Presence of <strong>CreateFileA(“CONIN$”) / RtlAnsiStringToUnicodeString()</strong>
-looks very close!</p>
-<p>But parameters to <strong>RtlAnsiStringToUnicodeString()</strong> seem incorrect:
-<strong>uni=0x7b03c0de &lt;CreateFileA+73&gt;</strong> is a code address (should be some
+<p>Presence of <code>CreateFileA("CONIN$")</code> /
+<code>RtlAnsiStringToUnicodeString()</code> looks very close!
+But parameters to <code>RtlAnsiStringToUnicodeString()</code> seem incorrect:
+<code>uni=0x7b03c0de &lt;CreateFileA+73&gt;</code> is a code address (should be some
 writable address). It’s probably a stack corruption and our stack
-pointer is wrong.</p>
-<p>Ideally I would like to get to the point where corruption happens.</p>
-<p>The definition of <strong>RtlAnsiStringToUnicodeString()</strong> has nothing unusual or suspicious:</p>
+pointer is wrong.
+Ideally I would like to get to the point where corruption happens.
+The definition of <code>RtlAnsiStringToUnicodeString()</code> has nothing unusual
+or suspicious:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">//(gdb) list RtlAnsiStringToUnicodeString</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>     NTSTATUS WINAPI RtlAnsiStringToUnicodeString<span class="op">(</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>         PUNICODE_STRING uni<span class="op">,</span> <span class="co">/* [I/O] Destination for the unicode string */</span></span>
@@ -332,8 +337,8 @@ pointer is wrong.</p>
 <span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>         uni<span class="op">-&gt;</span>Buffer<span class="op">[</span>uni<span class="op">-&gt;</span>Length <span class="op">/</span> <span class="kw">sizeof</span><span class="op">(</span>WCHAR<span class="op">)]</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>         <span class="cf">return</span> STATUS_SUCCESS<span class="op">;</span></span>
 <span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>     <span class="op">}</span></span></code></pre></div>
-<p>Let’s see if we can find out something else about the way our program crashes
-by looking at exact instructions and register values around:</p>
+<p>Let’s see if we can find out something else about the way our program
+crashes by looking at exact instructions and register values around:</p>
 <pre><code>(gdb) disassemble RtlAnsiStringToUnicodeString
 Dump of assembler code for function RtlAnsiStringToUnicodeString:
    0x7bc71450 &lt;+0&gt;:     lea    0x4(%esp),%ecx
@@ -368,15 +373,15 @@ Dump of assembler code for function RtlAnsiStringToUnicodeString:
 $3 = (void *) 0x0
 (gdb) print (void*)$ecx-4
 $4 = (void *) 0xfffffffc</code></pre>
-<p>Hah, it’s completely obvious! You can see the bug, right?
-No, it’s not obvious at all. I’m just kidding.</p>
-<p>In the dump above I saw nothing that would stands.</p>
-<p>But somehow <strong>ecx</strong> value on stack was overwritten by <strong>0x0</strong>
-value and we were not able to return back from the function
-with <strong>ret $0xc</strong>. That is an explicit sign of stack corruption.</p>
-<p>Let’s find out what overwrites <strong>ecx</strong> on stack
-while <strong>RtlAnsiStringToUnicodeString()</strong> is executing.</p>
-<p>I tried a naive attempt by running <strong>wine</strong> under <strong>gdb</strong> as is:</p>
+<p>Hah, it’s completely obvious! You can see the bug, right? No, it’s not
+obvious at all. I’m just kidding.
+In the dump above I saw nothing that would stand out.
+But somehow <code>ecx</code> value on stack was overwritten by <code>0x0</code> value and
+we were not able to return back from the function with <code>ret $0xc</code>.
+That is a clear sign of stack corruption.
+Let’s find out what overwrites <code>ecx</code> on stack while
+<code>RtlAnsiStringToUnicodeString()</code> is executing.
+I tried a naive attempt by running <code>wine</code> under <code>gdb</code> as is:</p>
 <pre><code>$ gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
@@ -395,16 +400,16 @@ process 2326439 is executing new program: /usr/lib/wine-vanilla-5.22/bin/wine-pr
 
 Program received signal SIGSEGV, Segmentation fault.
 0x7bc714dd in ?? ()</code></pre>
-<p>Execution did not stop at <strong>RtlAnsiStringToUnicodeString()</strong>. My understanding on why
-it happened is because <strong>ntdll.dll.so</strong> gets loaded to address space in a way not
-visible to <strong>gdb</strong>. It has something to do with re-execution of <strong>wine-preloader</strong>
-binary in place of <strong>wine</strong>.</p>
-<p>I happened to notice that the way re-execution happens
-is by checking <a href="https://source.winehq.org/git/wine.git/blob/HEAD:/dlls/ntdll/unix/loader.c#l1758">WINELOADERNOEXEC=1</a>.</p>
-<p>My understanding of re-execution is to adjust <strong>PATH</strong>, <strong>WINEPREFIX</strong>
-and similar variables (and switch 32/64-bit address space if needed)</p>
-<p>We should be able to set environment up as needed without the need for re-execution.</p>
-<p>I tried the simple way:</p>
+<p>Execution did not stop at <code>RtlAnsiStringToUnicodeString()</code>. My
+understanding on why it happened is because <code>ntdll.dll.so</code> gets loaded
+to address space in a way not visible to <code>gdb</code>. It has something to do
+with re-execution of <code>wine-preloader</code> binary in place of <code>wine</code>.
+I happened to notice that the way re-execution happens is by checking
+<a href="https://source.winehq.org/git/wine.git/blob/HEAD:/dlls/ntdll/unix/loader.c#l1758"><code>WINELOADERNOEXEC=1</code></a>.
+My understanding of re-execution purpose is to adjust <code>PATH</code>, <code>WINEPREFIX</code>
+and similar variables (and switch 32/64-bit address space if needed)
+We should be able to set environment up as needed without the need for
+re-execution. I tried the simple way:</p>
 <pre><code>$ WINELOADERNOEXEC=1 gdb --args /usr/lib/wine-vanilla-5.22/bin/wine a.exe
 Reading symbols from /usr/lib/wine-vanilla-5.22/bin/wine...
 Reading symbols from /usr/lib/debug//usr/lib/wine-vanilla-5.22/bin/wine.debug...
@@ -441,12 +446,14 @@ Backtrace stopped: Cannot access memory at address 0xfffffffc
 #8  0x7bc58e38 in process_attach (lpReserved=0x61fd24, wm=&lt;optimized out&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/loader.c:1394
 #9  LdrInitializeThunk (context=0x61fd24, unknown2=1073733632, unknown3=0, unknown4=0) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/loader.c:3539
 #10 0x00000000 in ?? ()</code></pre>
-<p>It worked as is! We get a nice backtrace and we can even set lazy breakpoints.</p>
-<p>Let’s track down the exact place where stack corruption happens. The plan is simple:</p>
+<p>It worked as is! We get a nice backtrace and we can even set lazy
+breakpoints.
+Let’s track down the exact place where stack corruption happens. The
+plan is simple:</p>
 <ol type="1">
-<li>Stop at the call of <strong>RtlAnsiStringToUnicodeString()</strong></li>
-<li>Check where <strong>ecx</strong> is saved on stack there</li>
-<li>Set a watchpoint on memory location in saved stack space</li>
+<li>Stop at the call of <code>RtlAnsiStringToUnicodeString()</code></li>
+<li>Check where <code>ecx</code> is saved on stack there</li>
+<li>Set a <code>watchpoint</code> on memory location in saved stack space</li>
 <li>Observe where change happens.</li>
 </ol>
 <p>Full session that executes it:</p>
@@ -532,14 +539,15 @@ RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, r
 #2  0x7bc714bb in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
     doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:578
 Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
-<p>Aha! From the above we see that <strong>RtlCustomCPToUnicodeN()</strong>
-managed to write into stack of it’s grand-caller:</p>
+<p>Aha! From the above we see that <code>RtlCustomCPToUnicodeN()</code> managed to
+write into stack of it’s grand-caller:</p>
 <pre><code>-&gt; RtlAnsiStringToUnicodeString() [puts $ecx on stack ]
   -&gt;RtlMultiByteToUnicodeN()
     -&gt;RtlCustomCPToUnicodeN() [ corrupts $ecx on stack ]</code></pre>
-<p>The call chain is straightforward but unexpected. Let’s see the definitions
-of <strong>RtlCustomCPToUnicodeN()</strong> and <strong>RtlMultiByteToUnicodeN()</strong> for clues
-where stack corruption could happen due to a code bug:</p>
+<p>The call chain is straightforward but unexpected. Let’s see the
+definitions of <code>RtlCustomCPToUnicodeN()</code> and
+<code>RtlMultiByteToUnicodeN()</code> for clues where stack corruption could
+happen due to a code bug:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">//(gdb) list RtlCustomCPToUnicodeN</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>NTSTATUS WINAPI RtlCustomCPToUnicodeN<span class="op">(</span> CPTABLEINFO <span class="op">*</span>info<span class="op">,</span> WCHAR <span class="op">*</span>dst<span class="op">,</span> DWORD dstlen<span class="op">,</span> DWORD <span class="op">*</span>reslen<span class="op">,</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>                                       <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>src<span class="op">,</span> DWORD srclen <span class="op">)</span></span>
@@ -586,10 +594,8 @@ where stack corruption could happen due to a code bug:</p>
 <span id="cb19-44"><a href="#cb19-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> <span class="op">(</span>dstlen<span class="op">--)</span> <span class="op">*</span>dst<span class="op">++</span> <span class="op">=</span> <span class="op">*</span>src<span class="op">++</span> <span class="op">&amp;</span> <span class="bn">0x7f</span><span class="op">;</span></span>
 <span id="cb19-45"><a href="#cb19-45" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> STATUS_SUCCESS<span class="op">;</span></span>
 <span id="cb19-46"><a href="#cb19-46" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><strong>gdb</strong> says corruption happens at a line
-<strong>if (reslen) *reslen = ret * sizeof(WCHAR);</strong>. But what is
-wrong with it?</p>
-<p>The hint is seen in backtrace itself:</p>
+<p><code>gdb</code> says corruption happens at a line <code>if (reslen) *reslen = ret \* sizeof(WCHAR);</code>. But what is wrong with it?
+The hint is seen in backtrace itself:</p>
 <pre><code>(gdb) bt
 #0  RtlCustomCPToUnicodeN (info=0x7bcc14ec &lt;nls_info+44&gt;, dst=0x0, dstlen=0, reslen=0x61ed28, src=&lt;optimized out&gt;, srclen=&lt;optimized out&gt;)
     at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:972
@@ -598,11 +604,11 @@ wrong with it?</p>
 #2  0x7bc714bb in RtlAnsiStringToUnicodeString (uni=&lt;error reading variable: Cannot access memory at address 0x0&gt;, ansi=&lt;error reading variable: Cannot access memory at address 0x4&gt;,
     doalloc=&lt;error reading variable: Cannot access memory at address 0x8&gt;) at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/rtlstr.c:578
 Backtrace stopped: previous frame inner to this frame (corrupt stack?)</code></pre>
-<p>Somehow <strong>reslen</strong> value in <strong>gdb</strong> backtrace suddenly changed
-from <strong>reslen=0x0</strong> (frame 2) to <strong>reslen=0x61ed28</strong> (frame 3).
-That smells like an ABI mismatch between caller and callee.</p>
-<p>Let’s have a peek at how <strong>RtlMultiByteToUnicodeN()</strong> calls <strong>RtlCustomCPToUnicodeN()</strong>
-in the assembly:</p>
+<p>Somehow <code>reslen</code> value in <code>gdb</code> backtrace suddenly changed from
+<code>reslen=0x0</code> (frame 2) to <code>reslen=0x61ed28</code> (frame 3). That smells
+like an ABI mismatch between caller and callee.
+Let’s have a peek at how <code>RtlMultiByteToUnicodeN()</code> calls
+<code>RtlCustomCPToUnicodeN()</code> in the assembly:</p>
 <pre><code>(gdb) fr 1
 #1  0x7bc5d3c5 in RtlMultiByteToUnicodeN (dst=0x3ffe2c00, dstlen=12, reslen=0x0, src=0x7fe205be &quot;CONIN$&quot;, srclen=6)
     at /usr/src/debug/app-emulation/wine-vanilla-5.22-r2/wine-5.22/dlls/ntdll/locale.c:1019
@@ -640,14 +646,14 @@ Dump of assembler code for function RtlMultiByteToUnicodeN:
    0x7bc5d3ca &lt;+154&gt;:   pop    %ebp
    0x7bc5d3cb &lt;+155&gt;:   lea    -0x4(%ecx),%esp
    0x7bc5d3ce &lt;+158&gt;:   ret    $0x14</code></pre>
-<p>Here we already have suspicious code. Can you spot it?</p>
-<p>We know what we are looking for:
-we need to track life of parameter 3 (<strong>reslen=0x0</strong>) being passed as parameter 4 into
-<strong>RtlCustomCPToUnicodeN()</strong>.</p>
-<p>All the 3 functions in the backtrace are <strong>WINAPI</strong>
-(aka <strong>__attribute__((stdcall))</strong>). This means all argumens
-should be passed on stack. Specifically at <strong>RtlMultiByteToUnicodeN()</strong>
-entry first argument should be at <strong>esp + 4</strong>:</p>
+<p>Here we already have suspicious code. Can you spot it?
+We know what we are looking for: we need to track life of parameter 3
+(<code>reslen=0x0</code>) being passed as parameter 4 into
+<code>RtlCustomCPToUnicodeN()</code>.
+All the 3 functions in the backtrace are <code>WINAPI</code> (aka
+<code>__attribute__((stdcall))</code>). This means all arguments should be
+passed on stack. Specifically at <code>RtlMultiByteToUnicodeN()</code> entry
+first argument should be at <code>esp + 4</code>:</p>
 <pre><code>; at RtlMultiByteToUnicodeN entry:
              | ...
  $esp     -&gt; | &lt;return address to RtlAnsiStringToUnicodeString&gt;
@@ -657,8 +663,8 @@ entry first argument should be at <strong>esp + 4</strong>:</p>
              | arg4: src
              | arg5: srclen
              | ...</code></pre>
-<p>Let’s trace <strong>reslen</strong> through to <strong>RtlCustomCPToUnicodeN()</strong> call
-site (<strong>RtlMultiByteToUnicodeN+144</strong>).</p>
+<p>Let’s trace <code>reslen</code> through to <code>RtlCustomCPToUnicodeN()</code> call site
+(<code>RtlMultiByteToUnicodeN+144</code>).</p>
 <pre><code>Dump of assembler code for function RtlMultiByteToUnicodeN:
    0x7bc5d330 &lt;+0&gt;:     lea    0x4(%esp),%ecx   ; $ecx=$esp+4 (save pointer to parameter 1 on stack)
    0x7bc5d334 &lt;+4&gt;:     and    $0xfffffff0,%esp ; align $esp to 16 bytes
@@ -691,10 +697,10 @@ site (<strong>RtlMultiByteToUnicodeN+144</strong>).</p>
    0x7bc5d3cb &lt;+155&gt;:   lea    -0x4(%ecx),%esp
    0x7bc5d3ce &lt;+158&gt;:   ret    $0x14</code></pre>
 <p>The only problem with this code is that arguments are loaded from
-<strong>ebp</strong> as if <strong>and $0xfffffff0,%esp</strong> instruction never existed.
-And as a result we load arguments at a wrong stack location!</p>
-<p>That is a compiler bug. Filed as <a href="https://gcc.gnu.org/PR98161">https://gcc.gnu.org/PR98161</a>.</p>
-<p>Here is the single-file example:</p>
+<code>ebp</code> as if <code>and $0xfffffff0,%esp</code> instruction never existed. And
+as a result we load arguments at a wrong stack location!
+That is a compiler bug. Filed as <a href="https://gcc.gnu.org/PR98161" class="uri">https://gcc.gnu.org/PR98161</a>.
+Here is the single-file example:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">short</span> u16<span class="op">;</span></span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">int</span>   u32<span class="op">;</span></span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">char</span>  u8<span class="op">;</span></span>
@@ -740,7 +746,7 @@ And as a result we load arguments at a wrong stack location!</p>
 <span id="cb24-43"><a href="#cb24-43" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Should return 12 */</span></span>
 <span id="cb24-44"><a href="#cb24-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> bug<span class="op">(</span><span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">12</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">34</span><span class="op">);</span></span>
 <span id="cb24-45"><a href="#cb24-45" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The mismatch is seen on <strong>-O1</strong> / <strong>-O2</strong>:</p>
+<p>The mismatch is seen on <code>-O1</code> / <code>-O2</code>:</p>
 <pre><code>$ x86_64-pc-linux-gnu-gcc -m32 -fno-PIC -fno-builtin -pipe -fcf-protection=none -fno-stack-protector -fno-omit-frame-pointer \
     -O1 -mavx -o bug bug.c.c
 ./bug; echo $?
@@ -752,28 +758,29 @@ $ x86_64-pc-linux-gnu-gcc -m32 -fno-PIC -fno-builtin -pipe -fcf-protection=none 
 56</code></pre>
 <p>There are a few unusual things about the example:</p>
 <ul>
-<li><strong>wine</strong> uses <strong>__attribute__((__force_align_arg_pointer__))</strong> to realign stack
-as windows and linux have slightly different alignment assumptions.</li>
-<li><strong>-msse4</strong> or above was used to compile <strong>wine</strong></li>
-<li>unreleased <strong>gcc-11</strong> was used to compile <strong>wine</strong> (<strong>gcc-10</strong> works fine)</li>
+<li><code>wine</code> uses <code>__attribute__((__force_align_arg_pointer__))</code>
+to realign stack as windows and <code>linux</code> have slightly different
+alignment assumptions.</li>
+<li><code>-msse4</code> or above was used to compile <code>wine</code></li>
+<li>unreleased <code>gcc-11</code> was used to compile <code>wine</code> (<code>gcc-10</code> works
+fine)</li>
 </ul>
-<h1 id="parting-words">Parting words</h1>
+<h2 id="parting-words">Parting words</h2>
 <ul>
-<li><strong>wine</strong> can normally run <strong>mingw</strong>-compiled binaries :)</li>
-<li><strong>wine</strong>’s loader process is very similar to <strong>glibc</strong>’s ld process
+<li><code>wine</code> can normally run <code>mingw</code>-compiled binaries :)</li>
+<li><code>wine</code> loader process is very similar to <code>glibc</code> <code>rtld</code> process
 with a few minor differences like re-execution on first run.</li>
-<li><strong>WINELOADERNOEXEC=1</strong> is a good hack to make <strong>wine</strong> more
-debuggable under <strong>gdb</strong>. I wonder if <strong>gdb</strong> (or <strong>wine</strong>?)
-could be tweaked to avoid the need for <strong>WINELOADERNOEXEC=1</strong>
-as a workaround to get symbols.</li>
-<li><strong>gdb</strong> is quite usable to debug binaries under <strong>wine</strong>.</li>
-<li><strong>gcc-11</strong> is still an unreleased version of compiler. If you
-enjoy tracking these kinds of bugs as I do you might want to
-give it a try.</li>
+<li><code>WINELOADERNOEXEC=1</code> is a good hack to make <code>wine</code> more debuggable
+under <code>gdb</code>. I wonder if <code>gdb</code> (or <code>wine</code>?) could be tweaked to
+avoid the need for <code>WINELOADERNOEXEC=1</code> as a workaround to get
+symbols.</li>
+<li><code>gdb</code> is quite usable to debug binaries under <code>wine</code>.</li>
+<li><code>gcc-11</code> is still an unreleased version of compiler. If you enjoy
+tracking these kinds of bugs as I do you might want to give it a try.</li>
 </ul>
-<p>I reported the bug this Sunday morning and was lazily writing
-this blog post. <strong>gcc</strong> upstream already fixed bug in master
-before I have finished the post. What a speed!</p>
+<p>I reported the bug this Sunday morning and was lazily writing this blog
+post. <code>gcc</code> upstream already fixed bug in master before I have
+finished the post. What a speed!</p>
 <p>Have fun!</p>
         </div>
     </body>

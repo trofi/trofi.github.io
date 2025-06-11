@@ -29,20 +29,23 @@
                 <div class="info">November 18, 2017</div>
             
 
-            <h1 id="bug">Bug</h1>
-<p>Rolf Eike Beer noticed two test failures while testing <strong>radvd</strong> package (<strong>IPv6</strong> route advertiser
-daemon and more) on <strong>sparc</strong>. Both tests failed likely due to endianness issue:</p>
+            <h2 id="bug">Bug</h2>
+<p>Rolf Eike Beer noticed two test failures while testing <code>radvd</code> package
+(<code>IPv6</code> route advertiser daemon and more) on <code>sparc</code>. Both tests
+failed likely due to endianness issue:</p>
 <pre><code>test/send.c:317:F:build:test_add_ra_option_lowpanco:0:
   Assertion '0 == memcmp(expected, sb.buffer, sizeof(expected))'
     failed: 0 == 0, memcmp(expected, sb.buffer, sizeof(expected)) == 1
 test/send.c:342:F:build:test_add_ra_option_abro:0:
   Assertion '0 == memcmp(expected, sb.buffer, sizeof(expected))'
     failed: 0 == 0, memcmp(expected, sb.buffer, sizeof(expected)) == 1</code></pre>
-<p>I’ve confirmed the same failure on <strong>powerpc</strong>.</p>
-<p>Eike noted that it’s unusual because sparc is a big-endian architecture and network byteorder
-is also big-endian (thus no need to flip bytes). Something very specific must have lurked in <strong>radvd</strong>
-code to break endianness in this case. Curiously all the <strong>radvd</strong> tests were working fine on <strong>amd64</strong>.</p>
-<p>Two functions failed to produce expected results:</p>
+<p>I’ve confirmed the same failure on <code>powerpc</code>.
+Eike noted that it’s unusual because <code>sparc</code> is a big-endian architecture
+and network byte order is also big-endian (thus no need to flip bytes).
+Something very specific must have lurked in <code>radvd</code> code to break
+endianness in this case. Curiously all the <code>radvd</code> tests were working
+fine on <code>amd64</code>.
+Two functions failed to produce expected results:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>START_TEST<span class="op">(</span>test_add_ra_option_lowpanco<span class="op">)</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>        ck_assert_ptr_ne<span class="op">(</span><span class="dv">0</span><span class="op">,</span> iface<span class="op">);</span></span>
@@ -80,10 +83,11 @@ code to break endianness in this case. Curiously all the <strong>radvd</strong> 
 <span id="cb2-35"><a href="#cb2-35" aria-hidden="true" tabindex="-1"></a>        safe_buffer_free<span class="op">(&amp;</span>sb<span class="op">);</span></span>
 <span id="cb2-36"><a href="#cb2-36" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
 <span id="cb2-37"><a href="#cb2-37" aria-hidden="true" tabindex="-1"></a>END_TEST</span></code></pre></div>
-<p>Both tests are straightforward: they verify <strong>6LoWPAN</strong> and <strong>ABRO</strong> extension handling
-(both are related to route announcement for Low Power devices). Does not look complicated.</p>
-<p>I looked at <strong>add_ra_option_lowpanco()</strong> implementation and noticed at least one bug of
-missing endianness conversion:</p>
+<p>Both tests are straightforward: they verify <code>6LoWPAN</code> and <code>ABRO</code>
+extension handling (both are related to route announcement for Low Power
+devices). Does not look complicated.
+I looked at <code>add_ra_option_lowpanco()</code> implementation and noticed at
+least one bug of missing endianness conversion:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// radvd.h</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nd_opt_abro <span class="op">{</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_abro_type<span class="op">;</span></span>
@@ -125,14 +129,17 @@ missing endianness conversion:</p>
 <span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>        safe_buffer_append<span class="op">(</span>sb<span class="op">,</span> <span class="op">&amp;</span>abro<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>abro<span class="op">));</span></span>
 <span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Note how <strong>add_ra_option_mipv6_home_agent_info()</strong> carefully flips bytes with <strong>htons()</strong>
-for all <strong>uint16_t</strong> fields but <strong>add_ra_option_abro()</strong> does not.</p>
-<p>It means the <strong>ABRO</strong> does not really work on little-endian (aka most) systems in <strong>radvd</strong>
-and test checks for the wrong thing. I added missing <strong>htons()</strong> calls and fixed <strong>expected[]</strong>
-output in tests by manually flipping two bytes in a few locations.</p>
-<h1 id="plot-twist">Plot twist</h1>
-<p>The effect was slightly unexpected: I fixed only <strong>ABRO</strong> test, but not <strong>6LoWPAN</strong>.
-It’s where things became interesting. Let’s look at <strong>add_ra_option_lowpanco()</strong> implementation:</p>
+<p>Note how <code>add_ra_option_mipv6_home_agent_info()</code> carefully flips bytes
+with <code>htons()</code> for all <code>uint16_t</code> fields but
+<code>add_ra_option_abro()</code> does not.
+It means the <code>ABRO</code> does not really work on little-endian (aka most)
+systems in <code>radvd</code> and test checks for the wrong thing. I added
+missing <code>htons()</code> calls and fixed <code>expected[]</code> output in tests by
+manually flipping two bytes in a few locations.</p>
+<h2 id="plot-twist">Plot twist</h2>
+<p>The effect was slightly unexpected: I fixed only <code>ABRO</code> test, but not
+<code>6LoWPAN</code>. It’s where things became interesting. Let’s look at
+<code>add_ra_option_lowpanco()</code> implementation:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// radvd.h</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nd_opt_6co <span class="op">{</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>        <span class="dt">uint8_t</span> nd_opt_6co_type<span class="op">;</span></span>
@@ -163,10 +170,12 @@ It’s where things became interesting. Let’s look at <strong>add_ra_option_lo
 <span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>        safe_buffer_append<span class="op">(</span>sb<span class="op">,</span> <span class="op">&amp;</span>co<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>co<span class="op">));</span></span>
 <span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The test still failed to match one single byte: the one that spans 3 bitfields: <strong>nd_opt_6co_res</strong>, <strong>nd_opt_6co_c</strong>, <strong>nd_opt_6co_cid</strong>.
-But why? Does endianness really matter within byte? Apparently gcc happens to group
-those 3 fields in different orders on <strong>x86_64</strong> and <strong>powerpc</strong>!</p>
-<p>Let’s looks at a smaller example:</p>
+<p>The test still failed to match one single byte: the one that spans 3
+bit fields: <code>nd_opt_6co_res</code>, <code>nd_opt_6co_c</code>, <code>nd_opt_6co_cid</code>. But
+why? Does endianness really matter within byte? Apparently <code>gcc</code> happens
+to group those 3 fields in different orders on <code>x86_64</code> and
+<code>powerpc</code>!
+Let’s looks at a smaller example:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdint.h&gt;</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -183,25 +192,29 @@ those 3 fields in different orders on <strong>x86_64</strong> and <strong>powerp
 <span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Output difference:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> x86_64-pc-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">v</span> = 0xf8</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="co"># (0xF &lt;&lt; 5) | (0x1 &lt;&lt; 4) | 0x00</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> powerpc-unknown-linux-gnu-gcc a.c <span class="at">-o</span> a <span class="kw">&amp;&amp;</span> <span class="ex">./a</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="ex">v</span> = 0x1f</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="co"># (0x0 &lt;&lt; 5) | (0x1 &lt;&lt; 4) | 0xF</span></span></code></pre></div>
-<p>C standard does not specify layout of bitfields and it’s a great illustration
-of how things break :)</p>
-<p>An interesting observation: the bitfield order on <strong>powerpc</strong> happens to be
-the desired order (as <strong>6LoWPAN</strong> <strong>RFC</strong> defines it).</p>
-<p>It means <strong>radvd</strong> code indeed happened to generate correct bitstream on big-endian
-platforms (as Eike predicted) but did not work on little-endian systems. Unfortunately
-golden <strong>expected[]</strong> output was generated on little-endian system.</p>
+<pre><code>$ x86_64-pc-linux-gnu-gcc a.c -o a &amp;&amp; ./a
+v = 0xf8
+# (0xF &lt;&lt; 5) | (0x1 &lt;&lt; 4) | 0x00
+
+$ powerpc-unknown-linux-gnu-gcc a.c -o a &amp;&amp; ./a
+v = 0x1f
+# (0x0 &lt;&lt; 5) | (0x1 &lt;&lt; 4) | 0xF</code></pre>
+<p>C standard does not specify the layout of bit fields and it’s a great
+illustration of how things break :)
+An interesting observation: the bit field order on <code>powerpc</code> happens to
+be the desired order (as <code>6LoWPAN</code> <code>RFC</code> defines it).
+It means <code>radvd</code> code indeed happened to generate correct bitstream on
+big-endian platforms (as Eike predicted) but did not work on
+little-endian systems. Unfortunately golden <code>expected[]</code> output was
+generated on little-endian system.</p>
 <p>Thus the 3 fixes:</p>
 <ul>
-<li>use <strong>uint8_t</strong> instead of bitfield (and tweak the golden byte): <a href="https://github.com/reubenhwk/radvd/pull/78/commits/25f627b3ae878cab1c5362ba70947e1bf8a250c4">https://github.com/reubenhwk/radvd/pull/78/commits/25f627b3ae878cab1c5362ba70947e1bf8a250c4</a></li>
-<li>regenerate golden output on big-endian system: <a href="https://github.com/reubenhwk/radvd/pull/78/commits/6b6f81e2979a3cd266e2fce84044485300460767">https://github.com/reubenhwk/radvd/pull/78/commits/6b6f81e2979a3cd266e2fce84044485300460767</a></li>
-<li>fix missing <strong>uint16_t</strong> handling: <a href="https://github.com/reubenhwk/radvd/pull/78/commits/dac7758152188aed9bef140ca2132271e77dfa74">https://github.com/reubenhwk/radvd/pull/78/commits/dac7758152188aed9bef140ca2132271e77dfa74</a></li>
+<li>use <code>uint8_t</code> instead of bit field (and tweak the golden byte):
+<a href="https://github.com/reubenhwk/radvd/pull/78/commits/25f627b3ae878cab1c5362ba70947e1bf8a250c4" class="uri">https://github.com/reubenhwk/radvd/pull/78/commits/25f627b3ae878cab1c5362ba70947e1bf8a250c4</a></li>
+<li>regenerate golden output on big-endian system:
+<a href="https://github.com/reubenhwk/radvd/pull/78/commits/6b6f81e2979a3cd266e2fce84044485300460767" class="uri">https://github.com/reubenhwk/radvd/pull/78/commits/6b6f81e2979a3cd266e2fce84044485300460767</a></li>
+<li>fix missing <code>uint16_t</code> handling:
+<a href="https://github.com/reubenhwk/radvd/pull/78/commits/dac7758152188aed9bef140ca2132271e77dfa74" class="uri">https://github.com/reubenhwk/radvd/pull/78/commits/dac7758152188aed9bef140ca2132271e77dfa74</a></li>
 </ul>
 <p>That’s it :)</p>
         </div>

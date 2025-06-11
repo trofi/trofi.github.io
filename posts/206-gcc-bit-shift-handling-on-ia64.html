@@ -29,51 +29,60 @@
                 <div class="info">December 23, 2017</div>
             
 
-            <p>Over the past week I’ve spent quite some time poking at toolchain packages
-in Gentoo and fixing fresh batch of bugs. The bugs popped up after recent
-introduction of <strong>gcc</strong> profiles that enable <strong>PIE</strong> (position independent
-executables) and <strong>SSP</strong> (stack smash protected executables) by default in
-Gentoo. One would imagine <strong>SSP</strong> is more invasive as it changes on-stack
-layout of things. But somehow <strong>PIE</strong> yields bugs in every direction you
-throw it at:</p>
+            <p>Over the past week I’ve spent quite some time poking at toolchain
+packages in Gentoo and fixing fresh batch of bugs. The bugs popped up
+after recent introduction of <code>gcc</code> profiles that enable <code>PIE</code>
+(position independent executables) and <code>SSP</code> (stack smash protected
+executables) by default in <code>gentoo</code>. One would imagine <code>SSP</code> is more
+invasive as it changes on-stack layout of things. But somehow <code>PIE</code>
+yields bugs in every direction you throw it at:</p>
 <ul>
-<li>[not really from last week] <strong>i386</strong> static binaries <strong>SIGSEGV</strong> at
-startup: <a href="https://sourceware.org/PR21913">bug</a>
-(TL;DR: calling <strong>vdso</strong>-implemented <strong>SYSENTER</strong> syscall entry point
-needs <strong>TLS</strong> to be already initialised in <strong>glibc</strong>. In this case
-<strong>brk()</strong> syscall was called before <strong>TLS</strong> was initialised.)</li>
-<li><strong>ia64</strong>’s <strong>glibc</strong> miscompiles <strong>librt.so</strong>: <a href="https://bugs.gentoo.org/641216">bug</a>
-(Tl;DR: <strong>pie-by-default</strong> <strong>gcc</strong> tricked <strong>glibc</strong> into believing binutils supports <strong>IFUNC</strong>
-on <strong>ia64</strong>. It does not, exactly as in <a href="https://bugs.gentoo.org/336792#c26">sparc bug</a> 7 years ago.)</li>
-<li><strong>sparc</strong>’s <strong>glibc</strong> produces broken static binaries on <strong>pie-by-default</strong> <strong>gcc</strong>: <a href="https://bugs.gentoo.org/640966">bug</a>.
-(TL;DR: C startup files for <strong>sparc</strong> were <strong>PIC</strong>-unfriendly)</li>
-<li><strong>powerpc</strong>’s <strong>gcc-7.2.0</strong> and older produces broken binaries: <a href="https://sourceware.org/PR22626">bug</a>
-(TL;DR: two bugs: binutils generates relocations to non-existent symbols, <strong>gcc</strong> hardcoded wrong C
-startup files to be used)</li>
-<li><strong>mips64</strong> <strong>gcc</strong> fails to produce <strong>glibc</strong> that <strong>binutils</strong> can link without <strong>assert()</strong> failures (TODO: debug and fix)</li>
-<li><strong>m68k</strong> <strong>glibc</strong> fails to compile (TODO: debug and fix)</li>
-<li><strong>sh4</strong> <strong>gcc</strong> fails to compile by crashing with stack smash detection (TODO: debug and fix)</li>
+<li>(not really from last week) <code>i386</code> static binaries <code>SIGSEGV</code> at
+startup: <a href="https://sourceware.org/PR21913">bug</a> (TL;DR: calling
+<code>vdso</code>-implemented <code>SYSENTER</code> syscall entry point needs <code>TLS</code> to
+be already initialized in <code>glibc</code>. In this case <code>brk()</code> syscall
+was called before <code>TLS</code> was initialized.)</li>
+<li><code>ia64</code>’s <code>glibc</code> miscompiles <code>librt.so</code>:
+<a href="https://bugs.gentoo.org/641216">bug</a> (Tl;DR: <code>pie-by-default</code>
+<code>gcc</code> tricked <code>glibc</code> into believing <code>binutils</code> supports <code>IFUNC</code>
+on <code>ia64</code>. It does not, exactly as in <a href="https://bugs.gentoo.org/336792#c26">sparc
+bug</a> 7 years ago.)</li>
+<li><code>sparc</code>’s <code>glibc</code> produces broken static binaries on
+<code>pie-by-default</code> <code>gcc</code>: <a href="https://bugs.gentoo.org/640966">bug</a>.
+(TL;DR: C startup files for <code>sparc</code> were <code>PIC</code>-unfriendly)</li>
+<li><code>powerpc</code>’s <code>gcc-7.2.0</code> and older produces broken binaries:
+<a href="https://sourceware.org/PR22626">bug</a> (TL;DR: two bugs: <code>binutils</code>
+generates relocations to non-existent symbols, <code>gcc</code> hardcoded wrong
+<code>c</code> startup files to be used)</li>
+<li><code>mips64</code> <code>gcc</code> fails to produce <code>glibc</code> that <code>binutils</code> can
+link without <code>assert()</code> failures (TODO: debug and fix)</li>
+<li><code>m68k</code> <code>glibc</code> fails to compile (TODO: debug and fix)</li>
+<li><code>sh4</code> <code>gcc</code> fails to compile by crashing with stack smash
+detection (TODO: debug and fix)</li>
 <li>more I forgot about</li>
 </ul>
-<p>These are only toolchain bugs, and I did not yet try things on <strong>arm</strong>. I’m sure other
-packages will uncover more interesting corner cases once we fix the toolchain.</p>
-<p>I won’t write about any of the above here but it’s a nice reference point
-if you want to backport something to older toolchains to get <strong>PIE</strong>/**SSP**
-work better. The bugs might be a good reference point on how to debug that
-kind of bugs.</p>
-<p>Today’s story will be about <strong>gcc</strong> code generation bug on <strong>ia64</strong> that has
-nothing to do with <strong>PIE</strong> or <strong>SSP</strong>.</p>
-<h1 id="bug">Bug</h1>
-<p>On <strong>#gentoo-ia64</strong> Jason Duerstock asked if <strong>openssl</strong> fails tests on modern
-<strong>gcc-7.2.0</strong>. It used to pass on <strong>gcc-6.4.0</strong> for him.</p>
-<p>Having successfully dealt with <a href="https://bugs.gentoo.org/641216">IFUNC bug</a>
-recently I was confident things are mostly working in <strong>ia64</strong> land and gave
-it a try.</p>
-<p><strong>openssl</strong> <strong>DES</strong> tests were indeed failing, claiming that encryption/decryption
-roundtrip did not yield original data with errors like:</p>
+<p>These are only toolchain bugs, and I did not yet try things on <code>arm</code>.
+I’m sure other packages will uncover more interesting corner cases once
+we fix the toolchain.</p>
+<p>I won’t write about any of the above here but it’s a nice reference
+point if you want to backport something to older toolchains to get
+<code>PIE</code>/<code>SSP</code> work better. The bugs might also be a good reference
+point on how to debug that kind of bugs. Today’s story will be about
+<code>gcc</code> code generation bug on <code>ia64</code> that has nothing to do with <code>PIE</code> or
+<code>SSP</code>.</p>
+<h2 id="bug">Bug</h2>
+<p>On <code>#gentoo-ia64</code> Jason Duerstock asked if <code>openssl</code> fails tests on
+modern <code>gcc-7.2.0</code>. It used to pass on <code>gcc-6.4.0</code> for him.
+Having successfully dealt with <a href="https://bugs.gentoo.org/641216"><code>IFUNC</code>
+bug</a> recently I was confident things are
+mostly working in <code>ia64</code> land and gave it a try.
+<code>openssl</code> <code>DES</code> tests were indeed failing, claiming that
+encryption/decryption roundtrip did not yield original data with errors
+like:</p>
 <pre><code>des_ede3_cbc_encrypt decrypt error ...</code></pre>
-<h1 id="what-does-des-test-do">What does DES test do?</h1>
-<p>The test lives at <a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L421">https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L421</a>
+<h2 id="what-does-des-test-do">What does <code>DES</code> test do?</h2>
+<p>The test lives at
+<a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L421" class="uri">https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L421</a>
 and looks like that (simplified):</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>printf<span class="op">(</span><span class="st">&quot;Doing cbcm</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>DES_set_key_checked<span class="op">(&amp;</span>cbc_key<span class="op">,</span> <span class="op">&amp;</span>ks<span class="op">);</span></span>
@@ -91,11 +100,12 @@ and looks like that (simplified):</p>
 <span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;des_ede3_cbcm_encrypt decrypt error</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
 <span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
 <span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Test encrypts a few bytes of data in two takes (1: encrypt 16 bytes, 2: encrypt rest)
-and then decrypts the result in one go. It works on static data. Very straightforward.</p>
-<h1 id="fixing-variables">Fixing variables</h1>
-<p>My first suspect was <strong>gcc</strong> change as <strong>7.2.0</strong> fails, <strong>6.4.0</strong> works and I tried to build <strong>openssl</strong>
-with optimisations completely disabled:</p>
+<p>Test encrypts a few bytes of data in two takes (1: encrypt 16 bytes, 2:
+encrypt rest) and then decrypts the result in one go. It works on static
+data. Very straightforward.</p>
+<h2 id="fixing-variables">Fixing variables</h2>
+<p>My first suspect was <code>gcc</code> change as <code>7.2.0</code> fails, <code>6.4.0</code> works
+and I tried to build <code>openssl</code> with optimisations completely disabled:</p>
 <pre><code># CFLAGS=-O1 FEATURES=test emerge -1 =dev-libs/openssl-1.0.2n
 ...
 des_ede3_cbc_encrypt decrypt error ...
@@ -103,16 +113,16 @@ des_ede3_cbc_encrypt decrypt error ...
 # CFLAGS=-O0 FEATURES=test emerge -1 =dev-libs/openssl-1.0.2n
 ...
 OK!</code></pre>
-<p>Hah! At least <strong>-O0</strong> seems to work. It means it will be easier to cross-check
-which optimisation pass affects code generation and find out if it’s an <strong>openssl</strong>
-bug or something else.</p>
-<h1 id="setting-up-ab-test">Setting up A/B test</h1>
-<p>Debugging cryptographic algorithms like <strong>DES</strong> is very easy from this
-standpoint because they don’t need any external state: no services running,
-no files created, input data is not randmized. They are a pure function of
-input bit stream(s).</p>
-<p>I unpacked single <strong>openssl</strong> source tree and started building it in
-two directories: one with <strong>-O0</strong> optimisations, another with <strong>-O1</strong>:</p>
+<p>Aha! At least <code>-O0</code> seems to work. It means it will be easier to
+cross-check which optimization pass affects code generation and find out
+if it’s an <code>openssl</code> bug or something else.</p>
+<h2 id="setting-up-ab-test">Setting up A/B test</h2>
+<p>Debugging cryptographic algorithms like <code>DES</code> is very easy from this
+standpoint because they don’t need any external state: no services
+running, no files created, input data is not randomized. They are a pure
+function of input bit stream(s).
+I unpacked single <code>openssl</code> source tree and started building it in two
+directories: one with <code>-O0</code> optimisations, another with <code>-O1</code>:</p>
 <pre><code>~/openssl/openssl-1.0.2n-O0/
     `openssl-1.0.2n-.ia64/
         `crypto/des/destest.c (file-1)
@@ -121,15 +131,19 @@ two directories: one with <strong>-O0</strong> optimisations, another with <stro
     `openssl-1.0.2n-.ia64/
         `crypto/des/destest.c (symlink to file-1)
         ...</code></pre>
-<p>Then I started sprinking <strong>printf()</strong> statements in <strong>destest.c</strong> and
-other <strong>crypto/des/</strong> files, then ran <strong>destest</strong> and diffed text stdouts
-to find where exactly difference appears first.</p>
-<p>Relatively quickly I nailed it down to the following trace:</p>
+<p>Then I started sprinkling <code>printf()</code> statements in <code>destest.c</code> and
+other <code>crypto/des/</code> files, then ran <code>destest</code> and diffed text
+outputs to find where exactly difference appears first.
+Relatively quickly I nailed it down to the following trace:</p>
 <ul>
-<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L403">first call of DES_ede3_cbcm_encrypt()</a></li>
-<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/ede_cbcm_enc.c#L99">first call of DES_encrypt1()</a></li>
-<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/des_enc.c#L96">first expansion of D_ENCRYPT() macro</a></li>
-<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/des_locl.h#L365">fourth XOR element in D_ENCRYPT() macro</a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/destest.c#L403">first call of
+<code>DES_ede3_cbcm_encrypt()</code></a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/ede_cbcm_enc.c#L99">first call of
+<code>DES_encrypt1()</code></a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/des_enc.c#L96">first expansion of <code>D_ENCRYPT()</code>
+macro</a></li>
+<li><a href="https://github.com/openssl/openssl/blob/OpenSSL_1_0_2-stable/crypto/des/des_locl.h#L365">fourth <code>XOR</code> element in <code>D_ENCRYPT()</code>
+macro</a></li>
 </ul>
 <div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">unsigned</span> <span class="dt">int</span> u<span class="op">;</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
@@ -146,21 +160,21 @@ to find where exactly difference appears first.</p>
 <span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans</span><span class="op">[</span><span class="dv">5</span><span class="op">][(</span><span class="pp">t</span><span class="op">&gt;&gt;</span><span class="dv">18</span><span class="bu">L</span><span class="op">)&amp;</span><span class="bn">0x3f</span><span class="op">]^</span><span class="pp"> </span><span class="op">\</span></span>
 <span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="pp">            DES_SPtrans</span><span class="op">[</span><span class="dv">7</span><span class="op">][(</span><span class="pp">t</span><span class="op">&gt;&gt;</span><span class="dv">26</span><span class="bu">L</span><span class="op">)&amp;</span><span class="bn">0x3f</span><span class="op">];</span><span class="pp"> </span><span class="op">}</span></span></code></pre></div>
 <p>See an error? Me neither.</p>
-<h1 id="minimizing-test">Minimizing test</h1>
-<p><strong>printf()</strong> debugging suggested <strong>DES_SPtrans[6][(u&gt;&gt;26L)&amp;0x3f]</strong> returns
-different data in <strong>-O0</strong> and <strong>-O1</strong> cases. Namely the following expression
-did change:</p>
+<h2 id="minimizing-test">Minimizing test</h2>
+<p><code>printf()</code> debugging suggested <code>DES_SPtrans[6][(u&gt;&gt;26L)&amp;0x3f]</code>
+returns different data in <code>-O0</code> and <code>-O1</code> cases. Namely the
+following expression did change:</p>
 <ul>
-<li><strong>-O0</strong>: <strong>(u&gt;&gt;26L)&amp;0x3f</strong> yielded <strong>0x33</strong></li>
-<li><strong>-O1</strong>: <strong>(u&gt;&gt;26L)&amp;0x3f</strong> yielded <strong>0x173</strong></li>
+<li><code>-O0</code>: <code>(u&gt;&gt;26L)&amp;0x3f</code> yielded <code>0x33</code></li>
+<li><code>-O1</code>: <code>(u&gt;&gt;26L)&amp;0x3f</code> yielded <code>0x173</code></li>
 </ul>
-<p>Note how it’s logically infeasible to get anything more than <strong>0x3f</strong> from
-that expression. And yet here we are with our <strong>0x173</strong> value.</p>
-<p>I spent some time deleting lines one by one from all the macros as long
+<p>Note how it’s logically infeasible to get anything more than <code>0x3f</code>
+from that expression. And yet here we are with our <code>0x173</code> value.
+I spent some time deleting lines one by one from all the macros as long
 as the result kept producing the diff. Removing lines is safe in most of
-<strong>DES</strong> code because all the test does is flipping a few bits and rotating
-them within a single <strong>unsigned int u</strong> local variable.</p>
-<p>After a while I came up with the following minimal reproducer:</p>
+<code>DES</code> code because all the test does is flipping a few bits and
+rotating them within a single <code>unsigned int u</code> local variable.
+After a while I came up with the following minimal reproducer:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">int</span> u32<span class="op">;</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>u32 bug <span class="op">(</span>u32 <span class="op">*</span> result<span class="op">)</span> __attribute__<span class="op">((</span>noinline<span class="op">));</span></span>
@@ -196,15 +210,15 @@ $ diff -U0 o0 o1
 
 -off&gt;&gt;: 7fffffff
 +off&gt;&gt;: ffffffff</code></pre>
-<p>The test itself is very straightforward: it does only 32-bit arightmetics
-on <strong>unsigned int r</strong> and prints the result. This is a very fragile test:
-if you try to remove seemingly unrelated code like <strong>*result = tt;</strong> the
-bug will disappear.</p>
-<h1 id="what-gcc-actually-does">What gcc actually does</h1>
-<p>I tried to look at the assembly code. If I could spot an obvious problem I could
-inspect intermediate <strong>gcc</strong> steps to get the idea which pass precisely
-introduces wrong resulting code. Despite being <strong>Itanium</strong> the code
-is not that complicated (added detailed comments):</p>
+<p>The test itself is very straightforward: it does only 32-bit
+arithmetic on <code>unsigned int r</code> and prints the result. This is a very
+fragile test: if you try to remove seemingly unrelated code like
+<code>*result = tt;</code> the bug will disappear.</p>
+<h2 id="what-gcc-actually-does">What <code>gcc</code> actually does</h2>
+<p>I tried to look at the assembly code. If I could spot an obvious problem
+I could inspect intermediate <code>gcc</code> steps to get the idea which pass
+precisely introduces wrong resulting code. Despite being <code>Itanium</code> the
+code is not that complicated (added detailed comments):</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>Dump of assembler code for function bug<span class="op">:</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r14</span><span class="op">=</span><span class="kw">r12</span>                 <span class="co">; r12: register holding stack pointer</span></span>
@@ -247,29 +261,29 @@ is not that complicated (added detailed comments):</p>
 <span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;     r8 = 0x0000000100000000 -&gt; (note how all lower 32 bits are 0)</span></span>
 <span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>                            <span class="co">;     r8 = 0x0000000080000000</span></span>
 <span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0         <span class="co">; return r8 as a computation result</span></span></code></pre></div>
-<p>Tl;DR: <strong>extr.u r8=r8,1,32</strong> extracts 32 bits from 64-bit register at offset 1
-from <strong>r8</strong> and puts them into <strong>r8</strong> back. The problem is that for
-<strong>u32 off = u &gt;&gt; 1</strong> to work correctly it should extract only <strong>31</strong> bit,
-not <strong>32</strong>.</p>
-<p>If I patch assembly file to contain <strong>extr.u r8=r8,1,31</strong> the sample will
-work correctly.</p>
-<p>At this point I shared my sample with Jason and filed
-<a href="https://gcc.gnu.org/PR83565">a gcc bug</a> as it was clear that compiler
-does something very unexpected. Jason pulled in James and they produced
-a working gcc patch for me while I was having dinner(!) :)</p>
-<h1 id="gcc-passes">gcc passes</h1>
-<p>What surprised me is the fact that gcc recognised “rotate” pattern and used
-clever <strong>mix4.r</strong>/**shr.u** trick to achieve the bit rotation effect.</p>
-<p>Internally <strong>gcc</strong> has a few frameworks to perform optimisations:</p>
+<p>Tl;DR: <code>extr.u r8=r8,1,32</code> extracts 32 bits from 64-bit register at
+offset 1 from <code>r8</code> and puts them into <code>r8</code> back. The problem is that
+for <code>u32 off = u &gt;&gt; 1</code> to work correctly it should extract only
+<code>31</code> bit, not <code>32</code>.
+If I patch assembly file to contain <code>extr.u r8=r8,1,31</code> the sample
+will work correctly.
+At this point I shared my sample with Jason and filed <a href="https://gcc.gnu.org/PR83565">a <code>gcc</code>
+bug</a> as it was clear that compiler does
+something very unexpected. Jason pulled in James and they produced a
+working <code>gcc</code> patch for me while I was having dinner(!) :)</p>
+<h2 id="gcc-passes"><code>gcc</code> passes</h2>
+<p>What surprised me is the fact that<code>gcc</code> recognized “rotate” pattern and
+used clever <code>mix4.r</code>/<code>shr.u</code> trick to achieve the bit rotation effect.
+Internally <code>gcc</code> has a few frameworks to perform optimisations:</p>
 <ul>
-<li>high-level (relatively) targed independent “tree” optimisations (working on
-<strong>GIMPLE</strong> representation)</li>
-<li>low-level target-specific “register” optimisations (working on <strong>RTL</strong>
-representation)</li>
+<li>high-level (relatively) target independent “tree” optimisations
+(working on <code>GIMPLE</code> representation)</li>
+<li>low-level target-specific “register” optimisations (working on
+<code>RTL</code> representation)</li>
 </ul>
-<p><strong>GIMPLE</strong> passes run before <strong>RTL</strong> passes. Let’s check
-how many passes are being ran on our small sample by using <strong>-fdump-tree-all</strong>
-and <strong>-fdump-rtl-all</strong>:</p>
+<p><code>GIMPLE</code> passes run before <code>RTL</code> passes. Let’s check how many
+passes are being ran on our small sample by using <code>-fdump-tree-all</code>
+and <code>-fdump-rtl-all</code>:</p>
 <pre><code>$ ia64-unknown-linux-gnu-gcc -O1 -fdump-tree-all -fdump-rtl-all -S a.c &amp;&amp; ls -1 | nl
 1   a.c
 2   a.c.001t.tu
@@ -401,9 +415,9 @@ and <strong>-fdump-rtl-all</strong>:</p>
 128 a.c.307r.dfinish
 129 a.c.308t.statistics
 130 a.s</code></pre>
-<p>128 passes! Quite a few. <strong>t</strong> letter after pass number means “tree” pass,
-<strong>r</strong> is an “rtl” pass. Note how all “tree” passes precede “rtl” ones.</p>
-<p>Latest “tree” pass outputs the following:</p>
+<p>128 passes! Quite a few. <code>t</code> letter after pass number means <code>"tree"</code>
+pass, <code>r</code> is an <code>"rtl"</code> pass. Note how all <code>"tree"</code> passes precede
+<code>"rtl"</code> ones. Latest <code>"tree"</code> pass outputs the following:</p>
 <pre><code>;; cat a.c.227t.optimized
 ;; Function bug (bug, funcdef_no=23, decl_uid=2078, cgraph_uid=23, symbol_order=23)
 
@@ -450,10 +464,11 @@ main ()
   return 0;
 
 }</code></pre>
-<p>Code does not differ much from originally written code because I specifically
-tried to write something that won’t trigger any high-level transformations.</p>
-<p><strong>RTL</strong> dumps are even more verbose. I’ll show an incomplete snippet of
-<strong>bug()</strong> function in <strong>a.c.229r.expand</strong> file:</p>
+<p>Code does not differ much from originally written code because I
+specifically tried to write something that won’t trigger any high-level
+transformations.
+<code>RTL</code> dumps are even more verbose. I’ll show an incomplete snippet of
+<code>bug()</code> function in <code>a.c.229r.expand</code> file:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; Full RTL generated for this function:</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;</span></span>
@@ -536,41 +551,41 @@ tried to write something that won’t trigger any high-level transformations.</p
 <span id="cb11-80"><a href="#cb11-80" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span>
 <span id="cb11-81"><a href="#cb11-81" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">30</span> <span class="dv">29</span> <span class="dv">0</span> <span class="dv">2</span> (use (reg/i:SI <span class="dv">8</span> r8)) <span class="st">&quot;a.c&quot;</span>:<span class="dv">22</span> <span class="op">-</span><span class="dv">1</span></span>
 <span id="cb11-82"><a href="#cb11-82" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
-<p>The above is <strong>RTL</strong> representation of our <strong>bug()</strong> function.
-S-expressions look like machine instructions but not quite.</p>
-<p>For example the following snippet (single S-expression) introduces new virtual register <strong>351</strong>
-which should receive literal value of “0xeeeeeeee”. <strong>SI</strong> means <strong>SImode</strong>, or 32-bit
-signed integer:</p>
-<p>More on modes is <a href="https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html">here</a>.</p>
+<p>The above is <code>RTL</code> representation of our <code>bug()</code> function.
+<code>S</code>-expressions look like machine instructions but not quite.
+For example the following snippet (single <code>S</code>-expression) introduces new
+virtual register <code>351</code> which should receive literal value of
+<code>0xeeeeeeee</code>. <code>SI</code> means <code>SImode</code>, or 32-bit signed integer:
+More on modes is
+<a href="https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html">here</a>.</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">10</span> <span class="dv">9</span> <span class="dv">11</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:SI <span class="dv">351</span>)</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>        (const_int <span class="op">-</span><span class="dv">286331154</span> [<span class="dv">0xffffffffeeeeeeee</span>])) <span class="st">&quot;a.c&quot;</span>:<span class="dv">8</span> <span class="op">-</span><span class="dv">1</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
-<p>Or just <strong>r351 = 0xeeeeeeee</strong> :) Note it also mentions source file line numbers.
-Useful when mapping <strong>RTL</strong> logs back to source files (and I guess <strong>gcc</strong> uses the
-same to emit <strong>dwarf</strong> debugging sections).</p>
-<p>Another example of <strong>RTL</strong> instruction:</p>
+<p>Or just <code>r351 = 0xeeeeeeee</code> :) Note it also mentions source file line
+numbers. Useful when mapping <code>RTL</code> logs back to source files (and I
+guess <code>gcc</code> uses the same to emit <code>dwarf</code> debugging sections).
+Another example of <code>RTL</code> instruction:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">22</span> <span class="dv">21</span> <span class="dv">23</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">358</span>)</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>        (xor:DI (subreg:DI (reg:SI <span class="dv">357</span> [ r ]) <span class="dv">0</span>)</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>            (subreg:DI (reg:SI <span class="dv">341</span> [ ss<span class="fl">.1</span>_2 ]) <span class="dv">0</span>))) <span class="st">&quot;a.c&quot;</span>:<span class="dv">16</span> <span class="op">-</span><span class="dv">1</span></span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>     (<span class="kw">nil</span>))</span></code></pre></div>
-<p>Here we see an <strong>RTL</strong> equivalent of <strong>u_9 = ss.1_2 ^ r_8;</strong> code (<strong>GIMPLE</strong>).
-There is more subtlety here: <strong>xor</strong> itself operates on 64-bit integers (<strong>DI</strong>)
-that contain 32-bit values in lower 32-bits (subregs) which I don’t really
-understand.</p>
-<p>Upstream <a href="https://gcc.gnu.org/PR83565">bug</a> attempts to decide which
-assumption is violated in generic <strong>RTL</strong> optimisation pass (or backend
-implementation). At the time of writing this post a few candidate patches
-were posted to address the bug.</p>
-<h1 id="gcc-rtl-optimisations">gcc RTL optimisations</h1>
-<p>I was interested in the optimisation that converted <strong>extr.u r8=r8,1,31</strong> (valid)
-to <strong>extr.u r8=r8,1,32</strong> (invalid).</p>
-<p>It’s <strong>GIMPLE</strong> representation is:</p>
+<p>Here we see an <code>RTL</code> equivalent of <code>u_9 = ss.1_2 ^ r_8;</code> code
+(<code>GIMPLE</code>). There is more subtlety here: <code>xor</code> itself operates on
+64-bit integers (<code>DI</code>) that contain 32-bit values in lower 32-bits
+(<code>subreg</code>s) which I don’t really understand.
+Upstream <a href="https://gcc.gnu.org/PR83565">bug</a> attempts to decide which
+assumption is violated in generic <code>RTL</code> optimization pass (or backend
+implementation). At the time of writing this post a few candidate
+patches were posted to address the bug.</p>
+<h2 id="gcc-rtl-optimisations"><code>gcc</code> <code>RTL</code> optimisations</h2>
+<p>I was interested in the optimization that converted <code>extr.u r8=r8,1,31</code> (valid) to <code>extr.u r8=r8,1,32</code> (invalid).
+Its <code>GIMPLE</code> representation is:</p>
 <pre><code>// ...
 off_10 = u_9 &gt;&gt; 1;
 *result_11(D) = tt_6;
 return off_10;</code></pre>
-<p>Let’s try to find <strong>RTL</strong> representation of this construct in the very first
-<strong>RTL</strong> dump (<strong>a.c.229r.expand</strong> file):</p>
+<p>Let’s try to find <code>RTL</code> representation of this construct in the very
+first <code>RTL</code> dump (<code>a.c.229r.expand</code> file):</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">23</span> <span class="dv">22</span> <span class="dv">24</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">359</span>)</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (reg:DI <span class="dv">358</span>)</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">31</span> [<span class="dv">0x1f</span>])</span>
@@ -593,11 +608,12 @@ return off_10;</code></pre>
 reg356 = (u32)reg359;
 reg346 = (u32)reg356;
 reg8   = (u32)reg346;</code></pre>
-<p>Very straightforward (and still correct). <strong>zero_extract</strong>
-is some <strong>RTL</strong> virtual operation that will have to be expressed
-as real instruction at some point.</p>
-<p>In the absence of other optimisations it’s done with the following rule
-(at <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/ia64/ia64.md;h=b7cd52ba366ba3d63e98479df5f4be44ffd17ca6;hb=HEAD#l1381">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/ia64/ia64.md;h=b7cd52ba366ba3d63e98479df5f4be44ffd17ca6;hb=HEAD#l1381</a>)</p>
+<p>Very straightforward (and still correct). <code>zero_extract</code> is some
+<code>RTL</code> virtual operation that will have to be expressed as real
+instruction at some point.
+In the absence of other optimisations it’s done with the following rule
+(at
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/ia64/ia64.md;h=b7cd52ba366ba3d63e98479df5f4be44ffd17ca6;hb=HEAD#l1381" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/ia64/ia64.md;h=b7cd52ba366ba3d63e98479df5f4be44ffd17ca6;hb=HEAD#l1381</a>)</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>(define_insn <span class="st">&quot;extzv&quot;</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  [(<span class="kw">set</span> (match_operand:DI <span class="dv">0</span> <span class="st">&quot;gr_register_operand&quot;</span> <span class="st">&quot;=r&quot;</span>)</span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (match_operand:DI <span class="dv">1</span> <span class="st">&quot;gr_register_operand&quot;</span> <span class="st">&quot;r&quot;</span>)</span>
@@ -606,8 +622,8 @@ as real instruction at some point.</p>
 <span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;&quot;</span></span>
 <span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;extr.u %0 = %1, %3, %2&quot;</span></span>
 <span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>  [(set_attr <span class="st">&quot;itanium_class&quot;</span> <span class="st">&quot;ishf&quot;</span>)])</span></code></pre></div>
-<p>In unoptimised case we see all the intermediate assignments
-are stored at <strong>r14</strong> address and loaded back.</p>
+<p>In unoptimized case we see all the intermediate assignments are stored
+at <code>r14</code> address and loaded back.</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; gcc -O0 a.c</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>...</span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>extr<span class="op">.</span>u <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r15</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">31</span></span>
@@ -629,13 +645,13 @@ are stored at <strong>r14</strong> address and loaded back.</p>
 <span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>.<span class="pp">restore</span> <span class="kw">sp</span></span>
 <span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a><span class="bu">mov</span> <span class="kw">r12</span> <span class="op">=</span> r2</span>
 <span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0</span></code></pre></div>
-<p>To get rid of all the needless operations <strong>RTL</strong> applies extensive list
-of optimisations. Each <strong>RTL</strong> dump contains summary of the pass effect
-on the file. Let’s look at the <strong>a.c.232r.jump</strong>:</p>
+<p>To get rid of all the needless operations <code>RTL</code> applies extensive list
+of optimisations. Each <code>RTL</code> dump contains summary of the pass effect
+on the file. Let’s look at the <code>a.c.232r.jump</code>:</p>
 <pre><code>Deleted 2 trivially dead insns
 3 basic blocks, 2 edges.</code></pre>
-<p>Around <strong>a.c.257r.init-regs</strong> pass our <strong>RTL</strong> representation shrinks into
-the following:</p>
+<p>Around <code>a.c.257r.init-regs</code> pass our <code>RTL</code> representation shrinks
+into the following:</p>
 <div class="sourceCode" id="cb20"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>(insn <span class="dv">23</span> <span class="dv">22</span> <span class="dv">24</span> <span class="dv">2</span> (<span class="kw">set</span> (reg:DI <span class="dv">359</span>)</span>
 <span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>        (zero_extract:DI (reg:DI <span class="dv">358</span>)</span>
 <span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>            (const_int <span class="dv">31</span> [<span class="dv">0x1f</span>])</span>
@@ -656,9 +672,9 @@ the following:</p>
 <pre><code>reg359 = zero_extract(reg358, offset=1, length=31)
 reg356 = (u32)reg359;
 reg8   = (u32)reg356;</code></pre>
-<p>Note how <strong>reg346 = (u32)reg356;</strong> already gone away.</p>
-<p>The most magic happened in a single <strong>a.c.259r.combine</strong> pass.
-Here is it’s report:</p>
+<p>Note how <code>reg346 = (u32)reg356;</code> is already gone away by now.
+The most magic happened in a single <code>a.c.259r.combine</code> pass. Here is
+it’s report:</p>
 <pre><code>;; Function bug (bug, funcdef_no=23, decl_uid=2078, cgraph_uid=23, symbol_order=23)
 
 starting the processing of deferred insns
@@ -718,19 +734,21 @@ reg8   = (u32)reg356;</code></pre>
 <p>Into one:</p>
 <pre><code>reg8 = zero_extract(reg358, offset=1, length=32)</code></pre>
 <p>The problem is in combiner that decided higher bit is zero anyway (false
-assumption) and applied <strong>zero_extract</strong> to full 32-bits. Why exactly it
-decided 32 upper bits are zero (they are not) is not clear to me :)
-It happens somewhere in <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/combine.c;h=31e6a4f68254fab551300252688a52d8c3dcaaa4;hb=HEAD#l2628">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/combine.c;h=31e6a4f68254fab551300252688a52d8c3dcaaa4;hb=HEAD#l2628</a>
-where some <strong>if()</strong> statements take about a page. Hopefully <strong>gcc</strong> <strong>RTL</strong>
-and <strong>ia64</strong> maintainers will help and guide us here.</p>
-<h1 id="parting-words">Parting words</h1>
+assumption) and applied <code>zero_extract</code> to full 32-bits. Why exactly it
+decided 32 upper bits are zero (they are not) is not clear to me :) It
+happens somewhere in
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/combine.c;h=31e6a4f68254fab551300252688a52d8c3dcaaa4;hb=HEAD#l2628" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/combine.c;h=31e6a4f68254fab551300252688a52d8c3dcaaa4;hb=HEAD#l2628</a>
+where some <code>if()</code> statements take about a page. Hopefully <code>gcc</code>
+<code>RTL</code> and <code>ia64</code> maintainers will help and guide us here.</p>
+<h2 id="parting-words">Parting words</h2>
 <ul>
-<li>Having good robust tests in packages is always great as it helps gaining
-confidence package is not completely broken on new target platforms (or toolchain versions).</li>
-<li><strong>printf()</strong> is still good enough tool to trace compiler bugs :)</li>
-<li><strong>-fdump-tree-all</strong> and <strong>-fdump-rtl-all</strong> are useful <strong>gcc</strong> flags to get
-the idea why optimisations fire (or don’t).</li>
-<li><strong>gcc</strong> performs very unobvious optimisations!</li>
+<li>Having good robust tests in packages is always great as it helps
+gaining confidence package is not completely broken on new target
+platforms (or toolchain versions).</li>
+<li><code>printf()</code> is still good enough tool to trace compiler bugs :)</li>
+<li><code>-fdump-tree-all</code> and <code>-fdump-rtl-all</code> are useful <code>gcc</code> flags to
+get the idea why optimisations fire (or don’t).</li>
+<li><code>gcc</code> performs very unobvious optimisations!</li>
 </ul>
 <p>Have fun!</p>
         </div>

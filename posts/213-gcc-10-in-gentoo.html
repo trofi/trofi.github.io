@@ -29,57 +29,61 @@
                 <div class="info">March 23, 2020</div>
             
 
-            <p>New GCC releases are always great fun to have: new optimisations,
-new CPUs and platforms supported, new diagnostic warnings.</p>
-<p>But also occasional new bugs or fixes that break backwards compatibility.</p>
-<p>I was wondering the other day: what does it take to get live
-<strong>GCC</strong> right from <strong>git</strong> tree into <strong>Gentoo</strong>.</p>
-<p>That would allow people to try <strong>GCC</strong> in VMs or chroots
-in a full <strong>Gentoo</strong> environment. We would be able to find out
-breakages before the release comes out, would allow users to test
-early fixes and (most important) have another way to break our systems.</p>
-<p>I cleaned up <strong>toolchain.eclass</strong> a bit and made
-<a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-devel/gcc/gcc-10.0.1_pre9999.ebuild">live gcc-10 ebuild</a>.</p>
-<p>It should be as easy to create live ebuild for stable <strong>GCC</strong> branches.
-You just need to copy the ebuild and drop <strong>EGIT_BRANCH=master</strong> line.
-Eclass should do the right thing.</p>
-<p>To test that ebuilds actually work I decided to switch my main desktop
-to live <strong>GCC</strong> to see how good/bad it is.</p>
-<h1 id="gcc-config-bug">gcc-config bug</h1>
-<p>First thing to break was <strong>sys-devel/gcc-config</strong> tool.</p>
-<p><strong>gcc-config</strong> allows you to switch compilers at runtime
-by juggling <strong>/usr/bin/gcc</strong> symlink (and a few nearby symlinks).</p>
-<p><strong>gcc-config</strong> previously assumed that <strong>gcc</strong> versions could be lexicographically
-sorted (used <strong>sort</strong> tool). As a result it always picked <strong>gcc-9</strong> as the latest
-even when <strong>gcc-10</strong> was present.</p>
-<p><strong>gcc-config</strong> is also a low-dependency tool written in <strong>bash</strong> mostly to
-allow you to recover system from broken state with inactive <strong>gcc</strong>.</p>
-<p>It has no direct access to advanced sorting functions, but it needs
-to solve a simple problem of ordering gcc versions (like 9.2.0, 10.0.1, 11.0.0)
-to pick the most recent <strong>gcc</strong> version as a primary libstdc++.so provider.</p>
+            <p>New <code>gcc</code> releases are always great fun to have: new optimisations, new
+CPUs and platforms supported, new diagnostic warnings.
+But also occasional new bugs or fixes that break backwards
+compatibility.
+I was wondering the other day: what does it take to get live <code>gcc</code>
+right from <code>git</code> tree into <code>gentoo</code>.
+That would allow people to try <code>gcc</code> in VMs or chroots in a full
+<code>gentoo</code> environment. We would be able to find out breakages before
+the release comes out, would allow users to test early fixes and (most
+important) have another way to break our systems.</p>
+<p>I cleaned up <code>toolchain.eclass</code> a bit and made <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-devel/gcc/gcc-10.0.1_pre9999.ebuild">live <code>gcc-10</code>
+ebuild</a>.
+It should be as easy to create live <code>ebuild</code> for stable <code>gcc</code> branches.
+You just need to copy the <code>ebuild</code> and drop <code>EGIT_BRANCH=master</code> line.
+<code>toolchain.eclass</code> should do the right thing.
+To test that <code>ebuild</code> actually works I decided to switch my main desktop
+to live <code>gcc</code> form <code>master</code> to see how good/bad it is.</p>
+<h2 id="gcc-config-bug"><code>gcc-config</code> bug</h2>
+<p>First thing to break was <code>sys-devel/gcc-config</code> tool.
+<code>gcc-config</code> allows you to switch compilers at runtime by juggling
+<code>/usr/bin/gcc</code> symlink (and a few nearby symlinks).
+<code>gcc-config</code> previously assumed that <code>gcc</code> versions could be
+lexicographically sorted (used <code>sort</code> tool). As a result it always
+picked <code>gcc-9</code> as the latest even when <code>gcc-10</code> was present.</p>
+<p><code>gcc-config</code> is also a low-dependency tool written in <code>bash</code> mostly
+to allow you to recover system from broken state with inactive <code>gcc</code>.
+It has no direct access to advanced sorting functions, but it needs to
+solve a simple problem of ordering <code>gcc</code> versions (like <code>9.2.0</code>, <code>10.0.1</code>,
+<code>11.0.0</code>) to pick the most recent <code>gcc</code> version as a primary
+<code>libstdc++.so</code> provider.</p>
 <pre><code>$ printf '%s\n' 9.2.0 10.0.1 11.0.0 | sort
 10.0.1
 11.0.0
 9.2.0</code></pre>
-<p>Here is a quiz question 1 for you: how would you implement simple version-aware
-sorting assuming <strong>&lt;number&gt;.&lt;number&gt;.&lt;number&gt;</strong> versioning?</p>
-<p>Quiz answer 1: one of the solutions is <a href="https://gitweb.gentoo.org/proj/gcc-config.git/commit/?id=bc80e12ab133a00ece4059df40d672889fcf6bf0">(spoiler) fix in gcc-config</a>.</p>
-<p>Looks like an obscure bug. People should not rely on lexicographical number sorting
-generally, right?</p>
-<p>Quiz question 2: guess how many more bugs I encountered related to the fact
-that ‘10’ &lt; ‘9’ as a string.</p>
-<h1 id="ebuild-bugs">ebuild bugs</h1>
-<p>The next bug was in <strong>gcc</strong> ebuild itself (well, in <strong>toolchain.eclass</strong>). Ebuilds
-also happen to be written in <strong>bash</strong> and you need to be careful with number
-arithmetics there:</p>
+<p>Here is a quiz question 1 for you: how would you implement simple
+version-aware sorting assuming <code>&lt;number&gt;.&lt;number&gt;.&lt;number&gt;</code>
+versioning?</p>
+<p>Quiz answer 1: one of the solutions is <a href="https://gitweb.gentoo.org/proj/gcc-config.git/commit/?id=bc80e12ab133a00ece4059df40d672889fcf6bf0">(spoiler) fix in
+<code>gcc-config</code></a>.</p>
+<p>Looks like an obscure bug. People should not rely on lexicographical
+number sorting generally, right?</p>
+<p>Quiz question 2: guess how many more bugs I encountered related to the
+fact that ‘10’ &lt; ‘9’ as a string.</p>
+<h2 id="ebuild-bugs"><code>ebuild</code> bugs</h2>
+<p>The next bug was in <code>gcc</code> <code>ebuild</code> itself (well, in
+<code>toolchain.eclass</code>). Ebuilds also happen to be written in <code>bash</code> and
+you need to be careful with number arithmetic there:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> [[ 10 <span class="op">&lt;</span> 9 ]] <span class="kw">&amp;&amp;</span> <span class="bu">echo</span> yes <span class="kw">||</span> <span class="bu">echo</span> no</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="fu">yes</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> [[ 10 <span class="at">-lt</span> 9 ]] <span class="kw">&amp;&amp;</span> <span class="bu">echo</span> yes <span class="kw">||</span> <span class="bu">echo</span> no</span>
 <span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">no</span></span></code></pre></div>
-<p><strong>toolchain.eclass</strong> did not get it right. I had to tweak it with
-<a href="https://gitweb.gentoo.org/repo/gentoo.git/commit/eclass/toolchain.eclass?id=12bfa1e4f9595dbbcbe0a442c6a63bc3ef890cc2">a patch</a>.</p>
-<p>It happened to work for all previous <strong>GCC</strong> versions. I wondered how widespread
-this problem was in ebuilds:</p>
+<p><code>toolchain.eclass</code> did not get it right. I had to tweak it with <a href="https://gitweb.gentoo.org/repo/gentoo.git/commit/eclass/toolchain.eclass?id=12bfa1e4f9595dbbcbe0a442c6a63bc3ef890cc2">a
+patch</a>.
+It happened to work for all previous <code>gcc</code> versions. I wondered how
+widespread this problem was in <code>ebuild</code>s:</p>
 <pre><code>$ git grep -E '\[\[.*[&lt;&gt;]\s*[0-9]+.*\]\]' | cat
 eclass/kernel-2.eclass:if [[ -n ${KV_MINOR} &amp;&amp;  ${KV_MAJOR}.${KV_MINOR}.${KV_PATCH} &lt; 2.6.27 ]] ; then
 net-libs/webkit-gtk/webkit-gtk-2.24.4.ebuild:if tc-is-gcc &amp;&amp; [[ $(gcc-version) &lt; 4.9 ]] ; then
@@ -97,18 +101,20 @@ sys-libs/libcxx/libcxx-7.1.0.ebuild:if tc-is-gcc &amp;&amp; [[ $(gcc-version) &l
 sys-libs/libcxx/libcxx-8.0.1.ebuild:if tc-is-gcc &amp;&amp; [[ $(gcc-version) &lt; 4.7 ]] ; then
 sys-libs/libcxx/libcxx-9.0.1.ebuild:if tc-is-gcc &amp;&amp; [[ $(gcc-version) &lt; 4.7 ]] ; then
 ...</code></pre>
-<p>These all are wrong. Note: it’s a very crude grep. I’m sure there are a lot more bugs like that.</p>
-<p><a href="https://bugs.gentoo.org/705240">https://bugs.gentoo.org/705240</a> tracks a few cases I managed to grep out. If you have found
-more of these please pile your bugs on!</p>
-<p>After blockers fixed I got <strong>gcc-10</strong> installed and selected properly.</p>
-<h1 id="fno-common-change">-fno-common change</h1>
-<p>Then I attempted to build newly released version of <strong>dev-lang/erlang</strong>
-as part of usual ebuild maintenance. The build failed with duplicate symbol definition.
-I assumed it was a bug in the newly written code, and hacked up a <a href="https://github.com/erlang/otp/pull/2503">fix for upstream</a>.</p>
-<p>Slightly later I tried to build older <strong>erlang</strong> versions in repository and discovered
-they were also broken. Searching around I encountered <a href="https://gcc.gnu.org/PR85678">https://gcc.gnu.org/PR85678</a> which
-talks about switching <strong>-fcommon</strong> default to <strong>-fno-common</strong> to effectively forbid code
-similar to below:</p>
+<p>These all are wrong. Note: it’s a very crude grep. I’m sure there are
+a lot more bugs like that.
+<a href="https://bugs.gentoo.org/705240" class="uri">https://bugs.gentoo.org/705240</a> tracks a few cases I managed to grep
+out. If you have found more of these please pile your bugs on!
+After blockers fixed I got <code>gcc-10</code> installed and selected properly.</p>
+<h2 id="fno-common-change"><code>-fno-common</code> change</h2>
+<p>Then I attempted to build newly released version of <code>dev-lang/erlang</code>
+as part of usual <code>ebuild</code> maintenance. The build failed with duplicate
+symbol definition. I assumed it was a bug in the newly written code, and
+hacked up a <a href="https://github.com/erlang/otp/pull/2503">fix for upstream</a>.
+Slightly later I tried to build older <code>erlang</code> versions in repository
+and discovered they were also broken. Searching around I encountered
+<a href="https://gcc.gnu.org/PR85678" class="uri">https://gcc.gnu.org/PR85678</a> which talks about switching <code>-fcommon</code>
+default to <code>-fno-common</code> to effectively forbid code similar to below:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// a.c</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> a<span class="op">;</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co">// b.c</span></span>
@@ -118,29 +124,38 @@ similar to below:</p>
 $ gcc-10.0.1 a.c b.c -o libab.so -shared -fPIC
 ld: /tmp/ccWIg1Zj.o:(.bss+0x0): multiple definition of `a'; /tmp/ccdJsLyo.o:(.bss+0x0): first defined here
 collect2: error: ld returned 1 exit status</code></pre>
-<p>Now you have to specify explicit <strong>extern</strong> to convert one definition site to declaration
-and avoid duplicate (mergeable) definitions.</p>
-<p>Quiz question 3: how many packages do you think are broken like that? One? Ten? A hundred? Guess a number.</p>
-<p>Luckily it’s easy to find most of the packages using <strong>gcc-9</strong> before <strong>gcc-10</strong> is released
-just by trying to build packages with <strong>CFLAGS=”$CFLAGS -fno-common”</strong>.</p>
-<p>Toralf did just that using his magic <a href="https://github.com/toralf/tinderbox">tinderbox setup</a>
-and built an almost complete list of affected packages. See blockers in <a href="https://bugs.gentoo.org/705764">the blocker bug</a>.</p>
-<p>If you got a new fancy failure please pile your new bug onto blocker above. Also feel free to
-pick a bug from there and work on a patch for gentoo and/or upstream. We will need many hands
-to fix those leftovers. Luckily the fixes are very mechanical and can be done without too deep
-understanding of projects’ internals.</p>
-<p><a href="https://wiki.gentoo.org/wiki/Gcc_10_porting_notes/fno_common">https://wiki.gentoo.org/wiki/Gcc_10_porting_notes/fno_common</a> has more hints.</p>
-<p>I spent some time fixing individual packages broken on my system and then sent out wider
-announcement: <a href="https://archives.gentoo.org/gentoo-dev/message/086ce3c09dda598aa3bdee3fe55a3dca">https://archives.gentoo.org/gentoo-dev/message/086ce3c09dda598aa3bdee3fe55a3dca</a></p>
-<p>Quiz answer 3: <a href="https://bugs.gentoo.org/705764">https://bugs.gentoo.org/705764</a> reports 585 packages broken so far.</p>
-<p>Aside from <strong>-fno-common</strong> bugs other things started popping up.</p>
-<h1 id="vim-crash">vim crash</h1>
-<p>In <a href="https://bugs.gentoo.org/706324">https://bugs.gentoo.org/706324</a> gentoo user <a href="mailto:lekto@o2.pl">lekto@o2.pl</a> reported <strong>vim</strong> crash on <strong>gcc-10</strong>.
-I was glad that someone else tried it and found a subtle real issue. I tried to build-and-run
-<strong>vim</strong> on my machine and managed to reproduce the failure.</p>
-<p>Quiz question 4: guess what caused the crash! Is it a compiler bug or not? How picky you
-think <strong>vim</strong> is to a <strong>C</strong> compiler and it’s properties?</p>
-<p>The crash backtrace looked like that:</p>
+<p>Now you have to specify explicit <code>extern</code> to convert one definition
+site to declaration and avoid duplicate (mergeable) definitions.</p>
+<p>Quiz question 3: how many packages do you think are broken like that?
+One? Ten? A hundred? Guess a number.</p>
+<p>Luckily it’s easy to find most of the packages using <code>gcc-9</code> before
+<code>gcc-10</code> is released just by trying to build packages with
+<code>CFLAGS="$CFLAGS -fno-common"</code>.
+Toralf did just that using his magic <a href="https://github.com/toralf/tinderbox"><code>tinderbox</code>
+setup</a> and built an almost complete
+list of affected packages. See blockers in <a href="https://bugs.gentoo.org/705764">the blocker
+bug</a>.
+If you got a new fancy failure please pile your new bug onto blocker
+above. Also feel free to pick a bug from there and work on a patch for
+<code>gentoo</code> and/or upstream. We will need many hands to fix those leftovers.
+Luckily the fixes are very mechanical and can be done without too deep
+understanding of projects’ internals.
+<a href="https://wiki.gentoo.org/wiki/Gcc_10_porting_notes/fno_common" class="uri">https://wiki.gentoo.org/wiki/Gcc_10_porting_notes/fno_common</a> page has
+more hints.
+I spent some time fixing individual packages broken on my system and
+then sent out wider announcement:
+<a href="https://archives.gentoo.org/gentoo-dev/message/086ce3c09dda598aa3bdee3fe55a3dca" class="uri">https://archives.gentoo.org/gentoo-dev/message/086ce3c09dda598aa3bdee3fe55a3dca</a></p>
+<p>Quiz answer 3: <a href="https://bugs.gentoo.org/705764" class="uri">https://bugs.gentoo.org/705764</a> reports 585 packages
+broken so far.</p>
+<p>Aside from <code>-fno-common</code> bugs other things started popping up.</p>
+<h2 id="vim-crash"><code>vim</code> crash</h2>
+<p>In <a href="https://bugs.gentoo.org/706324" class="uri">https://bugs.gentoo.org/706324</a> <code>gentoo</code> user <code>&lt;lekto@o2.pl&gt;</code> reported
+<code>vim</code> crash on <code>gcc-10</code>. I was glad that someone else tried it and
+found a subtle real issue. I tried to build-and-run <code>vim</code> on my
+machine and managed to reproduce the failure.</p>
+<p>Quiz question 4: guess what caused the crash! Is it a compiler bug or
+not? How picky you think <code>vim</code> is to a <code>c</code> compiler and it’s properties?
+The crash backtrace looked like that:</p>
 <pre><code>#7  0x00007f43b3ee8359 in __libc_message (action=&lt;optimized out&gt;,
   fmt=fmt@entry=0x7f43b3fffd4c &quot;*** %s ***: %s terminated\n&quot;)
     at ../sysdeps/posix/libc_fatal.c:181
@@ -153,9 +168,9 @@ think <strong>vim</strong> is to a <strong>C</strong> compiler and it’s proper
 #10 0x00007f43b3f7f720 in __GI___chk_fail () at chk_fail.c:28
 #11 0x0000563edb430ad9 in strcpy (__src=0x563edb48b7a3 &quot;0&quot;, __dest=0x563edc345bd1 &quot;&quot;) at /usr/include/bits/string_fortified.h:90
 #12 add_nr_var (nr=&lt;optimized out&gt;, name=0x563edb48b7a3 &quot;0&quot;, v=&lt;optimizedout&gt;, dp=0x563edc345f68) at userfunc.c:625</code></pre>
-<p>Buffer overflow. Uh-oh, that should never happen, right?</p>
-<p><strong>gcc</strong> build log even reported the line as potentially having a buffer overflow at
-the same <strong>userfunc.c:625</strong> line <strong>gdb</strong> pointed me to:</p>
+<p>Buffer overflow. Uh-oh, that should never happen, right?
+<code>gcc</code> build log even reported the line as potentially having a buffer
+overflow at the same <code>userfunc.c:625</code> line <code>gdb</code> pointed me to:</p>
 <pre><code>x86_64-pc-linux-gnu-gcc -c -I. -Iproto -DHAVE_CONFIG_H     -march=sandybridge -mtune=sandybridge -maes --param=l1-cache-size=32 --param=l1-cache-line-size=64 --param=l2-cache-size=8192 -O2 -pipe -fdiagnostics-show-option -frecord-gcc-switches -Wall -Wextra -Wstack-protector -g        -o objects/userfunc.o userfunc.c
 In file included from /usr/include/string.h:494,
                  from os_unix.h:465,
@@ -168,7 +183,8 @@ In function 'strcpy',
 /usr/include/bits/string_fortified.h:90:10: warning: '__builtin___memcpy_chk' writing 2 bytes into a region of size 1 overflows the destination [-Wstringop-overflow=]
    90 |   return __builtin___strcpy_chk (__dest, __src, __bos (__dest));
       |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~</code></pre>
-<p>Turns out internally <strong>vim</strong> uses the following hack to implement key/value store with variable length keys:</p>
+<p>Turns out internally <code>vim</code> uses the following hack to implement
+key/value store with variable length keys:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> dictitem_S</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a> <span class="op">{</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>     typval_T di_tv<span class="op">;</span>     <span class="co">// type and value of the variable</span></span>
@@ -178,14 +194,17 @@ In function 'strcpy',
 <span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co">//...</span></span>
 <span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="pp">#define STRCPY</span><span class="op">(</span><span class="pp">d</span><span class="op">,</span><span class="pp"> s</span><span class="op">)</span><span class="pp">    strcpy</span><span class="op">((</span><span class="dt">char</span><span class="pp"> </span><span class="op">*)(</span><span class="pp">d</span><span class="op">),</span><span class="pp"> </span><span class="op">(</span><span class="dt">char</span><span class="pp"> </span><span class="op">*)(</span><span class="pp">s</span><span class="op">))</span></span>
 <span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>STRCPY<span class="op">(</span>v<span class="op">-&gt;</span>di_key<span class="op">,</span> name<span class="op">);</span></span></code></pre></div>
-<p>And any string function like <strong>strcpy()</strong> or <strong>memcpy()</strong> is statically known to gcc as
-a buffer overflow. <strong>di_key</strong> is always 1 byte long. Runtime buffer overflow checking is
-enabled by passing <strong>-D_FORTIFY_SOURCE=2</strong> to <strong>gcc</strong>. Many distributions enable overflow
-checking by default. Gentoo is no exception.</p>
-<p>The workaround <strong>vim</strong> uses to avoid these failures is to disable buffer
-overflow checks from being emitted by using <strong>-D_FORTIFY_SOURCE=1</strong> define.</p>
-<p>Except that in this case <strong>-D_FORTIFY_SOURCE=1</strong> was not applied.
-To see why let’s look at the <strong>configure.ac</strong> around <strong>_FORTIFY_SOURCE</strong> handling:</p>
+<p>And any string function like <code>strcpy()</code> or <code>memcpy()</code> is statically
+known to <code>gcc</code> as a buffer overflow: <code>di_key</code> is always 1 byte long.
+Runtime buffer overflow checking is enabled by passing
+<code>-D_FORTIFY_SOURCE=2</code> to <code>gcc</code>. Many distributions enable overflow
+checking by default. <code>gentoo</code> is no exception.
+The workaround <code>vim</code> uses to avoid these failures is to disable buffer
+overflow checks from being emitted by using <code>-D_FORTIFY_SOURCE=1</code>
+define.
+Except that in this case <code>-D_FORTIFY_SOURCE=1</code> was not applied. To see
+why let’s look at the <code>configure.ac</code> around <code>_FORTIFY_SOURCE</code>
+handling:</p>
 <pre><code>gccversion=`$CC -dumpversion`
 dnl ...
 gccmajor=`echo &quot;$gccversion&quot; | sed -e 's/^\([[1-9]]\)\..*$/\1/g'`
@@ -199,70 +218,78 @@ if test &quot;$gccmajor&quot; -gt &quot;3&quot;; then
 else
   AC_MSG_RESULT(no)
 fi</code></pre>
-<p>Do you see the bug here? <strong>vim</strong> assumes <strong>gcc -dumpversion</strong> has format of <strong>&lt;digit&gt;.&lt;anything&gt;</strong>.
-But <strong>gcc-10.0.1</strong> is <strong>&lt;digit&gt;&lt;digit&gt;.&lt;anything&gt;</strong>. As a result <strong>-D_FORTIFY_SOURCE=1</strong> was not
-applied ang we got broken binary. The fix is trivial: <a href="https://github.com/vim/vim/commit/7077892a7918845a00ce8d7833b43cc6cbed2081">patch</a>.</p>
+<p>Do you see the bug here? <code>vim</code> assumes <code>gcc -dumpversion</code> has format
+of <code>&lt;digit&gt;.&lt;anything&gt;</code>. But <code>gcc-10.0.1</code> is
+<code>&lt;digit&gt;&lt;digit&gt;.&lt;anything&gt;</code>. As a result <code>-D_FORTIFY_SOURCE=1</code>
+was not applied and we got broken binary. The fix is trivial:
+<a href="https://github.com/vim/vim/commit/7077892a7918845a00ce8d7833b43cc6cbed2081">patch</a>.</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="st">-gccmajor=`echo &quot;$gccversion&quot; | sed -e 's/^\([[1-9]]\)\..*$/\1/g'`</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="va">+gccmajor=`echo &quot;$gccversion&quot; | sed -e 's/^\([[0-9]]\+\)\..*$/\1/g'`</span></span></code></pre></div>
-<p>Arguably <strong>vim</strong> should not use known-broken C constructs and use something else instead.
-Be it manually managed <strong>void *</strong> memory chunks or flexible arrays on modern compilers.</p>
-<p>I would not be surprised if <strong>gcc</strong> already generates invalid code for <strong>vim</strong> assuming
-that out-of-bounds array access is not supposed to happen in the code. That would allow
-<strong>gcc</strong> to delete most of code working with 1-byte arrays as dead.</p>
-<p>From discussion in <a href="https://github.com/vim/vim/issues/5581">https://github.com/vim/vim/issues/5581</a> it looks like single-byte-sized array are
-staying for longer though.</p>
-<p>Quiz answer 4: <strong>gcc</strong> version parsing did not expect two digits.</p>
-<h1 id="perl-crash">perl crash</h1>
-<p>Somehow perl was also broken by <strong>gcc-10</strong>:</p>
+<p>Arguably <code>vim</code> should not use known-broken <code>c</code> constructs and use
+something else instead. Be it manually managed <code>void *</code> memory chunks
+or flexible arrays on modern compilers.
+I would not be surprised if <code>gcc</code> already generates invalid code for
+<code>vim</code> assuming that out-of-bounds array access is not supposed to
+happen in the code. That would allow <code>gcc</code> to delete most of code
+working with 1-byte arrays as dead.
+From discussion in <a href="https://github.com/vim/vim/issues/5581" class="uri">https://github.com/vim/vim/issues/5581</a> it looks
+like single-byte-sized array are staying for longer though.</p>
+<p>Quiz answer 4: <code>gcc</code> version parsing did not expect two digits.</p>
+<h2 id="perl-crash"><code>perl</code> crash</h2>
+<p>Somehow <code>perl</code> was also broken by <code>gcc-10</code>:</p>
 <pre><code>x86_64-pc-linux-gnu-gcc -c -DPERL_CORE -fwrapv -fpcc-struct-return -pipe -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -march=sandybridge -mtune=sandybridge -maes --param=l1-cache-size=32 --param=l1-cache-line-size=64 --param=l2-cache-size=8192 -O2 -pipe -fdiagnostics-show-option -frecord-gcc-switches -Wall -Wextra -Wstack-protector -g -Wall -fPIC gv.c
 ...
 LD_LIBRARY_PATH=/tmp/portage/dev-lang/perl-5.30.1/work/perl-5.30.1 /tmp/portage/dev-lang/perl-5.30.1/work/perl-5.30.1/preload /tmp/portage/dev-lang/perl-5.30.1/work/perl-5.30.1/libperl.so.5.30.1 ./miniperl -w -Ilib -Idist/Exporter/lib -MExporter -e '&lt;?&gt;' || sh -c 'echo &gt;&amp;2 Failed to build miniperl.  Please run make minitest; exit 1'
 Attempt to free unreferenced scalar: SV 0x5555ed3e1378.
 /bin/sh: line 1: 4057907 Segmentation fault      (core dumped) </code></pre>
-<p>This one is hard. Can you quickly guess what is suspiciously wrong here?</p>
-<p>In this case the runtime (perl build-time) failure happens due to use of <strong>-fpcc-struct-return</strong>
-flag that changes compiler’s ABI:</p>
+<p>This one is hard. Can you quickly guess what is suspiciously wrong here?
+In this case the runtime (<code>perl</code> build-time) failure happens due to use of
+<code>-fpcc-struct-return</code> flag that changes compiler’s ABI:</p>
 <pre><code>-fpcc-struct-return:
     Return &quot;short&quot; &quot;struct&quot; and &quot;union&quot; values in memory
     like longer ones, rather than in registers.</code></pre>
-<p>Looking at the <a href="https://github.com/Perl/perl5/commit/6bd6308fcea3541e505651bf8e8127a4a03d22cd">upstream fix</a>
-this flag is a result of configure script thinking it deals with gcc-1:</p>
+<p>Looking at the <a href="https://github.com/Perl/perl5/commit/6bd6308fcea3541e505651bf8e8127a4a03d22cd">upstream
+fix</a>
+this flag is a result of configure script thinking it deals with <code>gcc-1</code>:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="st">-1*) dflt=&quot;$dflt -fpcc-struct-return&quot; ;;</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="va">+1.*) dflt=&quot;$dflt -fpcc-struct-return&quot; ;;</span></span></code></pre></div>
 <p>Once again version parsing did not expect two digits.</p>
-<h1 id="linux-crash">linux crash</h1>
-<p>The next test for a new compiler is to try to boot into kernel built by <strong>gcc-10</strong>.</p>
-<p>Rebuilding and reinstalling <strong>grub2</strong> caused no problems. But rebuilding the kernel made
-it unbootable on a real machine. Worst thing was that I got no screen output at all after
-a boot loader prompt.</p>
-<p>For some reason <strong>qemu-system-x86_64</strong> was able to boot kernel just fine. Not easy
-to debug.</p>
-<p>I needed some indication how far the boot process got. I managed to get it in a few ways:
-via <strong>efifb earlycon</strong> and via <strong>xdbc</strong> (USB-3 debug capability).</p>
-<p>The simplest one that does not require second machine was <strong>efifb earlycon</strong>.</p>
-<h1 id="efifb-earlycon">efifb earlycon</h1>
-<p>On <strong>EFI</strong> systems you can emit text output almost instantly at kernel boot. As <strong>EFI</strong> is
-already initialised it provides kernel a graphical framebuffer: a memory range to write
-your pixels in.</p>
-<p><strong>EFI</strong> framebuffer is slightly different from VGA text mode but not too much.</p>
-<p>Kernel only needs to find out where framebuffer memory resides to render glyphs
-right there. Enabling early framebuffer appeared to be a bit tricky though.</p>
-<p>We need two things:</p>
+<h2 id="linux-crash"><code>linux</code> crash</h2>
+<p>The next test for a new compiler is to try to boot into kernel built by
+<code>gcc-10</code>.
+Rebuilding and reinstalling <code>grub2</code> caused no problems. But rebuilding
+the kernel made it unbootable on a real machine. Worst thing was that I
+got no screen output at all after a boot loader prompt.
+For some reason <code>qemu-system-x86_64</code> was able to boot kernel just
+fine. Not easy to debug.
+I needed some indication how far the boot process got. I managed to get
+it in a few ways: via <code>efifb earlycon</code> and via <code>xdbc</code> (USB-3 debug
+capability).
+The simplest one that does not require second machine was <code>efifb earlycon</code>.</p>
+<h2 id="efifb-earlycon"><code>efifb earlycon</code></h2>
+<p>On <code>EFI</code> systems you can emit text output almost instantly at kernel
+boot. As <code>EFI</code> is already initialized it provides kernel a graphical
+frame buffer: a memory range to write your pixels in.
+<code>EFI</code> frame buffer is slightly different from VGA text mode but not too
+much.
+Kernel only needs to find out where frame buffer memory resides to render
+glyphs right there. Enabling early frame buffer appeared to be a bit
+tricky though. We need two things:</p>
 <ol type="1">
 <li>a few unusual features built into kernel</li>
 <li>kernel parameters to enable early console</li>
 </ol>
 <p>Kernel config:</p>
 <ul>
-<li>CONFIG<span id="fb_efi">FB_EFI</span>=y</li>
-<li>CONFIG<span id="efi_earlycon">EFI_EARLYCON</span>=y</li>
-<li>CONFIG<span id="fb_simple">FB_SIMPLE</span>=y</li>
-<li>X86<span id="sysfb">SYSFB</span>=y</li>
-<li>SERIAL<span>8250</span>=y</li>
-<li>SERIAL<span id="console">8250_CONSOLE</span>=y</li>
+<li><code>CONFIG_FB_EFI=y</code></li>
+<li><code>CONFIG_EFI_EARLYCON=y</code></li>
+<li><code>CONFIG_FB_SIMPLE=y</code></li>
+<li><code>X86_SYSFB=y</code></li>
+<li><code>SERIAL_8250=y</code></li>
+<li><code>SERIAL_8250_CONSOLE=y</code></li>
 </ul>
-<p>Kernel parameters: <strong>“earlycon=efifb keep<span id="bootcon">bootcon</span>”</strong>.</p>
-<p>This allowed me to get an early boot failure on screen:</p>
+<p>Kernel parameters: <code>"earlycon=efifb keep_bootcon"</code>.
+This allowed me to get an early boot failure on screen:</p>
 <pre><code>Kernel panic — not syncing: stack-protector: Kernel stack is corrupted in: start_secondary+0x191/0x1a0
 CPU: 1 PID: 0 Comm: swapper/1 Not tainted 5.6.0-rc5—00235—gfffb08b37df9 #139
 Hardware name: Gigabyte Technology Co., Ltd. To be filled by O.E.M./H77M—D3H, BIOS F12 11/14/2013
@@ -274,7 +301,8 @@ Call Trace:
   start_secondary+0x191/0x1a0
   secondary_startup_64+0xa4/0xb0
 -—-[ end Kernel panic — not syncing: stack—protector: Kernel stack is corrupted in: start_secondary+0x191</code></pre>
-<p>Woohoo! That I was able to work with. I looked at <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/smpboot.c">start_secondary() definition</a>:</p>
+<p>Woohoo! That I was able to work with. I looked at <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/smpboot.c"><code>start_secondary()</code>
+definition</a>:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * Activate a secondary processor.</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
@@ -327,9 +355,11 @@ Call Trace:
 <span id="cb15-50"><a href="#cb15-50" aria-hidden="true" tabindex="-1"></a>    current<span class="op">-&gt;</span>stack_canary <span class="op">=</span> canary<span class="op">;</span></span>
 <span id="cb15-51"><a href="#cb15-51" aria-hidden="true" tabindex="-1"></a>    this_cpu_write<span class="op">(</span>fixed_percpu_data<span class="op">.</span>stack_canary<span class="op">,</span> canary<span class="op">);</span></span>
 <span id="cb15-52"><a href="#cb15-52" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here <strong>start_secondary()</strong> detected a stack corruption failure and reported it with <strong>__stack_chk_fail()</strong>.
-Note: <strong>start_secondary()</strong> is itself responsible for initial stack canary setup.</p>
-<p>The workaround to make a kernel boot was to avoid stack protection of <strong>start_secondary()</strong>:</p>
+<p>Here <code>start_secondary()</code> detected a stack corruption failure and
+reported it with <code>__stack_chk_fail()</code>. Note: <code>start_secondary()</code>
+is itself responsible for initial stack canary setup.
+The workaround to make a kernel boot was to avoid stack protection of
+<code>start_secondary()</code>:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/x86/kernel/Makefile</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/x86/kernel/Makefile</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -11,6 +11,12 @@ extra-y+= vmlinux.lds</span></span>
@@ -345,18 +375,24 @@ Note: <strong>start_secondary()</strong> is itself responsible for initial stack
 <span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a> ifdef CONFIG_FUNCTION_TRACER</span>
 <span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a> # Do not profile debug and lowlevel utilities</span>
 <span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a> CFLAGS_REMOVE_tsc.o = -pg</span></code></pre></div>
-<p>Kernel stack protection itself is enabled by <strong>CONFIG_STACKPROTECTOR_STRONG=y</strong> option.</p>
-<p>The real fix is discussed in <a href="https://lkml.org/lkml/2020/3/14/186">https://lkml.org/lkml/2020/3/14/186</a> and will involve marking
-only <strong>start_secondary()</strong> as exempted from protection.</p>
-<h1 id="parting-words">Parting words</h1>
-<p>After this short exercise I think gcc-10 is somewhat usable in <strong>Gentoo</strong>. Now to the real bugs
-like <a href="https://gcc.gnu.org/PR94185">https://gcc.gnu.org/PR94185</a> and <a href="https://gcc.gnu.org/PR93763">https://gcc.gnu.org/PR93763</a>.</p>
+<p>Kernel stack protection itself is enabled by
+<code>CONFIG_STACKPROTECTOR_STRONG=y</code> option.
+The real fix is discussed in <a href="https://lkml.org/lkml/2020/3/14/186" class="uri">https://lkml.org/lkml/2020/3/14/186</a> and
+will involve marking only <code>start_secondary()</code> as exempted from
+protection.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>After this short exercise I think <code>gcc-10</code> is somewhat usable in
+<code>gentoo</code>. Now to the real bugs like <a href="https://gcc.gnu.org/PR94185" class="uri">https://gcc.gnu.org/PR94185</a> and
+<a href="https://gcc.gnu.org/PR93763" class="uri">https://gcc.gnu.org/PR93763</a>.</p>
 <ul>
-<li>A simple act of changing software version from <strong>9</strong> to <strong>10</strong> can break enough software
-if you do it once in 20 years. If you plan to do something similar consider putting
-actual breaking changes into next release if possible. Version change might be severe enough :)</li>
-<li>Due to <strong>-fno-common</strong> default change <strong>gcc-10</strong> will be more disruptive than a usual <strong>gcc</strong> upgrade.</li>
-<li><strong>“earlycon=efifb keep<span id="bootcon">bootcon</span>”</strong> is a great and cheap way to get early boot log from the kernel.</li>
+<li>A simple act of changing software version from <code>9</code> to <code>10</code> can
+break enough software if you do it once in 20 years. If you plan to do
+something similar consider putting actual breaking changes into next
+release if possible. Version change might be severe enough :)</li>
+<li>Due to <code>-fno-common</code> default change <code>gcc-10</code> will be more
+disruptive than a usual <code>gcc</code> upgrade.</li>
+<li><code>"earlycon=efifb keep_bootcon"</code> is a great and cheap way to get
+early boot log from the kernel.</li>
 </ul>
 <p>Have fun!</p>
         </div>

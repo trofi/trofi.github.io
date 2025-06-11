@@ -29,10 +29,11 @@
                 <div class="info">April 10, 2020</div>
             
 
-            <h1 id="tldr">Tl;DR</h1>
-<p>If you wonder why <strong>perf record -g</strong> does not collect nice callstacks for your prorgams
-try <strong>perf record -g --call-graph=dwarf</strong> instead.</p>
-<h1 id="case-study">Case study</h1>
+            <h2 id="tldr">Tl;DR</h2>
+<p>If you wonder why <code>perf record -g</code> command does not collect nice
+call stacks for your programs try <code>perf record -g --call-graph=dwarf</code>
+instead.</p>
+<h2 id="case-study">Case study</h2>
 <p>Simple example:</p>
 <pre><code>$ perf record -F 99 -g -- \
     /usr/lib/llvm/10/bin/clang -w -x c++ -std=c++1z -O0 -fstrict-aliasing -c A.cpp.c -o A.o
@@ -47,12 +48,13 @@ $ perf report
 +    3,23%     0,00%  clang    libclang-cpp.so.10   [.] clang::VarDecl::~VarDecl
 +    3,03%     0,21%  clang    libclang-cpp.so.10   [.] clang::TreeTransform&lt;(anonymous namespace)::TemplateInstantiator&gt;::TransformNestedNameSpecifierLoc
 +    2,88%     0,28%  clang    libclang-cpp.so.10   [.] clang::TreeTransform&lt;(anonymous namespace)::TemplateInstantiator&gt;::TransformTemplateSpecializationType</code></pre>
-<p>This does not look very useful. Top 6 are cryptic addresses.</p>
-<p>It’s because perf uses frame pointer unwinding by default. gcc’s <strong>-O2</strong> optimization level
-avoids them (<strong>-fomit-frame-pointer</strong>) to generate shorter entry/exit code.</p>
-<p>Luckily basic debugging information has a way to encode equivalent information
-using <strong>DWARF</strong> format. <strong>perf</strong> knows how to unwind <strong>DWARF</strong> using call stack
-snapshots with <strong>–call-graph=dwarf</strong>:</p>
+<p>This does not look very useful. Top 6 are cryptic addresses.
+It’s because <code>perf</code> uses frame pointer unwinding by default. gcc’s
+<code>-O2</code> optimization level avoids them (enables <code>-fomit-frame-pointer</code>) to
+generate shorter entry/exit code.
+Luckily basic debugging information has a way to encode equivalent
+information using <code>DWARF</code> format. <code>perf</code> knows how to unwind
+<code>DWARF</code> using call stack snapshots with <code>--call-graph=dwarf</code>:</p>
 <pre><code>$ perf record -F 99 -g --call-graph=dwarf -- \
     /usr/lib/llvm/10/bin/clang -w -x c++ -std=c++1z -O0 -fstrict-aliasing -c A.cpp.c -o A.o
 $ perf report
@@ -66,13 +68,13 @@ $ perf report
 +    4,00%     1,87%  clang    libLLVM-10.so        [.] llvm::FoldingSetBase::FindNodeOrInsertPos
 +    3,86%     0,12%  clang    libLLVM-10.so        [.] llvm::SelectionDAGISel::runOnMachineFunction
 +    3,86%     0,00%  clang    libLLVM-10.so        [.] 0x00007fb268996715</code></pre>
-<p>Most symbols are resolved now and seem to match reality.</p>
-<p>The trick is to build profiled binaries (and their shared libraries) at
-least with <strong>-g1</strong> compiler flags. (Something like
-<strong>CFLAGS=”-O2 -g1” / CXXFLAGS=”-O2 -g1”</strong>. Note: <strong>-g</strong> is equivalent to <strong>-g2</strong>
-and contains all that <strong>-g1</strong> has. <strong>-g1</strong> is the minimum level to get
-stack unwinding working.</p>
-<p>In Gentoo I’m using the following setup to build a few packages with
+<p>Most symbols are resolved now and seem to match reality.
+The trick is to build profiled binaries (and their shared libraries) at
+least with <code>-g1</code> compiler flags. (Something like <code>CFLAGS="-O2 -g1"</code>
+/ <code>CXXFLAGS="-O2 -g1"</code>). Note: <code>-g</code> is equivalent to <code>-g2</code> and
+contains all that <code>-g1</code> has. <code>-g1</code> is the minimum level to get stack
+unwinding working.
+In Gentoo I’m using the following setup to build a few packages with
 extra debugging:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat /etc/portage/env/debug1.conf</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="va">CFLAGS</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CFLAGS}</span><span class="st"> -g1&quot;</span></span>
@@ -83,18 +85,20 @@ extra debugging:</p>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="co"># needs debugedit</span></span>
 <span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="va">FEATURES</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${FEATURES}</span><span class="st"> installsources&quot;</span></span></code></pre></div>
-<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># cat /etc/portage/package.env/debug</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">sys-libs/glibc</span>     debug1.conf</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">sys-devel/clang</span>    debug1.conf</span></code></pre></div>
-<h1 id="real-example">Real example</h1>
-<p>Now let’s try to profile something more heavyweight than <strong>clang</strong>,
-namely <strong>bash</strong>. Example is taken from <a href="https://bugs.gentoo.org/688922">https://bugs.gentoo.org/688922</a> bug.
-There <strong>texlive-module-collection-fontsextra</strong> package unpacks quickly
-(within a minute) and then hangs up for 20 minutes doing something.</p>
-<p>To try to figure out what that something is I ran unpack
-process in one terminal, waited when unpacking finishes, and then ran
-<strong>perf</strong> sampling for a few seconds:</p>
+<pre><code># cat /etc/portage/package.env/debug
+sys-libs/glibc     debug1.conf
+...
+sys-devel/clang    debug1.conf</code></pre>
+<h2 id="real-example">Real example</h2>
+<p>Now let’s try to profile something more heavyweight than <code>clang</code>,
+namely <code>bash</code> (ahem). The example is taken from
+<a href="https://bugs.gentoo.org/688922" class="uri">https://bugs.gentoo.org/688922</a> bug. There
+<code>texlive-module-collection-fontsextra</code> package unpacks
+quickly (within a minute) and then hangs up for 20 minutes doing
+something.
+To try to figure out what that something is I ran unpack process in one
+terminal, waited when unpacking finishes, and then ran <code>perf</code> sampling
+for a few seconds:</p>
 <pre><code># in one terminal
 $ ebuild texlive-fontsextra-2019.ebuild unpack
 ...
@@ -126,33 +130,40 @@ root # perf record -a -g --call-graph=dwarf
 +    5,31%     0,00%  ebuild.sh        libc-2.31.so        [.] __GI___mmap64 (inlined)
 +    5,19%     0,04%  ebuild.sh        [kernel.kallsyms]   [k] page_fault
 +    4,74%     0,68%  ebuild.sh        libsandbox.so       [.] malloc</code></pre>
-<p>To make sense out of this data I used @brendangregg’s FlameGraph tools (<a href="https://github.com/brendangregg/FlameGraph">https://github.com/brendangregg/FlameGraph</a>).
-I generated interactive <strong>.svg</strong> files as:</p>
+<p>To make sense out of this data I used <span class="citation" data-cites="brendangregg">@brendangregg</span>’s <code>FlameGraph</code> tools
+(<a href="https://github.com/brendangregg/FlameGraph" class="uri">https://github.com/brendangregg/FlameGraph</a>). I generated interactive
+<code>.svg</code> files as:</p>
 <pre><code>$ perf script &gt; out.perf
 $ ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded
 $ ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; out.svg</code></pre>
-<p>And got <a href="../posts.data/215-perf/sandboxed-out.svg">this result (clickable and interactive!)</a>:</p>
-<p><a href="../posts.data/215-perf/sandboxed-out.svg"><img src="../posts.data/215-perf/sandboxed-out.svg" alt="image" /></a></p>
-<p>Most of profile is unrelated to our <strong>ebuild</strong> run and CPU time is spent on
-unrelated tasks. I could have used <strong>perf record -p $pid -g –call-graph=dwarf</strong>
-but I’d like to make sure there is no background kernel (or userspace IPC)
-activity that is not a part of <strong>ebuild</strong> process.</p>
-<p>Here is what we see right above the <strong>all</strong> bar:</p>
+<p>And got <a href="../posts.data/215-perf/sandboxed-out.svg">this result (clickable and
+interactive!)</a>:</p>
+<figure>
+<img src="../posts.data/215-perf/sandboxed-out.svg" alt="image" />
+<figcaption aria-hidden="true">image</figcaption>
+</figure>
+<p>Most of profile is unrelated to our <code>ebuild</code> run and CPU time is spent
+on unrelated tasks. I could have used <code>perf record -p $pid -g --call-graph=dwarf</code> but I’d like to make sure there is no background
+kernel (or user space IPC) activity that is not a part of <code>ebuild</code>
+process. Here is what we see right above the <code>all</code> bar:</p>
 <ul>
-<li>~5% of CPU is taken by firefox playing video (Audio, Compositor, Media, Web<span id="content">Content</span> bars)</li>
-<li>~9% dirname program</li>
-<li>~27% ebuild.sh program</li>
-<li>~29% emerge program (unrelated to ebuild.sh)</li>
-<li>~3% perf itself</li>
-<li>~22% swapper (idle)</li>
+<li>~5% of CPU is taken by <code>firefox</code> playing video (Audio, Compositor,
+Media, Web_Content bars)</li>
+<li>~9% <code>dirname</code> program</li>
+<li>~27% <code>ebuild.sh</code> program</li>
+<li>~29% <code>emerge</code> program (unrelated to <code>ebuild.sh</code>)</li>
+<li>~3% <code>perf</code> itself</li>
+<li>~22% <code>swapper</code> (idle)</li>
 </ul>
-<p>Now clicking at <strong>ebuild.sh</strong> we see that all the time is spent preparing for
-<strong>fork()/exec()</strong> (<strong>malloc()</strong>, <strong>mmap()</strong>, <strong>munmap()</strong>).</p>
-<p>Surprisingly (or not that surprising if you are familiar with memory allocators)
-<strong>munmap()</strong> is the heaviest operation here. The actual external program being
-executed is <strong>dirname</strong>!</p>
-<p>Looking at <strong>texlive-fontsextra-2019.ebuild</strong> definition <strong>dirname</strong> calls happen at
-<a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/eclass/texlive-module.eclass#n140">https://gitweb.gentoo.org/repo/gentoo.git/tree/eclass/texlive-module.eclass#n140</a>.
+<p>Now clicking at <code>ebuild.sh</code> we see that all the time is spent
+preparing for <code>fork()</code>/<code>exec()</code> (<code>malloc()</code>, <code>mmap()</code>,
+<code>munmap()</code>).
+Surprisingly (or not that surprising if you are familiar with memory
+allocators) <code>munmap()</code> is the heaviest operation here. The actual
+external program being executed is <code>dirname</code>!
+Looking at <code>texlive-fontsextra-2019.ebuild</code> definition <code>dirname</code>
+calls happen at
+<a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/eclass/texlive-module.eclass#n140" class="uri">https://gitweb.gentoo.org/repo/gentoo.git/tree/eclass/texlive-module.eclass#n140</a>.
 Here is the relevant code snippet:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">texlive-module_src_unpack()</span> <span class="kw">{</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="ex">unpack</span> <span class="va">${A}</span></span>
@@ -168,27 +179,32 @@ Here is the relevant code snippet:</p>
 <span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>        <span class="fu">mv</span> <span class="st">&quot;</span><span class="va">${i}</span><span class="st">&quot;</span> <span class="st">&quot;</span><span class="va">${RELOC_TARGET}</span><span class="st">&quot;</span>/<span class="va">$(</span><span class="fu">dirname</span> <span class="st">&quot;</span><span class="va">${i}</span><span class="st">&quot;</span><span class="va">)</span> <span class="kw">||</span> <span class="ex">die</span> <span class="st">&quot;failed to relocate </span><span class="va">${i}</span><span class="st"> to </span><span class="va">${RELOC_TARGET}</span><span class="st">/</span><span class="va">$(</span><span class="fu">dirname</span> <span class="va">${i})</span><span class="st">&quot;</span></span>
 <span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">done</span></span>
 <span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></code></pre></div>
-<p><strong>reloclist</strong> contains 71000 lines. Here <strong>dirname</strong> happens to be an external tool
-from <strong>coreutils</strong>. It’s implementation removes everything after last trailing slash:</p>
+<p><code>reloclist</code> contains 71000 lines. Here <code>dirname</code> happens to be an
+external tool from <code>coreutils</code>. It’s implementation removes
+everything after last trailing slash:</p>
 <ul>
-<li><a href="https://github.com/coreutils/coreutils/blob/master/src/dirname.c">dirname:main()</a></li>
-<li><a href="https://github.com/coreutils/gnulib/blob/master/lib/dirname-lgpl.c">dir_len()</a></li>
+<li><a href="https://github.com/coreutils/coreutils/blob/master/src/dirname.c"><code>dirname:main()</code></a></li>
+<li><a href="https://github.com/coreutils/gnulib/blob/master/lib/dirname-lgpl.c"><code>dir_len()</code></a></li>
 </ul>
-<p>The first workaround is to implement simplified version of it in <strong>bash</strong>
-assuming that paths are already normalized in <strong>reloclist</strong>:</p>
+<p>The first workaround is to implement simplified version of it in
+<code>bash</code> assuming that paths are already normalized in <code>reloclist</code>:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># faster than external 'dirname' binary</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">dirname()</span> <span class="kw">{</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">&quot;</span><span class="va">${1</span><span class="op">%</span>/<span class="pp">*</span><span class="va">}</span><span class="st">&quot;</span></span>
 <span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></code></pre></div>
-<p>Here is the result of
-<a href="../posts.data/215-perf/sandboxed-out.svg">system-wide profile after the change</a>:</p>
-<p><a href="../posts.data/215-perf/sandboxed-out-2.svg"><img src="../posts.data/215-perf/sandboxed-out-2.svg" alt="image" /></a></p>
-<p><strong>dirname</strong> binary disappeared completely and <strong>mv</strong> popped up (don’t mind unrelated
-<strong>cc1plus</strong> binary). That means we are in the second <strong>for</strong> loop of <strong>texlive-module_src_unpack()</strong>
-<strong>bash</strong> function.</p>
-<p>The <strong>dirname()</strong> shell builtin we just added allows cutting down unpack
-time from 17 minutes to 11 minutes (1.5x speedup).</p>
-<p>We can also shrink <strong>mv</strong> process creations overhead down to one per target directory:</p>
+<p>Here is the result of <a href="../posts.data/215-perf/sandboxed-out.svg">system-wide profile after the
+change</a>:</p>
+<figure>
+<img src="../posts.data/215-perf/sandboxed-out-2.svg" alt="image" />
+<figcaption aria-hidden="true">image</figcaption>
+</figure>
+<p><code>dirname</code> binary disappeared completely and <code>mv</code> popped up (don’t
+mind unrelated <code>cc1plus</code> binary). That means we are in the second
+<code>for</code> loop of <code>texlive-module_src_unpack()</code> <code>bash</code> function.
+The <code>dirname()</code> shell builtin we just added allows cutting down unpack
+time from 17 minutes to 11 minutes (1.5x speedup).
+We can also shrink <code>mv</code> process creations overhead down to one per
+target directory:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/eclass/texlive-module.eclass</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/eclass/texlive-module.eclass</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -137,18 +137,22 @@ S=&quot;${WORKDIR}&quot;</span></span>
@@ -216,75 +232,83 @@ time from 17 minutes to 11 minutes (1.5x speedup).</p>
 <span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="va">+               mv $(egrep &quot;^${i}/[^/]+$&quot; &quot;${T}/reloclist&quot;) &quot;${RELOC_TARGET}/${i}/&quot; || die &quot;failed to relocate to ${RELOC_TARGET}/${i}&quot;</span></span>
 <span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>        done</span>
 <span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
-<p>That cuts it further down from 11 minutes to 30 seconds. That is <strong>22x</strong> speedup
-from previous state, <strong>34x</strong> from initial state.</p>
-<p>While it’s not the best solution I think it’s a good enough proof of concept
-to get the idea what gains we can potentially have here.</p>
-<p>Better solution would probably be a <strong>perl</strong> or <strong>python</strong> one-liner to
-perform similar mass <strong>mkdir</strong>/**mv**. It would also eliminate rest of
-per-directory <strong>fork()</strong>s we still have. Should be doable in 20 minutes!</p>
-<h1 id="fork-speed">Fork speed</h1>
-<p>I always wondered what is the actual overhead of <strong>fork()</strong>/**exec()** sequence.
-I would love it to be a function of target process size (or even better be
-a small constant). But what does happen in reality?</p>
-<p>Kernel has to copy much of process’ metadata anyway. At the very least
-all the page tables have to be copied. These are visible in above perf graphs
-if we click through: <strong>sbuild.sh</strong> &gt; <strong>__libc__fork</strong> &gt; … <strong>_do_fork</strong> &gt; <strong>copy_process</strong> &gt; <strong>copy_page_range</strong>.</p>
-<p>We can double-check <a href="https://github.com/torvalds/linux/blob/63bef48fd6c9d3f1ba4f0e23b4da1e007db6a3c0/mm/memory.c#L967">copy_page_range()</a>
-definition.</p>
-<p>But maybe it’s a negligible part of normal system operation? Let’ get some
-intuition by looking at a simple benchmark.</p>
-<p>Benchmark will gradually increase
-host <strong>bash</strong> process size with environment variables and check
-<strong>fork()</strong>/**exec()** performance on a tiny <strong>/bin/true</strong> binary.</p>
-<p>We measure 1000 runs of a small <strong>/bin/true</strong> binary out of a big process.</p>
-<div class="sourceCode" id="cb11"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> for env_mb in 0 1 10 100 250 500 1000<span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="va">env_var</span><span class="op">=</span><span class="va">$(</span><span class="ex">python</span> <span class="at">-c</span> <span class="st">&quot;print('A'*1024*1024*</span><span class="va">$env_mb</span><span class="st">);&quot;</span><span class="va">)</span></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">&quot;Benchmarking </span><span class="va">$env_mb</span><span class="st"> MB&quot;</span></span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">time</span> { for i in <span class="kw">`</span><span class="fu">seq</span> 1 1000<span class="kw">`;</span> <span class="cf">do</span> <span class="ex">/bin/true</span><span class="kw">;</span> <span class="cf">done</span><span class="kw">;</span> <span class="er">}</span></span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 0 MB</span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m0,571s user 0m0,302s sys 0m0,326s</span>
-<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 1 MB</span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m0,648s user 0m 0,327s sys 0m0,379s</span>
-<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 10 MB</span>
-<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m1,099s user 0m0,285s sys 0m0,871s</span>
-<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 100 MB</span>
-<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m3,223s user 0m0,162s sys 0m3,112s</span>
-<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 250 MB</span>
-<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m12,777s user 0m0,192s sys 0m12,635s</span>
-<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 500 MB</span>
-<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m23,782s user 0m0,202s sys 0m23,632s</span>
-<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a><span class="ex">Benchmarking</span> 1000 MB</span>
-<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a><span class="ex">real</span> 0m45,248s user 0m0,203s sys 0m45,097s</span></code></pre></div>
-<p><strong>fork()/exec()</strong> performance degrades quickly (linear) with host process size.
-It starts from 500 microseconds on a default interactive <strong>bash</strong> process
-and degrades down to 45 milliseconds on a 1GB process (100x slowdown).</p>
-<p><strong>bash</strong> process size also relates to our original example: in case of
-<strong>texlive-module.eclass</strong> eclass the expression</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="va">$(</span><span class="op">&lt;</span><span class="st">&quot;</span><span class="va">${T}</span><span class="st">/reloclist&quot;</span><span class="va">)</span></span></code></pre></div>
-<p>pulls in 4MB file into <strong>bash</strong> process. That alone slows process creation down
-at least by half.</p>
+<p>That cuts it further down from 11 minutes to 30 seconds. That is <code>22x</code>
+speed up from previous state, <code>34x</code> from initial state.
+While it’s not the best solution I think it’s a good enough proof of
+concept to get the idea what gains we can potentially have here.
+Better solution would probably be a <code>perl</code> or <code>python</code> one-liner to
+perform similar mass <code>mkdir</code>/<code>mv</code>. It would also eliminate rest
+of per-directory <code>fork()</code>s we still have. Should be doable in 20
+minutes!</p>
+<h2 id="fork-speed">Fork speed</h2>
+<p>I always wondered what is the actual overhead of
+<code>fork()</code>/<code>exec()</code> sequence. I would love it to be a function of
+target process size (or even better be a small constant). But what does
+happen in reality?
+Kernel has to copy much of process’ metadata anyway. At the very least
+all the page tables have to be copied. These are visible in above <code>perf</code>
+graphs if we click through: <code>ebuild.sh</code> &gt; <code>__libc__fork</code> &gt;
+… <code>_do_fork</code> &gt; <code>copy_process</code> &gt; <code>copy_page_range</code>.
+We can double-check
+<a href="https://github.com/torvalds/linux/blob/63bef48fd6c9d3f1ba4f0e23b4da1e007db6a3c0/mm/memory.c#L967"><code>copy_page_range()</code></a>
+definition.
+But maybe it’s a negligible part of normal system operation? Let’ get
+some intuition by looking at a simple benchmark.
+Benchmark will gradually increase host <code>bash</code> process size with
+environment variables and check <code>fork()</code>/<code>exec()</code> performance on
+a tiny <code>/bin/true</code> binary.
+We measure 1000 runs of a small <code>/bin/true</code> binary out of a big
+process.</p>
+<pre><code>$ for env_mb in 0 1 10 100 250 500 1000; do
+    env_var=$(python -c &quot;print('A'*1024*1024*$env_mb);&quot;)
+    echo &quot;Benchmarking $env_mb MB&quot;
+    time { for i in `seq 1 1000`; do /bin/true; done; }
+done
+
+Benchmarking 0 MB
+real 0m0,571s user 0m0,302s sys 0m0,326s
+
+Benchmarking 1 MB
+real 0m0,648s user 0m 0,327s sys 0m0,379s
+
+Benchmarking 10 MB
+real 0m1,099s user 0m0,285s sys 0m0,871s
+
+Benchmarking 100 MB
+real 0m3,223s user 0m0,162s sys 0m3,112s
+
+Benchmarking 250 MB
+real 0m12,777s user 0m0,192s sys 0m12,635s
+
+Benchmarking 500 MB
+real 0m23,782s user 0m0,202s sys 0m23,632s
+
+Benchmarking 1000 MB
+real 0m45,248s user 0m0,203s sys 0m45,097s</code></pre>
+<p><code>fork()</code>/<code>exec()</code> performance degrades quickly (linear) with host
+process size. It starts from 500 microseconds on a default interactive
+<code>bash</code> process and degrades down to 45 milliseconds on a 1GB process
+(100x slowdown).
+<code>bash</code> process size also relates to our original example: in case of
+<code>texlive-module.eclass</code> <code>eclass</code> the expression <code>$(&lt;"${T}/reloclist")</code>
+pulls in 4MB file into <code>bash</code> process. That alone slows process
+creation down at least by half.</p>
 <p>Something like:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> <span class="bu">read</span> ...<span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    <span class="ex">...</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span> <span class="op">&lt;</span> <span class="st">&quot;</span><span class="va">${T}</span><span class="st">/reloclist&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb12"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> <span class="bu">read</span> ...<span class="kw">;</span> <span class="cf">do</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    <span class="ex">...</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span> <span class="op">&lt;</span> <span class="st">&quot;</span><span class="va">${T}</span><span class="st">/reloclist&quot;</span></span></code></pre></div>
 <p>would probably make it 50% faster.</p>
-<h1 id="parting-words">Parting words</h1>
+<h2 id="parting-words">Parting words</h2>
 <ul>
-<li><strong>perf</strong> is not that complicated to use. Give it a try!</li>
-<li><strong>perf record -g --call-graph=dwarf</strong> can extract call stacks from optimized binaries.</li>
+<li><code>perf</code> is not that complicated to use. Give it a try!</li>
+<li><code>perf record -g --call-graph=dwarf</code> can extract call stacks from
+optimized binaries.</li>
 <li>Flame graphs are nice :)</li>
-<li>Process <strong>fork()</strong>/**exec()** is not cheap and spends most of time creating and destroying page tables.
-Eliminating heavyweight process creation can easily be a 30x performance speedup.</li>
-<li><strong>bash</strong> should consider using <strong>vfork()</strong> and/or <strong>posix_spawn()</strong> (I assume it does not yet do it).</li>
+<li>Process <code>fork()</code>/<code>exec()</code> is not cheap and spends most of time
+creating and destroying page tables. Eliminating heavyweight process
+creation can easily be a <code>30x</code> performance speedup.</li>
+<li><code>bash</code> should consider using <code>vfork()</code> and/or <code>posix_spawn()</code> (I
+assume it does not yet do it).</li>
 </ul>
 <p>Have fun!</p>
         </div>

@@ -29,47 +29,50 @@
                 <div class="info">December 16, 2017</div>
             
 
-            <h1 id="bug">Bug</h1>
-<p>On <strong>#gentoo-toolchain</strong> Matt Turner reported an obscure
-<strong>SIGSEGV</strong> of <strong>top</strong> program on one of <strong>mips</strong> boxes:</p>
+            <h2 id="bug">Bug</h2>
+<p>On <code>#gentoo-toolchain</code> Matt Turner reported an obscure <code>SIGSEGV</code> of
+<code>top</code> program on one of <code>mips</code> boxes:</p>
 <pre><code>07:01 &lt;@mattst88&gt; since upgrading to &gt;=glibc-2.25 on mips:
 07:01 &lt;@mattst88&gt; bcm91250a-be ~ # top
 07:01 &lt;@mattst88&gt; *** stack smashing detected ***: &lt;unknown&gt; terminated
 07:01 &lt;@mattst88&gt; Aborted</code></pre>
-<p>A simple (but widely used) tool seemingly managed to overwrite it’s stack.
-Looks straightforward, right? Let’s see!</p>
-<h1 id="reproducing">Reproducing</h1>
-<p>As I don’t have any <strong>mips</strong> hardware I will fake some:</p>
+<p>A simple (but widely used) tool seemingly managed to overwrite it’s
+stack. Looks straightforward, right? Let’s see!</p>
+<h2 id="reproducing">Reproducing</h2>
+<p>As I don’t have any <code>mips</code> hardware I will fake some:</p>
 <pre><code># crossdev -t mips64-unknown-linux-gnu
 # &lt;set a few profile variables&gt;
 # mips64-unknown-linux-gnu-emerge -1 procps</code></pre>
-<p>We’ve built a toolchain that targets <strong>mips64</strong> (<strong>N32</strong> ABI). Checking
+<p>We’ve built a toolchain that targets <code>mips64</code> (<code>N32</code> ABI). Checking
 if it crashes:</p>
 <pre><code>$ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top
 qemu: uncaught target signal 11 (Segmentation fault) - core dumped
 Segmentation fault</code></pre>
-<p>This is not exactly stack smash. But who knows, maybe my set of tools is slightly
-different from Matt’s and the same bug manifests in a slightly different way.</p>
-<h1 id="first-workaround">First workaround</h1>
-<p>Gentoo recently enabled stack protection and already <a href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=81996">exposed a bug</a>
-at least on <strong>powerpc32</strong>.</p>
-<p>First, let’s check if it’s related to stack protector option:</p>
+<p>This is not exactly stack smash. But who knows, maybe my set of tools is
+slightly different from Matt’s and the same bug manifests in a slightly
+different way.</p>
+<h2 id="first-workaround">First workaround</h2>
+<p>Gentoo recently enabled stack protection and already <a href="https://gcc.gnu.org/PR81996">exposed a
+bug</a> at least on <code>powerpc32</code>.
+First, let’s check if it’s related to stack protector option:</p>
 <pre><code># EXTRA_ECONF=--enable-stack-protector=no emerge -v1 cross-mips64-unknown-linux-gnu/glibc
 $ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top
 &lt;running top&gt;</code></pre>
-<p>That worked! To unbreak <strong>mips</strong> users I disabled <strong>glibc</strong> stack self-protection by
-passing <a href="https://gitweb.gentoo.org/repo/gentoo.git/commit/sys-libs/glibc?id=b14c692fa08dc7bc53a81d32d36ddb1231769040">–enable-stack-protector=no</a>.</p>
-<h1 id="into-the-rabbit-hole">Into the rabbit hole</h1>
-<p>Now let’s try to find out what is at fault here. In case of <strong>powerpc</strong> it was bad <strong>gcc</strong>
-code generation. Could it be something similar here?</p>
-<p>First, we need a backtrace from <strong>qemu</strong>. Unfortunately <strong>qemu</strong>-generated <strong>.core</strong> files are truncated
-and are not directly readable by <strong>gdb</strong>:</p>
+<p>That worked! To unbreak <code>mips</code> users I disabled <code>glibc</code> stack
+self-protection by passing
+<a href="https://gitweb.gentoo.org/repo/gentoo.git/commit/sys-libs/glibc?id=b14c692fa08dc7bc53a81d32d36ddb1231769040"><code>--enable-stack-protector=no</code></a>.</p>
+<h2 id="into-the-rabbit-hole">Into the rabbit hole</h2>
+<p>Now let’s try to find out what is at fault here. In case of <code>powerpc</code>
+it was bad <code>gcc</code> code generation. Could it be something similar here?
+First, we need a backtrace from <code>qemu</code>. Unfortunately
+<code>qemu</code>-generated <code>.core</code> files are truncated and are not directly
+readable by <code>gdb</code>:</p>
 <pre><code>$ gdb --quiet /usr/mips64-unknown-linux-gnu/usr/bin/top qemu_top_20171216-220221_14697.core
 Reading symbols from /usr/mips64-unknown-linux-gnu/usr/bin/top...done.
 BFD: Warning: /home/slyfox/qemu_top_20171216-220221_14697.core is truncated: expected core file size &gt;= 8867840, found: 1504.</code></pre>
-<p>Let’s try <strong>gdbserver</strong> mode instead. Running <strong>qemu</strong> with <strong>-g 12345</strong> to wait for <strong>gdb</strong> session:</p>
+<p>Let’s try <code>gdbserver</code> mode instead. Running <code>qemu</code> with <code>-g 12345</code> to wait for <code>gdb</code> session:</p>
 <pre><code>$ LD_LIBRARY_PATH=/lib64 qemu-mipsn32 -g 12345 -L /usr/mips64-unknown-linux-gnu /usr/mips64-unknown-linux-gnu/usr/bin/top</code></pre>
-<p>And in second terminal fire up <strong>gdb</strong>:</p>
+<p>And in second terminal fire up <code>gdb</code>:</p>
 <pre><code>$ gdb --quiet /usr/mips64-unknown-linux-gnu/usr/bin/top
 Reading symbols from /usr/mips64-unknown-linux-gnu/usr/bin/top...done.
 (gdb) set sysroot /usr/mips64-unknown-linux-gnu
@@ -93,7 +96,8 @@ Program received signal SIGSEGV, Segmentation fault.
 #2  0x1000306c in before (me=0x407ff3b6 &quot;/usr/mips64-unknown-linux-gnu/usr/bin/top&quot;) at top/top.c:3308
 #3  0x10001a10 in main (dont_care_argc=&lt;optimized out&gt;, argv=0x407ff1d4) at top/top.c:5721</code></pre>
 <p>Woohoo! Nice backtrace! Matt confirmed he sees the same backtrace.</p>
-<p>Curious fact: <strong>top</strong> tries to load <strong>libnuma.so</strong> opportunistically (<strong>top/top.c</strong>):</p>
+<p>Curious fact: <code>top</code> tries to load <code>libnuma.so</code> opportunistically
+(<code>top/top.c</code>):</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifndef NUMA_DISABLE</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined(PRETEND_NUMA) || defined(PRETEND8CPUS)</span></span>
@@ -114,8 +118,9 @@ Program received signal SIGSEGV, Segmentation fault.
 <span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
 <span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
 <span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span></code></pre></div>
-<p>As I did not have <strong>libnuma</strong> installed it should not matter which library we try to load.
-I tried to write a minimal reproducer that only calls <strong>dlopen()</strong>:</p>
+<p>As I did not have <code>libnuma</code> installed it should not matter which
+library we try to load. I tried to write a minimal reproducer that only
+calls <code>dlopen()</code>:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;dlfcn.h&gt;</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="co">// mips64-unknown-linux-gnu-gcc dlopen-bug.c -o dlopen-bug -ldl</span></span>
@@ -127,11 +132,12 @@ I tried to write a minimal reproducer that only calls <strong>dlopen()</strong>:
 $ qemu-mipsn32 -L /usr/mips64-unknown-linux-gnu ./dlopen-bug
 qemu: uncaught target signal 11 (Segmentation fault) - core dumped
 Segmentation fault</code></pre>
-<p>The backtrace is the same. OK, that’s bad. If it’s a stack overflow it definitely happens
-somewhere in <strong>glibc</strong> internals and not in the client.</p>
-<h1 id="reproducing-on-master">Reproducing on master</h1>
-<p>Chances are we will need to fix <strong>glibc</strong> to get our stack protection back. I tried to
-reproduce the same failure on <strong>master</strong> branch:</p>
+<p>The backtrace is the same. OK, that’s bad. If it’s a stack overflow it
+definitely happens somewhere in <code>glibc</code> internals and not in the
+client.</p>
+<h2 id="reproducing-on-master">Reproducing on master</h2>
+<p>Chances are we will need to fix <code>glibc</code> to get our stack protection
+back. I tried to reproduce the same failure on <code>master</code> branch:</p>
 <pre><code>$ ../glibc/configure \
       --enable-stack-protector=all \
       --enable-stackguard-randomization \
@@ -160,14 +166,15 @@ reproduce the same failure on <strong>master</strong> branch:</p>
       CFLAGS=&quot;-O2 -ggdb3&quot;
 $ make
 $ qemu-mipsn32 ./elf/ld.so --library-path .:dlfcn ~/tmp/dlopen-bug</code></pre>
-<p>No failure. It could mean the bug was fixed in <strong>master</strong> or something else introduces the error.</p>
-<p>I checked out <strong>glibc-2.26</strong> and retried above:</p>
+<p>No failure. It could mean the bug was fixed in <code>master</code> or something
+else introduces the error. I checked out <code>glibc-2.26</code> and retried above:</p>
 <pre><code>$ qemu-mipsn32 ./elf/ld.so --library-path .:dlfcn ~/tmp/dlopen-bug
 qemu: uncaught target signal 11 (Segmentation fault) - core dumped
 Segmentation fault</code></pre>
-<p>Aha, the problem is still there in latest release.</p>
-<p>I bisected glibc from <strong>2.26</strong> to <strong>master</strong> to find the commit that fixes <strong>SIGSEGV</strong>.
-My bisection stopped at <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=2449ae7b2da24c9940962304a3e44bc80e389265">commit 2449ae7b</a></p>
+<p>Aha, the problem is still there in latest release.
+I bisected <code>glibc</code> from <code>2.26</code> to <code>master</code> to find the commit that
+fixes <code>SIGSEGV</code>. My bisection stopped at <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=2449ae7b2da24c9940962304a3e44bc80e389265">commit
+2449ae7b</a></p>
 <pre><code>commit 2449ae7b2da24c9940962304a3e44bc80e389265
 Author: Florian Weimer &lt;fweimer@redhat.com&gt;
 Date:   Thu Aug 10 13:40:22 2017 +0200
@@ -178,10 +185,13 @@ Date:   Thu Aug 10 13:40:22 2017 +0200
     simplifies catching and re-raising them because it is no longer
     necessary to make a temporary, on-stack copy of the exception message.</code></pre>
 <p>Looking hard at that commit I have found nothing that could fix a bug.
-The change shuffled a few things around but did not change behaviour too much.</p>
-<p>I decided to fetch <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=f87cc2bfba9b844da48a63441c6099342b1551c7">parent commit f87cc2bfb</a>
-and spend some time to understand the failure mode.</p>
-<p>First, the crash happens in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=dlfcn/dlerror.c;h=c0ead7dcb64e782ac4f2bee67d6117dc68a8314f;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l124">_dlerror_run()</a> code:</p>
+The change shuffled a few things around but did not change behavior too
+much. I decided to fetch <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=f87cc2bfba9b844da48a63441c6099342b1551c7">parent commit
+f87cc2bfb</a>
+and spend some time to understand the failure mode.
+First, the crash happens in
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=dlfcn/dlerror.c;h=c0ead7dcb64e782ac4f2bee67d6117dc68a8314f;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l124"><code>_dlerror_run()</code></a>
+code:</p>
 <pre><code>0x40801c70 in __start () from /home/slyfox/tmp/lib32/ld.so.1
 (gdb) continue 
 Continuing.
@@ -204,7 +214,7 @@ _dlerror_run (operate=operate@entry=0x40838df0 &lt;dlopen_doit&gt;, args=args@en
 165
 166       /* If no error we mark that no error string is available.  */
 167       result-&gt;returned = result-&gt;errstring == NULL;</code></pre>
-<p>Simplified version of <strong>_dlerror_run()</strong> looks like this:</p>
+<p>Simplified version of <code>_dlerror_run()</code> looks like this:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> dl_action_result last_result<span class="op">;</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> dl_action_result <span class="op">*</span>static_buf <span class="op">=</span> <span class="op">&amp;</span>last_result</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -228,24 +238,27 @@ _dlerror_run (operate=operate@entry=0x40838df0 &lt;dlopen_doit&gt;, args=args@en
 <span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>  result<span class="op">-&gt;</span>returned <span class="op">=</span> result<span class="op">-&gt;</span>errstring <span class="op">==</span> NULL<span class="op">;</span></span>
 <span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> result<span class="op">-&gt;</span>errstring <span class="op">!=</span> NULL<span class="op">;</span></span>
 <span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The <strong>SIGSEGV</strong> happens when we try to store result of <strong>_dl_catch_error()</strong>
-into <strong>result-&gt;errcode</strong>.</p>
-<p>I poked in <strong>gdb</strong> at the values of <strong>result</strong> right before <strong>_dl_catch_error()</strong>
-call and after it. And values are different! Time to look at where <strong>result</strong> is physically
-stored:</p>
+<p>The <code>SIGSEGV</code> happens when we try to store result of
+<code>_dl_catch_error()</code> into <code>result-&gt;errcode</code>.</p>
+<p>I poked in <code>gdb</code> at the values of <code>result</code> right before
+<code>\_dl_catch_error()</code> call and after it. And values are different! Time
+to look at where <code>result</code> is physically stored:</p>
 <pre><code>(gdb) disassemble /s _dlerror_run
 163       result-&gt;errcode = _dl_catch_error (&amp;result-&gt;objname, &amp;result-&gt;errstring,
 =&gt; 0x40839918 &lt;+184&gt;:   sw      v0,0(s0)
 (gdb) print (void*)$s0
 $1 = (void *) 0x40834c44 &lt;__stack_chk_guard&gt;</code></pre>
-<p>The instruction stores single word(32 bits) at address of <strong>s0</strong> register. But <strong>s0</strong>
-points not to <strong>last_result</strong> (it did right before the call) but at <strong>__stack_chk_guard</strong>.</p>
-<h1 id="how-stack-checks-work-on-mips">How stack checks work on mips</h1>
-<p>What is <strong>__stack_chk_guard</strong>? Has to do something about stack checks. Short answer: it’s a read-only
-variable that holds stack canary value. <strong>glibc</strong> is not supposed to write to it after it
-is initialized. Something leaked out address of that variable into <strong>s0</strong> (callee-save register).</p>
-<p>Let’s familiarize ourselves with <strong>mips</strong> ABI a bit and look at how stack checks look
-in generated code in a simple example:</p>
+<p>The instruction stores single word(32 bits) at address of <code>s0</code>
+register. But <code>s0</code> points not to <code>last_result</code> (it did right before
+the call) but at <code>__stack_chk_guard</code>.</p>
+<h2 id="how-does-stack-checks-work-on-mips">How does stack checks work on <code>mips</code></h2>
+<p>What is <code>__stack_chk_guard</code>? Has to do something about stack checks.
+Short answer: it’s a read-only variable that holds stack canary value.
+<code>glibc</code> is not supposed to write to it after it is initialized.
+Something leaked out address of that variable into <code>s0</code> (callee-save
+register).
+Let’s familiarize ourselves with <code>mips</code> ABI a bit and look at how does
+stack checks look like in generated code in a simple example:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> g<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{}</span></span></code></pre></div>
 <div class="sourceCode" id="cb18"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">; mips64-unknown-linux-gnu-gcc -S b.c -fno-stack-protector -O1</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>.<span class="dt">file</span>   <span class="dv">1</span> <span class="st">&quot;b.c&quot;</span></span>
@@ -275,9 +288,10 @@ in generated code in a simple example:</p>
 <span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>.<span class="pp">end</span>    g</span>
 <span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a>.size   g<span class="op">,</span> <span class="op">.-</span>g</span>
 <span id="cb18-28"><a href="#cb18-28" aria-hidden="true" tabindex="-1"></a>.ident  <span class="st">&quot;GCC: (Gentoo 7.2.0 p1.1) 7.2.0&quot;</span></span></code></pre></div>
-<p><strong>31</strong> register is also known as <strong>ra</strong>, return address. The code has a lot of pragmas
-but they are needed only for debugging. The real code is two insructions: <strong>jr $31; nop</strong>.</p>
-<p>Let’s check what <strong>fstack-protector-all</strong> does with our code:</p>
+<p><code>31</code> register is also known as <code>ra</code>, return address. The code has a
+lot of pragmas but they are needed only for debugging. The real code is
+two instructions: <code>jr \$31; nop</code>.
+Let’s check what <code>-fstack-protector-all</code> does with our code:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">; mips64-unknown-linux-gnu-gcc -S b.c -fstack-protector-all -O1</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>.<span class="dt">file</span>   <span class="dv">1</span> <span class="st">&quot;b.c&quot;</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>.<span class="bu">section</span> <span class="op">.</span>mdebug<span class="op">.</span>abiN32</span>
@@ -326,14 +340,19 @@ but they are needed only for debugging. The real code is two insructions: <stron
 <span id="cb19-46"><a href="#cb19-46" aria-hidden="true" tabindex="-1"></a>.<span class="pp">end</span>    g</span>
 <span id="cb19-47"><a href="#cb19-47" aria-hidden="true" tabindex="-1"></a>.size   g<span class="op">,</span> <span class="op">.-</span>g</span>
 <span id="cb19-48"><a href="#cb19-48" aria-hidden="true" tabindex="-1"></a>.ident  <span class="st">&quot;GCC: (Gentoo 7.2.0 p1.1) 7.2.0&quot;</span></span></code></pre></div>
-<p>Here is a quick <a href="https://www.cs.umd.edu/class/sum2003/cmsc311/Notes/Mips/altReg.html">table</a> of <strong>mips</strong> registers.</p>
-<p>15 instructions are doing the following: intermediate registers to hold canary value <strong>2</strong>(<strong>v0</strong>) and <strong>3</strong>(<strong>v1</strong>)
-are written on stack (<strong>sp</strong> register), read back and checked against value stored in <strong>__stack_chk_guard</strong>.</p>
-<p>Quite straightforward.</p>
-<h1 id="who-broke-s0">Who broke s0?</h1>
-<p>Back to our <strong>_dl_catch_error()</strong> why did <strong>s0</strong> change? <strong>mips</strong> <strong>ABI</strong> says <strong>s0</strong> is callee-save.
-It means <strong>s0</strong> should not be changed by callee functions.</p>
-<p>To get more clues we need to dive into <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/dl-error-skeleton.c;h=8e5888d4bdf7e325358bc737000b31573f000736;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l171">**_dl_catch_error()**</a></p>
+<p>Here is a quick
+<a href="https://www.cs.umd.edu/class/sum2003/cmsc311/Notes/Mips/altReg.html">table</a>
+of <code>mips</code> registers.</p>
+<p>15 instructions are doing the following: intermediate registers to hold
+canary value <code>2</code>(<code>v0</code>) and <code>3</code>(<code>v1</code>) are written on stack
+(<code>sp</code> register), read back and checked against value stored in
+<code>__stack_chk_guard</code>. Quite straightforward.</p>
+<h1 id="who-broke-s0">Who broke <code>s0</code>?</h1>
+<p>Back to our <code>_dl_catch_error()</code> why did <code>s0</code> change? <code>mips</code>
+<code>ABI</code> says <code>s0</code> is callee-save. It means <code>s0</code> should not be
+changed by callee functions.</p>
+<p>To get more clues we need to dive into
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/dl-error-skeleton.c;h=8e5888d4bdf7e325358bc737000b31573f000736;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l171"><code>_dl_catch_error()</code></a></p>
 <div class="sourceCode" id="cb20"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> catch</span>
 <span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> <span class="dt">char</span> <span class="op">**</span>objname<span class="op">;</span>       <span class="co">/* Object/File name.  */</span></span>
@@ -384,19 +403,23 @@ It means <strong>s0</strong> should not be changed by callee functions.</p>
 <span id="cb20-48"><a href="#cb20-48" aria-hidden="true" tabindex="-1"></a>  catch_hook <span class="op">=</span> old<span class="op">;</span></span>
 <span id="cb20-49"><a href="#cb20-49" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> errcode<span class="op">;</span></span>
 <span id="cb20-50"><a href="#cb20-50" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>This code is straightforward (but very scary): it wraps call of <strong>operate</strong> callback
-into <strong>__sigsetjmp()</strong> (really just a <strong>setjmp()</strong>).</p>
-<p><strong>setjmp()</strong> is a simple-ish function: it stores most of current registers into <strong>c.env()</strong>
-and later <strong>longjmp()</strong> restores them. Caller-saves are not saved because <strong>longjmp()</strong>
-looks like a normal C function call.</p>
-<p>Normally <strong>longjmp()</strong> is called only when error condition happens. In our case it’s called
-when <strong>dlopen()</strong> fails (we are opening non-existent file). <strong>longjmp()</strong> restores
-all registers stored by <strong>setjmp()</strong> including instruction pointer <strong>pc</strong>, stack pointer <strong>sp</strong>,
-caller-saves <strong>s0..s7</strong> and others.</p>
-<p>The question arises: why and where do we lose <strong>s0</strong> register? At save (<strong>setjmp()</strong>)
-or at restore (<strong>longjmp()</strong>)?</p>
-<p>As we can see <strong>setjmp()</strong> and <strong>longjmp()</strong> are functions very sensitive to <strong>ABI</strong>. Let’s check how
-<strong>__sigsetjmp()</strong> is implemented at <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/mips/mips64/setjmp.S;h=3e4120e1ea8db9e41f48d7efe17bd2f2ea8c38c5;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l22">sysdeps/mips/mips64/setjmp.S</a></p>
+<p>This code is straightforward (but very scary): it wraps call of
+<code>operate</code> callback into <code>__sigsetjmp()</code> (really just a <code>setjmp()</code>).
+<code>setjmp()</code> is a simple-ish function: it stores most of current
+registers into <code>c.env()</code> and later <code>longjmp()</code> restores them.
+Caller-saves are not saved because <code>longjmp()</code> looks like a normal <code>c</code>
+function call.
+Normally <code>longjmp()</code> is called only when error condition happens. In
+our case it’s called when <code>dlopen()</code> fails (we are opening
+non-existent file). <code>longjmp()</code> restores all registers stored by
+<code>setjmp()</code> including instruction pointer <code>pc</code>, stack pointer <code>sp</code>,
+caller-saves <code>s0..s7</code> and others.</p>
+<p>The question arises: why and where do we lose <code>s0</code> register? At save
+(<code>setjmp()</code>) or at restore (<code>longjmp()</code>)?</p>
+<p>As we can see <code>setjmp()</code> and <code>longjmp()</code> are functions very
+sensitive to <code>ABI</code>. Let’s check how <code>__sigsetjmp()</code> is
+implemented at
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/mips/mips64/setjmp.S;h=3e4120e1ea8db9e41f48d7efe17bd2f2ea8c38c5;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l22"><code>sysdeps/mips/mips64/setjmp.S</code></a></p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="bu">ENTRY</span> <span class="op">(</span>__sigsetjmp<span class="op">)</span></span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    SETUP_GP</span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    SETUP_GP64_REG <span class="op">(</span>v0<span class="op">,</span> C_SYMBOL_NAME <span class="op">(</span>__sigsetjmp<span class="op">))</span></span>
@@ -407,10 +430,11 @@ or at restore (<strong>longjmp()</strong>)?</p>
 <span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    move a4<span class="op">,</span> gp</span>
 <span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>    jr t9</span>
 <span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a><span class="pp">END</span> <span class="op">(</span>__sigsetjmp<span class="op">)</span></span></code></pre></div>
-<p>Note how <strong>__sigsetjmp</strong> does almost nothing here: only saves <strong>gp</strong>, <strong>sp</strong> and <strong>fp</strong>
-and defers everything to <strong>__sigsetjmp_aux</strong>. Let’s peek at that in
-<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/mips/mips64/setjmp_aux.c;h=b43c36a7d50d82da6d1e47c31a052e03e94f6aff;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l27">sysdeps/mips/mips64/setjmp_aux.c</a></p>
-<p>Suddenly, its implementation is in C:</p>
+<p>Note how <code>__sigsetjmp</code> does almost nothing here: only saves <code>gp</code>,
+<code>sp</code> and <code>fp</code> and defers everything to <code>__sigsetjmp_aux</code>. Let’s
+peek at that in
+<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/mips/mips64/setjmp_aux.c;h=b43c36a7d50d82da6d1e47c31a052e03e94f6aff;hb=f87cc2bfba9b844da48a63441c6099342b1551c7#l27"><code>sysdeps/mips/mips64/setjmp_aux.c</code></a></p>
+<p>Suddenly, its implementation is in <code>c</code>:</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span></span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>__sigsetjmp_aux <span class="op">(</span>jmp_buf env<span class="op">,</span> <span class="dt">int</span> savemask<span class="op">,</span> <span class="dt">long</span> <span class="dt">long</span> sp<span class="op">,</span> <span class="dt">long</span> <span class="dt">long</span> fp<span class="op">,</span></span>
 <span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>                 <span class="dt">long</span> <span class="dt">long</span> gp<span class="op">)</span></span>
@@ -448,11 +472,11 @@ and defers everything to <strong>__sigsetjmp_aux</strong>. Let’s peek at that 
 <span id="cb22-35"><a href="#cb22-35" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* Save the signal mask if requested.  */</span></span>
 <span id="cb22-36"><a href="#cb22-36" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> __sigjmp_save <span class="op">(</span>env<span class="op">,</span> savemask<span class="op">);</span></span>
 <span id="cb22-37"><a href="#cb22-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The function duly stores every caller-save (including <strong>16</strong> aka <strong>s0</strong>)
-and more into <strong>c.env</strong>. But what happens when that function is being compiled
-with <strong>-fstack-protector-all</strong>? How does it preserve original registers?</p>
-<p>Unfortunately the answer is: it does not.</p>
-<p>Let’s compare assembly output with and without <strong>-fstack-protector-all</strong>:</p>
+<p>The function duly stores every caller-save (including <code>16</code> aka <code>s0</code>)
+and more into <code>c.env</code>. But what happens when that function is being
+compiled with <code>-fstack-protector-all</code>? How does it preserve original
+registers? Unfortunately the answer is: it does not.
+Let’s compare assembly output with and without <code>-fstack-protector-all</code>:</p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">; **-fno-stack-protector**:</span></span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>Dump of assembler code for function __sigsetjmp_aux<span class="op">:</span></span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>addiu   <span class="kw">sp</span><span class="op">,</span><span class="kw">sp</span><span class="op">,-</span><span class="dv">16</span></span>
@@ -531,7 +555,7 @@ with <strong>-fstack-protector-all</strong>? How does it preserve original regis
 <span id="cb24-43"><a href="#cb24-43" aria-hidden="true" tabindex="-1"></a>jalr    t9</span>
 <span id="cb24-44"><a href="#cb24-44" aria-hidden="true" tabindex="-1"></a><span class="bu">nop</span></span></code></pre></div>
 <p>Or in diff form:</p>
-<div class="sourceCode" id="cb25"><pre class="sourceCode Diff"><code class="sourceCode diff"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- no-sp       2017-12-16 23:53:51.591627849 +0000</span></span>
+<div class="sourceCode" id="cb25"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- no-sp       2017-12-16 23:53:51.591627849 +0000</span></span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ spa 2017-12-16 23:53:37.952647838 +0000</span></span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1 +1 @@</span></span>
 <span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a><span class="st">-    ; **-fno-stack-protector**:</span></span>
@@ -572,9 +596,9 @@ with <strong>-fstack-protector-all</strong>? How does it preserve original regis
 <span id="cb25-39"><a href="#cb25-39" aria-hidden="true" tabindex="-1"></a><span class="va">+    lw      t9,-32644(gp)</span></span>
 <span id="cb25-40"><a href="#cb25-40" aria-hidden="true" tabindex="-1"></a><span class="va">+    jalr    t9</span></span>
 <span id="cb25-41"><a href="#cb25-41" aria-hidden="true" tabindex="-1"></a><span class="va">+    nop</span></span></code></pre></div>
-<h1 id="the-minimal-reproducer-and-fix">The minimal reproducer and fix</h1>
-<p>To fully nail down the problem I’d like to have something nice for upstream.
-Here is the minimal reproducer:</p>
+<h2 id="the-minimal-reproducer-and-fix">The minimal reproducer and fix</h2>
+<p>To fully nail down the problem I’d like to have something nice for
+upstream. Here is the minimal reproducer:</p>
 <div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;setjmp.h&gt;</span></span>
 <span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -590,8 +614,8 @@ Here is the minimal reproducer:</p>
 $s0 = 1082346564
 $ qemu-mipsn32 -L ~/fixed-libc ./mips-longjmp-bug
 $s0 = 1234</code></pre>
-<p>And the fix is to disable stack protection of <strong>__sigsetjmp_aux()</strong>
-in all build modes of glibc. This does work:</p>
+<p>And the fix is to disable stack protection of <code>__sigsetjmp_aux()</code> in
+all build modes of <code>glibc</code>. This does work:</p>
 <div class="sourceCode" id="cb28"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/sysdeps/mips/mips64/setjmp_aux.c</span></span>
 <span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/sysdeps/mips/mips64/setjmp_aux.c</span></span>
 <span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -25,6 +25,7 @@</span></span>
@@ -602,22 +626,27 @@ in all build modes of glibc. This does work:</p>
 <span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a> __sigsetjmp_aux (jmp_buf env, int savemask, long long sp, long long fp,</span>
 <span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>                 long long gp)</span>
 <span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a> {</span></code></pre></div>
-<h1 id="parting-words">Parting words</h1>
-<p>So it was not a stack corruption after all. But the register corruption triggered by a security feature.</p>
-<p>What more interesting is why Matt got <strong>stack smashing detected</strong> and not <strong>SIGSEGV</strong>.
-It means that write into <strong>__stack_chk_guard</strong> actually succeeded and caused canary
-check failure not because on-stack canary copy changed but because global canary changed.
-<strong>__stack_chk_guard</strong> sits in <strong>.data.rel.ro</strong> section. <strong>qemu</strong> maps it as read-only and crashes
-my process. How it behaves on real target is an exercise to the reader with <strong>mips</strong> device :)</p>
+<h2 id="parting-words">Parting words</h2>
+<p>So it was not a stack corruption after all. But the register corruption
+triggered by a security feature.</p>
+<p>What more interesting is why Matt got <code>stack smashing detected</code> and
+not <code>SIGSEGV</code>. It means that write into <code>__stack_chk_guard</code>
+actually succeeded and caused canary check failure not because on-stack
+canary copy changed but because global canary changed.
+<code>__stack_chk_guard</code> sits in <code>.data.rel.ro</code> section. <code>qemu</code> maps
+it as read-only and crashes my process. How it behaves on real target is
+an exercise to the reader with <code>mips</code> device :)</p>
 <p>Fun facts:</p>
 <ul>
-<li>It took me 12 days to find out the cause of failure. Working <strong>gdb</strong> and <strong>qemu-user</strong>
-made the fix happen.</li>
-<li><strong>setjmp()</strong>/**longjmp()** are not so opaque for me and hopefully for you.
-But make sure you have read <a href="https://linux.die.net/man/3/longjmp">all the volatility gotchas</a> (Notes section)</li>
-<li><strong>glibc</strong> uses <strong>setjmp()</strong>/**longjmp()** for error handling</li>
-<li><strong>mips</strong> ABI is very pleasant to work with and not as complicated as I thought :)</li>
-<li><strong>qemu-mipsn32</strong> needs a fix to generate readable <strong>.core</strong> files</li>
+<li>It took me 12 days to find out the cause of failure. Working <code>gdb</code>
+and <code>qemu-user</code> made the fix happen.</li>
+<li><code>setjmp()</code> / <code>longjmp()</code> are not so opaque for me and hopefully
+for you. But make sure you have read <a href="https://linux.die.net/man/3/longjmp">all the volatility
+gotchas</a> (Notes section)</li>
+<li><code>glibc</code> uses <code>setjmp()</code> / <code>longjmp()</code> for error handling</li>
+<li><code>mips</code> ABI is very pleasant to work with and not as complicated as I
+thought :)</li>
+<li><code>qemu-mipsn32</code> needs a fix to generate readable <code>.core</code> files</li>
 </ul>
 <p>Have fun!</p>
         </div>

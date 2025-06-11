@@ -29,12 +29,12 @@
                 <div class="info">January  4, 2019</div>
             
 
-            <h1 id="bug">Bug</h1>
-<p>This was a quiet evening on <strong>#gentoo-alpha</strong>. Matt Turner
-shared an unusual
-<a href="https://bugs.gentoo.org/672040">kernel crash report</a> seen by Dmitry V. Levin.</p>
-<p>Dmitry noticed that one of <strong>AlphaServer ES40</strong> machines does
-not handle <strong>strace</strong> test suite and generates kernel oopses:</p>
+            <h2 id="bug">Bug</h2>
+<p>This was a quiet evening on <code>#gentoo-alpha</code>. Matt Turner shared an
+unusual <a href="https://bugs.gentoo.org/672040">kernel crash report</a> seen by
+Dmitry V. Levin.</p>
+<p>Dmitry noticed that one of <code>AlphaServer ES40</code> machines does not handle
+<code>strace</code> test suite and generates kernel crashes:</p>
 <pre><code>Unable to handle kernel paging request at virtual address ffffffffffff9468
 CPU 3 
 aio(26027): Oops 0
@@ -55,13 +55,13 @@ gp = 0000000000000000  sp = 00000000265fd174
 Disabling lock debugging due to kernel taint
 Trace:
 [&lt;fffffc0000311404&gt;] entSys+0xa4/0xc0</code></pre>
-<p>Oopses should never happen against userland workloads.</p>
-<p>Here crash happened right in the <strong>io_submit()</strong> syscall.
-“Should be a very simple arch-specific bug. Can’t take much
-time to fix.” was my thought. Haha.</p>
-<h1 id="reproducer">Reproducer</h1>
-<p>Dmitry provided very nice reproducer of the problem (extracted
-from <strong>strace</strong> test suite):</p>
+<p>Oopses should never happen against userland workloads.
+Here crash happened right in the <code>io_submit()</code> syscall. “Should be a
+very simple arch-specific bug. Can’t take much time to fix.” was my
+thought. Haha.</p>
+<h2 id="reproducer">Reproducer</h2>
+<p>Dmitry provided very nice reproducer of the problem (extracted from
+<code>strace</code> test suite):</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat aio.c</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;err.h&gt;</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;unistd.h&gt;</span></span>
@@ -84,17 +84,15 @@ from <strong>strace</strong> test suite):</p>
 <span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>    syscall<span class="op">(</span>__NR_io_destroy<span class="op">,</span> ctx<span class="op">);</span></span>
 <span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>The idea of this test is simple: create valid context for
-asynchronous IO and pass invalid pointer <strong>ptr</strong> to it.
-<strong>mmap()</strong>/**munmap()** trick makes sure the <strong>ptr</strong> is
-pointing at an invalid non-<strong>NULL</strong> user memory location.</p>
-<p>To reproduce and explore the bug locally I picked
-<strong>qemu</strong> alpha system emulation. To avoid complexity of
-searching for proper IDE driver for root filesystem I built
-minimal linux kernel with only initramfs support without
-filesystem or block device support.</p>
-<p>Then I put statically linked reproducer and busybox into
-initramfs:</p>
+<p>The idea of this test is simple: create valid context for asynchronous
+<code>IO</code> and pass invalid pointer <code>ptr</code> to it. <code>mmap()</code>/<code>munmap()</code>
+trick makes sure the <code>ptr</code> is pointing at an invalid non-<code>NULL</code> user
+memory location.</p>
+<p>To reproduce and explore the bug locally I picked <code>qemu-alpha</code> system
+emulation. To avoid complexity of searching for proper <code>IDE</code> driver for
+root filesystem I built minimal <code>linux</code> kernel with only <code>initramfs</code>
+support without filesystem or block device support.</p>
+<p>Then I put statically linked reproducer and <code>busybox</code> into <code>initramfs</code>:</p>
 <pre><code>$ LANG=C tree root/
 root/
 |-- aio (statically linked aio.c)
@@ -115,18 +113,16 @@ $ cat root/init
 mount -t proc none /proc
 mount -t sysfs none /sys
 exec bin/sh</code></pre>
-<p>To run <strong>qemu</strong> system emulation against the above I used
-the following one-liner:</p>
+<p>To run <code>qemu</code> system emulation against the above I used the following
+one-liner:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">#  run-qemu.sh</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">alpha-unknown-linux-gnu-gcc</span> root/aio.c <span class="at">-o</span> root/aio <span class="at">-static</span></span>
 <span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span> <span class="bu">cd</span> root <span class="kw">&amp;&amp;</span> <span class="fu">find</span> . <span class="at">-print0</span> <span class="kw">|</span> <span class="fu">cpio</span> <span class="at">--null</span> <span class="at">-ov</span> <span class="at">--format</span><span class="op">=</span>newc<span class="kw">;</span> <span class="kw">)</span> <span class="kw">|</span> <span class="fu">gzip</span> <span class="at">-9</span> <span class="op">&gt;</span> initramfs.cpio.gz</span>
 <span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="ex">qemu-system-alpha</span> <span class="at">-kernel</span> vmlinux <span class="at">-initrd</span> initramfs.cpio.gz <span class="at">-m</span> 1G <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
-<p><strong>run-qemu.sh</strong> builds <strong>initramfs</strong> image and runs kernel
-against it.</p>
-<p>Cross-compiling <strong>vmlinux</strong> on <strong>alpha</strong> is also
-straightforward:</p>
+<p><code>run-qemu.sh</code> builds <code>initramfs</code> image and runs kernel against it.
+Cross-compiling <code>vmlinux</code> on <code>alpha</code>* is also straightforward:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">#  mk.sh</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -145,31 +141,30 @@ $ ./run-qemu.sh -curses
 ...
 [    0.650390] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input0
 / #</code></pre>
-<p>That was simple. I got the prompt! Then I ran statically
-linked <strong>/aio</strong> reproducer as:</p>
+<p>That was simple. I got the prompt! Then I ran statically linked <code>/aio</code>
+reproducer as:</p>
 <pre><code>/ # /aio
 Unable to handle kernel paging request at virtual address 0000000000000000
 aio(26027): Oops -1
 ...</code></pre>
-<p>Woohoo! Crashed \o/ This allowed me to explore failure in more detail.</p>
-<p>I used <strong>-curses</strong> (instead of default <strong>-sdl</strong>) to ease copying
-of text back from VM.</p>
-<p>Fault address pattern was slightly different from the original
-report. I hoped it’s a manifestation of the same bug. Worst case
-I would find another bug to fix and get back to original one again :)</p>
-<h1 id="into-the-rabbit-hole">Into the rabbit hole</h1>
-<p>Oops was happening every time I ran <strong>/aio</strong> on <strong>4.20</strong>
-kernel. <strong>io_submit(2)</strong> man page claims it’s an old system
-call from <strong>2.5</strong> kernel era. Thus it should not be a recent addition.</p>
-<p>How about older kernels? Did they also fail?</p>
-<p>I was still not sure I had correct qemu/kernel setup. I
-decided to pick older <strong>4.14</strong> kernel version known to run
-without major problems on our <strong>alpha</strong> box. <strong>4.14</strong> kernel
-version did not crash in <strong>qemu</strong> either. This reassured me I
-have not completely broken setup.</p>
-<p>I got first suspect: kernel regression.</p>
-<p>Reproducer was very stable. Kernel bisection got me
-to <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95af8496ac48263badf5b8dde5e06ef35aaace2b">first regressed commit</a>:</p>
+<p>Woohoo! Crashed \o/ This allowed me to explore failure in more detail.
+I used <code>-curses</code> (instead of default <code>-sdl</code>) to ease copying of text
+back from VM.
+Fault address pattern was slightly different from the original report. I
+hoped it’s a manifestation of the same bug. Worst case I would find
+another bug to fix and get back to original one again :)</p>
+<h2 id="into-the-rabbit-hole">Into the rabbit hole</h2>
+<p>Oops was happening every time I ran <code>/aio</code> on <code>4.20</code> kernel.
+<code>io_submit(2)</code> man page claims it’s an old system call from <code>2.5</code>
+kernel era. Thus it should not be a recent addition.
+How about older kernels? Did they also fail?
+I was still not sure I had correct <code>qemu</code>/kernel setup. I decided to pick
+older <code>4.14</code> kernel version known to run without major problems on our
+<code>alpha</code> box. <code>4.14</code> kernel version did not crash in <code>qemu</code> either.
+This reassured me that I have not completely broken setup.
+I got first suspect: kernel regression.
+Reproducer was very stable. Kernel bisection got me to <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95af8496ac48263badf5b8dde5e06ef35aaace2b">first regressed
+commit</a>:</p>
 <pre><code>commit 95af8496ac48263badf5b8dde5e06ef35aaace2b
 Author: Al Viro &lt;viro@zeniv.linux.org.uk&gt;
 Date:   Sat May 26 19:43:16 2018 -0400
@@ -180,39 +175,36 @@ Date:   Sat May 26 19:43:16 2018 -0400
     Signed-off-by: Al Viro &lt;viro@zeniv.linux.org.uk&gt;
 
 :040000 040000 20dd44ac4706540b1c1d4085e4269bd8590f4e80 05d477161223e5062f2f781b462e0222c733fe3d M      fs</code></pre>
-<p>The commit clearly touched <strong>io_submit()</strong> syscall handling.
-But there is a problem: the change was not alpha-specific at all.
-If commit had any problems it also should have caused problems
-on other systems.</p>
-<p>To get better understanding of probable cause I decided to
-look at failure mechanics. Actual values of local variables
-in <strong>io_submit()</strong> right before crash might get me somewhere.
-I started adding <strong>printk()</strong> statements around
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/aio.c#n1923">SYSCALL_DEFINE3(io_submit, …)</a>
-implementation.</p>
-<p>At some point after enough <strong>printk()</strong> calls added crashes
-disappeared. This confirmed it was not just a logical bug but
-something more subtle.</p>
-<p>I also was not able to analyze the generated code difference
-between <strong>printk()</strong>/no-<strong>printk()</strong> versions.</p>
-<p>Then I attempted to isolate faulty code into a separate function
-but not much success here either. Any attempt to factor out a
-subset of <strong>io_submit()</strong> into a separate function made bug to
-go away.</p>
-<p>It was time for a next hypothesis: mysterious incorrect compiler
-code generation or invalid <strong>__asm__</strong> constraints for some kernel
-macro exposed after minor code motion.</p>
-<h1 id="single-stepping-through-kernel">Single stepping through kernel</h1>
-<p>How to get an insight into the details without affecting
-original code too much?</p>
-<p>Having failed at minimal code snippet I attempted to catch exact
-place of page fault by single-stepping through kerenel using <strong>gdb</strong>.</p>
-<p>For <strong>qemu</strong>-loadable kernels the procedure very straightforward:</p>
+<p>The commit clearly touched <code>io_submit()</code> syscall handling. But there
+is a problem: the change was not alpha-specific at all. If commit had
+any problems it also should have caused problems on other systems.
+To get better understanding of probable cause I decided to look at
+failure mechanics. Actual values of local variables in <code>io_submit()</code>
+right before crash might get me somewhere. I started adding <code>printk()</code>
+statements around <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/aio.c#n1923"><code>SYSCALL_DEFINE3(io_submit, ...)</code></a>
+implementation.
+At some point after enough <code>printk()</code> calls added crashes disappeared.
+This confirmed it was not just a logical bug but something more subtle.
+I also was not able to analyze the generated code difference between
+<code>printk()</code>/no-<code>printk()</code> versions.
+Then I attempted to isolate faulty code into a separate function but not
+much success here either. Any attempt to factor out a subset of
+<code>io_submit()</code> into a separate function made bug to go away.
+It was time for a next hypothesis: mysterious incorrect compiler code
+generation or invalid <code>__asm__</code> constraints for some kernel macro
+exposed after minor code motion.</p>
+<h2 id="single-stepping-through-kernel">Single stepping through kernel</h2>
+<p>How to get an insight into the details without affecting original code
+too much?
+Having failed at minimal code snippet I attempted to catch exact place
+of page fault by single-stepping through kernel using <code>gdb</code>.
+For <code>qemu</code>-loadable kernels the procedure very straightforward:</p>
 <ul>
-<li>start gdb server on qemu side with <strong>-s</strong> option</li>
-<li>start gdb client on host side with <strong>target remote localhost:1234</strong></li>
+<li>start <code>gdb</code> server on <code>qemu</code> side with <code>-s</code> option</li>
+<li>start <code>gdb</code> client on host side with <code>target remote localhost:1234</code></li>
 </ul>
-<p>The same procedure in exact commands (I’m hooking into <strong>sys_io_submit()</strong>):</p>
+<p>The same procedure in exact commands (I’m hooking into
+<code>sys_io_submit()</code>):</p>
 <pre><code>&lt;at tty1&gt;
 $ ./run-qemu.sh -s
 
@@ -237,20 +229,24 @@ $ gdb --quiet vmlinux
 (gdb) bt
   #0  __se_sys_io_submit (ctx_id=2199023255552, nr=1, iocbpp=2199023271936) at ../linux-2.6/fs/aio.c:1890
   #1  0xfffffc0001011254 in entSys () at ../linux-2.6/arch/alpha/kernel/entry.S:476</code></pre>
-<p>Now we can single-step through every instruction with
-<strong>nexti</strong> and check where things go wrong.</p>
-<p>To poke around efficiently I kept looking at these cheat sheets:</p>
+<p>Now we can single-step through every instruction with <code>nexti</code> and
+check where things go wrong.
+To poke around efficiently I kept looking at these cheat sheets:</p>
 <ul>
-<li><a href="https://www2.cs.arizona.edu/projects/alto/Doc/local/alpha.register.html">alpha register names and meaning</a> (1 page)</li>
-<li><a href="https://www2.cs.arizona.edu/projects/alto/Doc/local/alpha.instruction.html">alpha instruction names and meaning</a> (3 pages)</li>
+<li><a href="https://www2.cs.arizona.edu/projects/alto/Doc/local/alpha.register.html"><code>alpha</code> register names and
+meaning</a>
+(1 page)</li>
+<li><a href="https://www2.cs.arizona.edu/projects/alto/Doc/local/alpha.instruction.html"><code>alpha</code> instruction names and
+meaning</a>
+(3 pages)</li>
 </ul>
-<p>Register names are especially useful as each <strong>alpha</strong> register
-has two names: numeric and mnemonic. Source code might use one
-form and gdb disassembly might use another. For example
-<strong>$16</strong>/**a0** for <strong>gas</strong> (<strong>$r16</strong>/**$a0** for <strong>gdb</strong>)
-is a register to pass first integer argument to function.</p>
-<p>After many backs and forths I found the suspicious behaviour
-when handling single instruction:</p>
+<p>Register names are especially useful as each <code>alpha</code> register has two
+names: numeric and mnemonic. Source code might use one form and <code>gdb</code>
+disassembly might use another. For example <code>$16</code>/<code>a0</code> for
+<code>gas</code> (<code>$r16</code>/<code>$a0</code> for <code>gdb</code>) is a register to pass first
+integer argument to function.
+After many backs and forths I found the suspicious behavior when
+handling single instruction:</p>
 <pre><code>(gdb) disassemble
   =&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
      0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
@@ -269,23 +265,24 @@ when handling single instruction:</p>
     $5 = 0
 (gdb) p $t0
    $6 = -14 # -EFAULT</code></pre>
-<p>The above <strong>gdb</strong> session executes single <strong>ldq a1,0(t1)</strong> instruction
-and observes effect on the registers <strong>gp</strong>, <strong>a1</strong>, <strong>t0</strong>.</p>
-<p>Normally <strong>ldq a1, 0(t1)</strong> would read 64-bit value pointed by <strong>t1</strong>
-into <strong>a1</strong> register and leave <strong>t0</strong> and <strong>gp</strong> untouched.</p>
-<p>The main effect seen here that causes later OOps is sudden
-<strong>gp</strong> change. <strong>gp</strong> is supposed to point to <strong>GOT</strong> (global
-offset table) table in current “program” (kernel in this case).
-Something managed to corrupt it.</p>
-<p>By <strong>/aio</strong> test case construction instruction <strong>ldq a1,0(t1)</strong>
-is not supposed to read any valid data: our test case passes
-invalid memory location there. All the register changing
-effects are the result of page fault handling.</p>
-<h1 id="the-smoking-gun">The smoking gun</h1>
-<p>Grepping around <strong>arch/alpha</strong> directory I noticed
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199">entMM page fault handling entry</a>.</p>
-<p>It claims to handle page faults and keeps <strong>gp</strong> value on stack.
-Let’s trace the fate of that on-stack value as page fault happens:</p>
+<p>The above <code>gdb</code> session executes single <code>ldq a1,0(t1)</code> instruction
+and observes effect on the registers <code>gp</code>, <code>a1</code>, <code>t0</code>.
+Normally <code>ldq a1, 0(t1)</code> would read 64-bit value pointed by <code>t1</code>
+into <code>a1</code> register and leave <code>t0</code> and <code>gp</code> untouched.
+The main effect seen here that causes later OOps is sudden <code>gp</code>
+change. <code>gp</code> is supposed to point to <code>GOT</code> (global offset table)
+table in current “program” (kernel in this case). Something managed to
+corrupt it.
+By <code>/aio</code> test case construction instruction <code>ldq a1,0(t1)</code> is not
+supposed to read any valid data: our test case passes invalid memory
+location there. All the register changing effects are the result of page
+fault handling.</p>
+<h2 id="the-smoking-gun">The smoking gun</h2>
+<p>Grepping around <code>arch/alpha</code> directory I noticed <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199"><code>entMM</code> page fault
+handling
+entry</a>.
+It claims to handle page faults and keeps <code>gp</code> value on stack. Let’s
+trace the fate of that on-stack value as page fault happens:</p>
 <pre><code>(gdb) disassemble
   =&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
      0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;
@@ -309,48 +306,47 @@ Let’s trace the fate of that on-stack value as page fault happens:</p>
     0xfffffc00010319d0 in do_page_fault (address=2199023271936, mmcsr=&lt;optimized out&gt;, cause=0, regs=0xfffffc003f51bdc0)
        at ../linux-2.6/arch/alpha/mm/fault.c:199
     199                     newpc = fixup_exception(dpf_reg, fixup, regs-&gt;pc);</code></pre>
-<p>Above <strong>gdb</strong> session does the following:</p>
+<p>Above <code>gdb</code> session does the following:</p>
 <ul>
-<li><strong>break entMM</strong>: break at page fault</li>
-<li><strong>x/8a $sp</strong>: print <strong>8</strong> top stack values at <strong>entMM</strong> call time</li>
-<li>spot <strong>gp</strong> value at <strong>0xfffffc003f51be88</strong> (<strong>sp</strong>+16) address</li>
-<li><strong>watch -l *0xfffffc003f51be88</strong>: set hardware watchpoint at
-a memory location where <strong>gp</strong> is stored.</li>
+<li><code>break entMM</code>: break at page fault</li>
+<li><code>x/8a $sp</code>: print <code>8</code> top stack values at <code>entMM</code> call time</li>
+<li>spot <code>gp</code> value at <code>0xfffffc003f51be88</code> (<code>sp+16</code>) address</li>
+<li><code>watch -l *0xfffffc003f51be88</code>: set hardware watch point at a memory
+location where <code>gp</code> is stored.</li>
 </ul>
 <p>Watch triggers at seemingly relevant place:
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/extable.h#n39">fixup_exception()</a>
-where exception handler adjusts registers before resuming the
-faulted task.</p>
-<p>Looking around I found an off-by-two bug in page fault handling
-code. The fix was simple:</p>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/extable.h#n39"><code>fixup_exception()</code></a>
+where exception handler adjusts registers before resuming the faulted
+task.
+Looking around I found an off-by-two bug in page fault handling code.
+The fix was simple:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="op">---</span> a<span class="op">/</span>arch<span class="op">/</span>alpha<span class="op">/</span>mm<span class="op">/</span>fault<span class="op">.</span>c</span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="op">+++</span> b<span class="op">/</span>arch<span class="op">/</span>alpha<span class="op">/</span>mm<span class="op">/</span>fault<span class="op">.</span>c</span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>@@ <span class="op">-</span><span class="dv">80</span><span class="op">,</span><span class="dv">2</span> <span class="op">+</span><span class="dv">80</span><span class="op">,</span><span class="dv">2</span> @@ __load_new_mm_context<span class="op">(</span><span class="kw">struct</span> mm_struct <span class="op">*</span>next_mm<span class="op">)</span></span>
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">(((</span><span class="dt">unsigned</span> <span class="dt">long</span> <span class="op">*)</span>regs<span class="op">)[(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">8</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)</span> <span class="op">:</span> <span class="op">(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">15</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)-</span><span class="dv">16</span> <span class="op">:</span>  \</span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="op">-</span>                                <span class="op">(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">18</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)+</span><span class="dv">8</span> <span class="op">:</span> <span class="op">(</span>r<span class="op">)-</span><span class="dv">10</span><span class="op">])</span></span>
 <span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="op">+</span>                                <span class="op">(</span>r<span class="op">)</span> <span class="op">&lt;=</span> <span class="dv">18</span> <span class="op">?</span> <span class="op">(</span>r<span class="op">)+</span><span class="dv">10</span> <span class="op">:</span> <span class="op">(</span>r<span class="op">)-</span><span class="dv">10</span><span class="op">])</span></span></code></pre></div>
-<p>Patch is proposed upstream as <a href="https://lkml.org/lkml/2018/12/31/83">https://lkml.org/lkml/2018/12/31/83</a>.</p>
-<p>Effect of the patch is to write <strong>0</strong> into on-stack location
-of <strong>a1</strong> (<strong>$17</strong> register) instead of location of <strong>gp</strong>.</p>
-<p>That’s it!</p>
-<h1 id="page-fault-handling-magic">Page fault handling magic</h1>
-<p>I always wondered how kernel reads data from userspace when
-it’s needed. How does it do swap-in if data is not available?
-How does it check for permission privilege access? That kind
-of stuff.</p>
-<p>The above investigation covers most of involved components:</p>
+<p>Patch is proposed upstream as <a href="https://lkml.org/lkml/2018/12/31/83" class="uri">https://lkml.org/lkml/2018/12/31/83</a>.
+Effect of the patch is to write <code>0</code> into on-stack location of <code>a1</code>
+(<code>$17</code> register) instead of location of <code>gp</code>.
+That’s it!</p>
+<h2 id="page-fault-handling-magic">Page fault handling magic</h2>
+<p>I always wondered how does kernel read data from user space when it’s
+needed. How does it do swap-in if data is not available? How does it
+check for permission privilege access? That kind of stuff.
+The above investigation covers most of involved components:</p>
 <ul>
-<li><strong>ldq</strong> instruction is used to force the read from userspace
-(as one would read from kernel’s memory)</li>
-<li><strong>entMM</strong>/**do<span id="page_fault">page_fault</span>()** handles the userspace fault as
-if fault would not happen</li>
+<li><code>ldq</code> instruction is used to force the read from user space (as one
+would read from kernel’s memory)</li>
+<li><code>entMM</code>/<code>do_page_fault()</code> handles the user space fault as if
+fault would not happen</li>
 </ul>
 <p>The few minor missing details are:</p>
 <ul>
-<li>How does kernel know which instructions are known to generate
-user page faults?</li>
-<li>What piece of hardware holds a pointer to page fault handler
-on <strong>alpha</strong>?</li>
+<li>How does kernel know which instructions are known to generate user
+page faults?</li>
+<li>What piece of hardware holds a pointer to page fault handler on
+<code>alpha</code>?</li>
 </ul>
 <p>Let’s expand the code involved in page fault handling. Call site:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>SYSCALL_DEFINE3<span class="op">(</span>io_submit<span class="op">,</span> aio_context_t<span class="op">,</span> ctx_id<span class="op">,</span> <span class="dt">long</span><span class="op">,</span> nr<span class="op">,</span></span>
@@ -363,11 +359,12 @@ on <strong>alpha</strong>?</li>
 <p>which is translated to already familiar pair of instructions:</p>
 <pre><code>=&gt; 0xfffffc000117f968 &lt;+216&gt;:   ldq     a1,0(t1)
    0xfffffc000117f96c &lt;+220&gt;:   bne     t0,0xfffffc000117f9c0 &lt;__se_sys_io_submit+304&gt;</code></pre>
-<p>Fun fact: <strong>get_user()</strong> has two return values: normal function
-return value (stored into <strong>t0</strong> register) and <strong>user_iocb</strong>
-effect (stored into <strong>a1</strong> register).</p>
-<p>Let’s expand <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/uaccess.h#n59">get_user() implementation</a>
-on <strong>alpha</strong>:</p>
+<p>Fun fact: <code>get_user()</code> has two return values: normal function return
+value (stored into <code>t0</code> register) and <code>user_iocb</code> effect (stored
+into <code>a1</code> register).</p>
+<p>Let’s expand <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/uaccess.h#n59"><code>get_user()</code>
+implementation</a>
+on <code>alpha</code>:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere at arch/alpha/include/asm/uaccess.h:</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#define get_user</span><span class="op">(</span><span class="pp">x</span><span class="op">,</span><span class="pp"> ptr</span><span class="op">)</span><span class="pp"> </span><span class="op">\</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="pp">    __get_user_check</span><span class="op">((</span><span class="pp">x</span><span class="op">),</span><span class="pp"> </span><span class="op">(</span><span class="pp">ptr</span><span class="op">),</span><span class="pp"> </span><span class="kw">sizeof</span><span class="op">(*(</span><span class="pp">ptr</span><span class="op">)))</span></span>
@@ -392,11 +389,12 @@ on <strong>alpha</strong>:</p>
 <span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a><span class="pp">    </span><span class="op">})</span></span></code></pre></div>
 <p>A lot of simple code above does two things:</p>
 <ol type="1">
-<li>use <strong>__access_ok()</strong> to check for address to be a userspace address to prevent
-data exfiltration from kernel.</li>
-<li>dispatch across different supported sizes to do the rest of work. Our case is a simple 64-bit read.</li>
+<li>use <code>__access_ok()</code> to check for address to be a user space
+address to prevent data exfiltration from kernel.</li>
+<li>dispatch across different supported sizes to do the rest of work.
+Our case is a simple 64-bit read.</li>
 </ol>
-<p>Looking at <strong>__get_user_64()</strong> in more detail:</p>
+<p>Looking at <code>__get_user_64()</code> in more detail:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> __large_struct <span class="op">{</span> <span class="dt">unsigned</span> <span class="dt">long</span> buf<span class="op">[</span><span class="dv">100</span><span class="op">];</span> <span class="op">};</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#define __m</span><span class="op">(</span><span class="pp">x</span><span class="op">)</span><span class="pp"> </span><span class="op">(*(</span><span class="kw">struct</span><span class="pp"> __large_struct __user </span><span class="op">*)(</span><span class="pp">x</span><span class="op">))</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -414,23 +412,29 @@ data exfiltration from kernel.</li>
 <span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;.previous</span><span class="sc">\n</span><span class="st">&quot;</span></span></code></pre></div>
 <p>A few observations:</p>
 <ul>
-<li>The actual check for address validity is done by CPU: load-8-bytes instruction (<strong>ldq %0,%2</strong>) is executed and MMU handles a page fault</li>
-<li>There is no explicit code to recover from the exception. All auxiliary information it put into <strong>__ex_table</strong> section.</li>
-<li><strong>ldq %0,%2</strong> instruction uses only parameters “0” (<strong>__gu_val</strong>) and “2”(<strong>addr</strong>) but does not use “1”(<strong>__gu_err</strong>) parameter directly.</li>
-<li><strong>__ex_table</strong> uses cool <strong>lda</strong> instruction hack to encode auxiliary data:
+<li>The actual check for address validity is done by CPU: load-8-bytes
+instruction (<code>ldq %0,%2</code>) is executed and MMU handles a page fault</li>
+<li>There is no explicit code to recover from the exception. All auxiliary
+information it put into <code>__ex_table</code> section.</li>
+<li><code>ldq %0,%2</code> instruction uses only parameters <code>"0"</code> (<code>__gu_val</code>)
+and <code>"2"</code>(<code>addr</code>) but does not use <code>"1"</code>(<code>__gu_err</code>) parameter
+directly.</li>
+<li><code>__ex_table</code> uses cool <code>lda</code> instruction hack to encode
+auxiliary data:
 <ul>
-<li><strong>__gu_err</strong> error register</li>
-<li>pointer to next instruction after faulty instrustion: <strong>cont-label</strong> (or <strong>2b-1b</strong>)</li>
+<li><code>__gu_err</code> error register</li>
+<li>pointer to next instruction after faulty instruction: <code>cont-label</code>
+(or <code>2b-1b</code>)</li>
 <li>result register</li>
 </ul></li>
 </ul>
-<p>Page fault handling mechanism knows how to get to
-<strong>__ex_table</strong> data where “1”(<strong>__gu_err</strong>) is encoded and is
-able to reach that data to use it later in mysterious
-<strong>fixup_exception()</strong> we saw before.</p>
-<p>In case of <strong>alpha</strong> (and many other targets) <strong>__ex_table</strong>
-collection is defined by <strong>arch/alpha/kernel/vmlinux.lds.S</strong>
-linker script using <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h#n562">EXCEPTION_TABLE() macro</a>:</p>
+<p>Page fault handling mechanism knows how to get to <code>__ex_table</code> data
+where <code>"1"</code>(<code>__gu_err</code>) is encoded and is able to reach that data to
+use it later in mysterious <code>fixup_exception()</code> we saw before.
+In case of <code>alpha</code> (and many other targets) <code>__ex_table</code>
+collection is defined by <code>arch/alpha/kernel/vmlinux.lds.S</code> linker
+script using <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h#n562"><code>EXCEPTION_TABLE()</code>
+macro</a>:</p>
 <pre><code>#define EXCEPTION_TABLE(align)                         \
     . = ALIGN(align);                                  \
     __ex_table : AT(ADDR(__ex_table) - LOAD_OFFSET) {  \
@@ -439,11 +443,14 @@ linker script using <a href="https://git.kernel.org/pub/scm/linux/kernel/git/tor
         __stop___ex_table = .;                         \
     }
 //...</code></pre>
-<p>Here all <strong>__ex_table</strong> sections are gathered between <strong>__start___ex_table</strong> and <strong>__stop___ex_table</strong> symbols.
-Those are handled by generic <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/extable.c">kernel/extable.c</a> code:</p>
+<p>Here all <code>__ex_table</code> sections are gathered between
+<code>__start___ex_table</code> and <code>__stop___ex_table</code> symbols.
+Those are handled by generic
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/extable.c">kernel/extable.c</a>
+code:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> exception_table_entry <span class="op">*</span>search_exception_tables<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span> addr<span class="op">);</span></span></code></pre></div>
-<p><strong>search_exception_tables()</strong> resolves faut address to relevant <strong>struct exception_table_entry</strong>.</p>
-<p>Let’s look at the definition of <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/extable.h#n25">struct exception_table_entry</a>:</p>
+<p><code>search_exception_tables()</code> resolves fault address to relevant <code>struct exception_table_entry</code>.
+Let’s look at the definition of <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/include/asm/extable.h#n25"><code>struct exception_table_entry</code></a>:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Once again part of __get_user_64() responsible for __ex_table:</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">  #define EXC(label,cont,res,err)                    \</span></span>
@@ -475,21 +482,21 @@ Those are handled by generic <a href="https://git.kernel.org/pub/scm/linux/kerne
 <span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a><span class="pp">        map_reg</span><span class="op">((</span><span class="pp">_fixup</span><span class="op">)-&gt;</span><span class="pp">fixup</span><span class="op">.</span><span class="pp">bits</span><span class="op">.</span><span class="pp">errreg</span><span class="op">)</span><span class="pp"> </span><span class="op">=</span><span class="pp"> </span><span class="op">-</span><span class="pp">EFAULT</span><span class="op">;</span><span class="pp">    </span><span class="op">\</span></span>
 <span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a><span class="pp">    </span><span class="op">(</span><span class="pp">pc</span><span class="op">)</span><span class="pp"> </span><span class="op">+</span><span class="pp"> </span><span class="op">(</span><span class="pp">_fixup</span><span class="op">)-&gt;</span><span class="pp">fixup</span><span class="op">.</span><span class="pp">bits</span><span class="op">.</span><span class="pp">nextinsn</span><span class="op">;</span><span class="pp">                  </span><span class="op">\</span></span>
 <span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a><span class="op">})</span></span></code></pre></div>
-<p>Note how <strong>lda</strong> in-memory instruction format is used to encode
-all details needed by <strong>fixup_exception()</strong>! In case of our
-<strong>sys_io_submit()</strong> case it would be <strong>lda a1, 4(t0)</strong> (<strong>lda r17, 4(r1)</strong>):</p>
+<p>Note how <code>lda</code> in-memory instruction format is used to encode all
+details needed by <code>fixup_exception()</code>! In case of our
+<code>sys_io_submit()</code> case it would be <code>lda a1, 4(t0)</code> (<code>lda r17, 4(r1)</code>):</p>
 <pre><code>(gdb) bt
   #0  0xfffffc00010319d0 in do_page_fault (address=2199023271936, mmcsr=&lt;optimized out&gt;, cause=0, 
       regs=0xfffffc003f51bdc0) at ../linux-2.6/arch/alpha/mm/fault.c:199
   #1  0xfffffc0001010eac in entMM () at ../linux-2.6/arch/alpha/kernel/entry.S:222
 (gdb) p *fixup
     $4 = {insn = -2584576, fixup = {unit = 572588036, bits = {nextinsn = 4, errreg = 1, valreg = 17}}}</code></pre>
-<p>Note how page fault handling also advances <strong>pc</strong> (program counter or instruction pointer)
-<strong>nextinsn=4</strong> bytes forward to skip failed <strong>ldq</strong> instruction.</p>
-<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/mm/fault.c#n84">arch/alpha/mm/fault.c</a>
-does all the heavy-lifting of handling page faults. Here is a
-small snippet that handles our case of faults covered by
-exception handling:</p>
+<p>Note how the page fault handling also advances <code>pc</code> (program counter or
+instruction pointer) <code>nextinsn=4</code> bytes forward to skip failed <code>ldq</code>
+instruction.
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/mm/fault.c#n84"><code>arch/alpha/mm/fault.c</code></a>
+does all the heavy-lifting of handling page faults. Here is a small
+snippet that handles our case of faults covered by exception handling:</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>asmlinkage <span class="dt">void</span></span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>do_page_fault<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">long</span> address<span class="op">,</span> <span class="dt">unsigned</span> <span class="dt">long</span> mmcsr<span class="op">,</span></span>
 <span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>              <span class="dt">long</span> cause<span class="op">,</span> <span class="kw">struct</span> pt_regs <span class="op">*</span>regs<span class="op">)</span></span>
@@ -514,23 +521,24 @@ exception handling:</p>
 <span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a><span class="pp">#define dpf_reg</span><span class="op">(</span><span class="pp">r</span><span class="op">)</span><span class="pp">                                                  </span><span class="op">\</span></span>
 <span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a><span class="pp">    </span><span class="op">(((</span><span class="dt">unsigned</span><span class="pp"> </span><span class="dt">long</span><span class="pp"> </span><span class="op">*)</span><span class="pp">regs</span><span class="op">)[(</span><span class="pp">r</span><span class="op">)</span><span class="pp"> </span><span class="op">&lt;=</span><span class="pp"> </span><span class="dv">8</span><span class="pp"> </span><span class="op">?</span><span class="pp"> </span><span class="op">(</span><span class="pp">r</span><span class="op">)</span><span class="pp"> </span><span class="op">:</span><span class="pp"> </span><span class="op">(</span><span class="pp">r</span><span class="op">)</span><span class="pp"> </span><span class="op">&lt;=</span><span class="pp"> </span><span class="dv">15</span><span class="pp"> </span><span class="op">?</span><span class="pp"> </span><span class="op">(</span><span class="pp">r</span><span class="op">)-</span><span class="dv">16</span><span class="pp"> </span><span class="op">:</span><span class="pp">  </span><span class="op">\</span></span>
 <span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a><span class="pp">                             </span><span class="op">(</span><span class="pp">r</span><span class="op">)</span><span class="pp"> </span><span class="op">&lt;=</span><span class="pp"> </span><span class="dv">18</span><span class="pp"> </span><span class="op">?</span><span class="pp"> </span><span class="op">(</span><span class="pp">r</span><span class="op">)+</span><span class="dv">8</span><span class="pp"> </span><span class="op">:</span><span class="pp"> </span><span class="op">(</span><span class="pp">r</span><span class="op">)-</span><span class="dv">10</span><span class="op">])</span></span></code></pre></div>
-<p><strong>do_page_fault()</strong> also does a few other page-fault related things
-I carefully skipped here:</p>
+<p><code>do_page_fault()</code> also does a few other page-fault related things I
+carefully skipped here:</p>
 <ul>
 <li>page fault accounting</li>
-<li>handling of missing support for “prefetch” instruction</li>
+<li>handling of missing support for <code>"prefetch"</code> instruction</li>
 <li>stack growth</li>
 <li>OOM handling</li>
-<li><strong>SIGSEGV</strong>, <strong>SIGBUS</strong> propagation</li>
+<li><code>SIGSEGV</code>, <code>SIGBUS</code> propagation</li>
 </ul>
-<p>Once <strong>do_page_fault()</strong> gets control it updates <strong>regs</strong> struct
-in memory for faulted task using <strong>dpf_reg()</strong> macro. It looks
-unusual:</p>
+<p>Once <code>do_page_fault()</code> gets control it updates <code>regs</code> struct in
+memory for faulted task using <code>dpf_reg()</code> macro. It looks unusual:</p>
 <ul>
-<li>refers to negative offsets sometimes: <strong>(r) &lt;= 15 ? (r)-16</strong> (out of <strong>struct pt_regs</strong>)</li>
-<li>defines not one but a few ranges of registers: 0-8, 9-15, 16-18, 19-…</li>
+<li>refers to negative offsets sometimes: <code>(r) \&lt;= 15 ? (r)-16</code> (out of
+<code>struct pt_regs</code>)</li>
+<li>defines not one but a few ranges of registers: <code>0-8</code>, <code>9-15</code>, <code>16-18</code>,
+<code>19-...</code></li>
 </ul>
-<p><strong>struct pt_regs</strong> as is:</p>
+<p><code>struct pt_regs</code> as is:</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> pt_regs <span class="op">{</span></span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r0<span class="op">;</span>  <span class="co">// 0</span></span>
 <span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r1<span class="op">;</span></span>
@@ -564,22 +572,24 @@ unusual:</p>
 <span id="cb22-31"><a href="#cb22-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r17<span class="op">;</span></span>
 <span id="cb22-32"><a href="#cb22-32" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">long</span> r18<span class="op">;</span></span>
 <span id="cb22-33"><a href="#cb22-33" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
-<p>Now meaning of <strong>dpf_reg()</strong> should be more clear. As <strong>pt_regs</strong>
-keeps only a subset of registers is has to account for gaps and offsets.</p>
-<p>Here I noticed the bug: <strong>r16-r18</strong> range is handled incorrectly by <strong>dpf_reg()</strong>:
-<strong>r16</strong> “address” is <strong>regs</strong>+10 (26-16), not <strong>regs</strong>+8.</p>
-<p>The implementation also means that <strong>dpf_reg()</strong> can’t handle
-<strong>gp</strong>(<strong>r29</strong>) and <strong>sp</strong>(<strong>r30</strong>) registers as value registers.
-That should not normally be a problem as <strong>gcc</strong> never assigns
-those registers for temporary computations and keeps them to
-hold <strong>GOT</strong> pointer and stack pointer at all times. But one
-could write assembly code to do it :)</p>
-<p>If all the above makes no sense to you it’s ok. Check
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/x86/exception-tables.txt">kernel documentation for x86 exception handling</a>
-instead which uses very similar technique.</p>
-<p>To be able to handle all registers we need to bring in <strong>r9-r15</strong>.
-Those are written right before <strong>struct pt_regs</strong>
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199">right at entMM</a>
+<p>Now meaning of <code>dpf_reg()</code> should be more clear. As <code>pt_regs</code> keeps
+only a subset of registers is has to account for gaps and offsets.
+Here I noticed the bug: <code>r16-r18</code> range is handled incorrectly by
+<code>dpf_reg()</code>: <code>r16</code> “address” is <code>regs+10</code> (<code>26-16</code>), not
+<code>regs+8</code>.
+The implementation also means that <code>dpf_reg()</code> can’t handle
+<code>gp</code>(<code>r29</code>) and <code>sp</code>(<code>r30</code>) registers as value registers. That
+should not normally be a problem as <code>gcc</code> never assigns those
+registers for temporary computations and keeps them to hold <code>GOT</code>
+pointer and stack pointer at all times. But one could write assembly
+code to do it :)
+If all the above makes no sense to you it’s ok. Check <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/x86/exception-tables.txt">kernel
+documentation for <code>x86</code> exception
+handling</a>
+instead which uses very similar technique.
+To be able to handle all registers we need to bring in <code>r9-r15</code>. Those
+are written right before <code>struct pt_regs</code> <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n199">right at
+<code>entMM</code></a>
 entry:</p>
 <div class="sourceCode" id="cb23"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>CFI_START_OSF_FRAME entMM</span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    SAVE_ALL</span>
@@ -609,48 +619,60 @@ entry:</p>
 <span id="cb23-26"><a href="#cb23-26" aria-hidden="true" tabindex="-1"></a>    /* finish up the syscall as normal<span class="op">.</span>  <span class="op">*/</span></span>
 <span id="cb23-27"><a href="#cb23-27" aria-hidden="true" tabindex="-1"></a>    br ret_from_sys_call</span>
 <span id="cb23-28"><a href="#cb23-28" aria-hidden="true" tabindex="-1"></a>CFI_END_OSF_FRAME entMM</span></code></pre></div>
-<p>Here there are a few subtle things going on:</p>
+<p>A few subtle things going on here:</p>
 <ol type="1">
-<li>at entry <strong>entMM</strong> already has a frame of last 6 values: <strong>ps,pc,gp,r16-r18</strong>.</li>
-<li>then <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n52">SAVE_ALL</a>
-(not pasted bove) stores <strong>r0-r8,r19-r28,hae,trap_a0-trap-a2</strong></li>
-<li>and only then <strong>r9-r15</strong> are stored (note the <strong>subq $sp, 56, $sp</strong> to place them before).</li>
+<li>at entry <code>entMM</code> already has a frame of last 6 values:
+<code>ps,pc,gp,r16-r18</code>.</li>
+<li>then
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n52"><code>SAVE_ALL</code></a>
+(not pasted above) stores <code>r0-r8,r19-r28,hae,trap_a0-trap-a2</code></li>
+<li>and only then <code>r9-r15</code> are stored (note the <code>subq $sp, 56,     $sp</code> to place them before).</li>
 </ol>
-<p>In <strong>C</strong> land only <strong>2.</strong> and <strong>3.</strong> constitute <strong>struct pt_regs</strong>.
-<strong>1.</strong> happens to be outside and needs negative addressing we saw in <strong>dpf_reg()</strong>.</p>
-<p>As I understand the original idea was to share
-<strong>ret_from_sys_call</strong> part across various kernel entry points:</p>
+<p>In <code>c</code> land only <code>2.</code> and <code>3.</code> constitute <code>struct pt_regs</code>.
+<code>1.</code> happens to be outside and needs negative addressing we saw in
+<code>dpf_reg()</code>.
+As I understand the original idea was to share <code>ret_from_sys_call</code>
+part across various kernel entry points:</p>
 <ul>
-<li>system calls: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n434">entSys</a></li>
-<li>arithmetic exceptions: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n190">entArith</a></li>
-<li>external interrupts: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n181">entInt</a></li>
-<li>internal faults (bad opcode, FPU failures, breakpoint traps, ): <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n244">entIF</a></li>
-<li>page faults: entMM</li>
-<li>handling of unaligned access: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n253">entUna</a></li>
-<li>MILO debug break: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n425">entDbg</a></li>
+<li>system calls:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n434"><code>entSys</code></a></li>
+<li>arithmetic exceptions:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n190"><code>entArith</code></a></li>
+<li>external interrupts:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n181"><code>entInt</code></a></li>
+<li>internal faults (bad opcode, FPU failures, breakpoint traps):
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n244"><code>entIF</code></a></li>
+<li>page faults: <code>entMM</code></li>
+<li>handling of unaligned access:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n253"><code>entUna</code></a></li>
+<li><code>MILO</code> debug break:
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/entry.S#n425"><code>entDbg</code></a></li>
 </ul>
-<p>Of the above only page faults and unaligned faults need
-read/write acceess to every register.</p>
-<p>In practice <strong>entUna</strong> uses different layout and simpler code patching.</p>
-<p>The last step to get <strong>entMM</strong> executed at a fault handler is
-to register it in alpha’s <strong>PALcode</strong> subsystem (Privileged
-Architecture Library code).</p>
-<p>It’s done in <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/traps.c#n976">trap_init()</a>.
-along with other handlers. Simple!</p>
-<p>Or not so simple. What is that <strong>PALcode</strong> thing (<a href="https://en.wikipedia.org/wiki/PALcode">wiki’s link</a>)?
-It looks like a tiny hypervisor that provides service points for CPU
-you can access with <strong>call_pal &lt;number&gt;</strong> instruction.</p>
-<p>It puzzled me a lot of what <strong>call_pal</strong> was supposed to do.
-Should it transfer control somwehre else or is it a normal call?</p>
-<p>Actually given it’s a generic mechanism to do “privileged service calls”
-it can do both. I was not able to quickly find the details on how
-different service calls affect registers and found it simplest
-to navigate through qemu’s <a href="https://repo.or.cz/qemu-palcode.git/blob/HEAD:/pal.S">PAL source</a>.</p>
-<p>AFAIU <strong>PALcode</strong> of real alpha machine is a proprietary
-process-specific blob that could have it’s own quirks.</p>
-<p>Back to out <strong>qemu-palcode</strong> let’s looks at a few examples.</p>
-<p>First is function-like <strong>call_pal PAL_swpipl</strong> used in
-<strong>entMM</strong> and others:</p>
+<p>Of the above only page faults and unaligned faults need read/write
+access to every register.
+In practice <code>entUna</code> uses different layout and simpler code patching.
+The last step to get <code>entMM</code> executed at a fault handler is to
+register it in <code>alpha</code> <code>PALcode</code> subsystem (Privileged Architecture
+Library code).
+It’s done in
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/alpha/kernel/traps.c#n976"><code>trap_init()</code></a>
+along with other handlers. Simple!
+Or not so simple. What is that <code>PALcode</code> thing (<a href="https://en.wikipedia.org/wiki/PALcode">wiki’s
+link</a>)? It looks like a tiny
+hypervisor that provides service points for CPU you can access with
+<code>call_pal &lt;number&gt;</code> instruction.
+It puzzled me a lot of what <code>call_pal</code> was supposed to do. Should it
+transfer control somewhere else or is it a normal call?
+Actually given it’s a generic mechanism to do “privileged service
+calls” it can do both. I was not able to quickly find the details on
+how different service calls affect registers and found it simplest to
+navigate through <code>qemu</code>s <a href="https://repo.or.cz/qemu-palcode.git/blob/HEAD:/pal.S"><code>PAL</code>
+source</a>.
+AFAIU <code>PALcode</code> of real alpha machine is a proprietary
+process-specific blob that could have it’s own quirks.
+Back to out <code>qemu-palcode</code> let’s looks at a few examples.
+First is function-like <code>call_pal PAL_swpipl</code> used in <code>entMM</code> and
+others:</p>
 <div class="sourceCode" id="cb24"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="fu">CallPal_SwpIpl:</span></span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    mfpr    v0<span class="op">,</span> qemu_ps</span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">and</span>     a0<span class="op">,</span> PS_M_IPL<span class="op">,</span> a0</span>
@@ -658,12 +680,12 @@ process-specific blob that could have it’s own quirks.</p>
 <span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    mtpr    a0<span class="op">,</span> qemu_ps</span>
 <span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    hw_rei</span>
 <span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>ENDFN   CallPal_SwpIpl</span></code></pre></div>
-<p>I know almost nothing about <strong>PAL</strong> but I suspect <strong>mfpr</strong> means
-move-from-physical-register. <strong>hw_rei/hw_ret</strong> is a branch from
-<strong>PAL</strong> service routine back to “unprivileged” user/kernel.</p>
-<p><strong>hw_rei</strong> does normal return from <strong>call_pal</strong>
-to the instruction next to <strong>call_pal</strong>.</p>
-<p>Here <strong>call_pal PAL_rti</strong> is an example of task-switch-like routine:</p>
+<p>I know almost nothing about <code>PAL</code> but I suspect <code>mfpr</code> means
+move-from-physical-register. <code>hw_rei/hw_ret</code> is a branch from <code>PAL</code>
+service routine back to “unprivileged” user/kernel.
+<code>hw_rei</code> does normal return from <code>call_pal</code> to the instruction next
+to <code>call_pal</code>.
+Here <code>call_pal PAL_rti</code> is an example of task-switch-like routine:</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">CallPal_Rti:</span></span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    mfpr    p6<span class="op">,</span> qemu_exc_addr       <span class="op">//</span> Save exc_addr for machine check</span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -684,24 +706,25 @@ to the instruction next to <strong>call_pal</strong>.</p>
 <span id="cb25-18"><a href="#cb25-18" aria-hidden="true" tabindex="-1"></a>    mtpr    p4<span class="op">,</span> qemu_ps</span>
 <span id="cb25-19"><a href="#cb25-19" aria-hidden="true" tabindex="-1"></a>    hw_ret  <span class="op">(</span>p5<span class="op">)</span></span>
 <span id="cb25-20"><a href="#cb25-20" aria-hidden="true" tabindex="-1"></a>ENDFN   CallPal_Rti</span></code></pre></div>
-<p>Here target (<strong>p5</strong>, some service only hardware register)
-was passed on stack in <strong>FRM_Q_PC($sp)</strong>.</p>
-<p>That <strong>PAL_rti</strong> managed to confused me a lot as I was
-trying to single-step through it as a normal function.
-I did not notice how I was jumping from page fault
-handling code to timer interrupt handling code.</p>
-<p>But all became clear once I found it’s definition.</p>
-<h1 id="parting-words">Parting words</h1>
+<p>Here target (<code>p5</code>, some service only hardware register) was passed on
+stack in <code>FRM_Q_PC($sp)</code>.
+That `PAL_rti managed to confused me a lot as I was trying to
+single-step through it as a normal function. I did not notice how I was
+jumping from page fault handling code to timer interrupt handling code.
+But all became clear once I found it’s definition.</p>
+<h2 id="parting-words">Parting words</h2>
 <ul>
-<li><strong>qemu</strong> can emulate <strong>alpha</strong> good enough to debug obscure kernel bugs</li>
-<li><strong>gdb</strong> server is very powerful for debugging unmodified kernel code including
-hardware watchpoints, dumping registers, watching after interrupt handling
-routines</li>
+<li><code>qemu</code> can emulate <code>alpha</code> good enough to debug obscure kernel
+bugs</li>
+<li><code>gdb</code> server is very powerful for debugging unmodified kernel code
+including hardware watch points, dumping registers, watching after
+interrupt handling routines</li>
 <li>My initial guesses were all incorrect: it was not a kernel regression,
-not a compiler deficiency and not an <strong>__asm__</strong> constraint annotation bug.</li>
-<li><strong>PALcode</strong> while a nice way to abstract low-level details
-of CPU implementation complicates debugging of operating system. <strong>PALcode</strong>
-also happens to be OS-dependent!</li>
+not a compiler deficiency and not an <code>__asm__</code> constraint
+annotation bug.</li>
+<li><code>PALcode</code> while a nice way to abstract low-level details of CPU
+implementation complicates debugging of operating system. <code>PALcode</code>
+also happens to be <code>OS</code>-dependent!</li>
 <li>This was another one-liner fix :)</li>
 <li>The bug has been always present in kernel (for about 20 years?).</li>
 </ul>

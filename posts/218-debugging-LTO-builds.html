@@ -29,21 +29,23 @@
                 <div class="info">May 19, 2020</div>
             
 
-            <h1 id="lto">LTO</h1>
-<p>Link-Time Optimizationis a way to unlock many interprocedural
-optimizations across modules (across <strong>.c</strong> files). Normally
-these optimizations applied within a file.</p>
-<p>It is a great opportunity to get smaller and faster programs
-for free: dead code elimination and inliner sees the whole program. And
-it is also an endless pit of bugs you can get yourself into without an easy way to
-debug it: changes in one <strong>.c</strong> file can expose surprising behaviour
-in another <strong>.c</strong> file. That is not very friendly to <strong>printf</strong> debugging
-technique.</p>
-<p>But not all hope is lost! We can get a lot of detail back from the compiler
-if something goes wrong.</p>
-<p>This post will focus on build-time debugging (opposed to run-time debugging).</p>
-<h1 id="simple-example">Simple example</h1>
-<p>Let’s see what we can infer just by looking at how gcc builds a tiny example.</p>
+            <h2 id="lto"><code>LTO</code></h2>
+<p>Link-Time Optimizations a way to unlock many inter-procedural
+optimizations across modules (across <code>.c</code> files). Normally these
+optimizations applied within a file.
+It is a great opportunity to get smaller and faster programs for free:
+dead code elimination and inliner sees the whole program. And it is also
+an endless pit of bugs you can get yourself into without an easy way to
+debug it: changes in one <code>.c</code> file can expose surprising behavior in
+another <code>.c</code> file. That is not very friendly to <code>printf</code> debugging
+technique.
+But not all hope is lost! We can get a lot of detail back from the
+compiler if something goes wrong.</p>
+<p>This post will focus on build-time debugging (opposed to run-time
+debugging).</p>
+<h2 id="simple-example">Simple example</h2>
+<p>Let’s see what we can infer just by looking at how <code>gcc</code> builds a tiny
+example.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// one-two.c</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  one<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span> <span class="op">}</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  two<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">2</span><span class="op">;</span> <span class="op">}</span></span></code></pre></div>
@@ -55,16 +57,16 @@ if something goes wrong.</p>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">int</span> four<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">//</span></span>
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> one<span class="op">()</span> <span class="op">+</span> four<span class="op">();</span> <span class="op">}</span></span></code></pre></div>
-<p>Here we defined three modules where each has a redundant unused function.
-Let’s see what ends up being in the final binary.</p>
+<p>Here we defined three modules where each has a redundant unused
+function. Let’s see what ends up being in the final binary.</p>
 <pre><code>$ gcc -O1    -flto -c one-two.c    -o one-two.o
 $ gcc -O1 -fno-lto -c three-four.c -o three-four.o
 $ gcc -O1    -flto -c main.c       -o main.o
 $ gcc        -flto    main.o one-two.o three-four.o -o main
 ./main; echo $?
 5</code></pre>
-<p>I built <strong>one-two.c</strong> with <strong>LTO</strong> bytecode and <strong>three-four.c</strong> without <strong>LTO</strong> bytecode.
-Both files are otherwise symmetric.</p>
+<p>I built <code>one-two.c</code> with <code>LTO</code> bytecode and <code>three-four.c</code> without
+<code>LTO</code> bytecode. Both files are otherwise symmetric.</p>
 <pre><code>$ objdump -d main
 ...
 0000000000001125 &lt;main&gt;:
@@ -84,12 +86,14 @@ Both files are otherwise symmetric.</p>
 ...</code></pre>
 <p>A few things happened here:</p>
 <ol type="1">
-<li><strong>one()</strong> function from <strong>one-two.c</strong> was inlined directly into <strong>main</strong> as <strong>add $0x1,%eax</strong></li>
-<li><strong>two()</strong>’s assembly code was not generated at all</li>
-<li>redundant unused <strong>three()</strong> body was generated</li>
-<li><strong>four()</strong> was not inlined into <strong>main()</strong> and is left as <strong>callq four</strong></li>
+<li><code>one()</code> function from <code>one-two.c</code> was inlined directly into
+<code>main</code> as <code>add $0x1,%eax</code></li>
+<li><code>two()</code> assembly code was not generated at all</li>
+<li>redundant unused <code>three()</code> body was generated</li>
+<li><code>four()</code> was not inlined into <code>main()</code> and is left as <code>callq     four</code></li>
 </ol>
-<p>Let’s check how internal representation looks like for LTO objects with <strong>lto-dump</strong>:</p>
+<p>Let’s check how internal representation looks like for <code>LTO</code> objects with
+<code>lto-dump</code>:</p>
 <pre><code>$ lto-dump -list main.o
 Type   Visibility  Size  Name
 function  default     0  one
@@ -114,11 +118,12 @@ one ()
   &lt;bb 2&gt; [local count: 1073741824]:
   return 1;
 }</code></pre>
-<p>Here we see direct intermediate representation of <strong>main()</strong> function. Both function calls
-are present. Variable assignments like <strong>_6 = _1 + _2;</strong> are very verbose, but also very simple.</p>
-<p>For large programs it’s frequently very hard to say which symbols come from where, where
-they are defined and whether bytecode (<strong>IR</strong>) version is available for LTO. You can peek
-at <strong>resolution</strong> files left by <strong>-save-temps</strong> gcc flag:</p>
+<p>Here we see direct intermediate representation of <code>main()</code> function.
+Both function calls are present. Variable assignments like <code>_6 = _1 + _2;</code> are very verbose, but also very simple.
+For large programs it’s frequently very hard to say which symbols come
+from where, where they are defined and whether bytecode (<code>IR</code>) version
+is available for <code>LTO</code>. You can peek at <code>resolution</code> files left by
+<code>-save-temps</code> <code>gcc</code> flag:</p>
 <pre><code>$ gcc -flto main.o one-two.o three-four.o -o main -save-temps
 $ cat -- *.res
 2
@@ -131,16 +136,21 @@ one-two.o 2
 192 e8fe3cc27eebcea2 PREVAILING_DEF_IRONLY two</code></pre>
 <p>In the output we see:</p>
 <ul>
-<li><strong>RESOLVED_IR</strong> - symbol is referred and is known to have IR somewhere else</li>
-<li><strong>PREVAILING_DEF_IRONLY</strong> - symbol is defined and has <strong>IR</strong> only</li>
-<li><strong>RESOLVED_EXEC</strong> - symbol is referred and is known to have code lying somewhere around</li>
+<li><code>RESOLVED_IR</code> - symbol is referred and is known to have <code>IR</code> somewhere
+else</li>
+<li><code>PREVAILING_DEF_IRONLY</code> - symbol is defined and has <code>IR</code> only</li>
+<li><code>RESOLVED_EXEC</code> - symbol is referred and is known to have machine
+code lying somewhere around</li>
 </ul>
-<p>And so on. Some numbers are count of entries in the lists, some are type numbers.</p>
-<p>Check out <strong>lto-dump</strong>’s source code at <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/lto/lto-dump.c#l61">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/lto/lto-dump.c#l61</a>
-and <strong>man lto-dump</strong>. I think it’s worth documenting more things in the manual.</p>
-<p>There is a minor wart here: the exact name of <strong>.res</strong> file is hard to predict:
-<a href="https://gcc.gnu.org/PR95224">https://gcc.gnu.org/PR95224</a>. I suspect very easy to fix.</p>
-<p>We can also get the call graph of references:</p>
+<p>And so on. Some numbers are count of entries in the lists, some are type
+numbers.
+Check out <code>lto-dump</code> source code at
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/lto/lto-dump.c#l61" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/lto/lto-dump.c#l61</a> and
+<code>man lto-dump</code>. I think it’s worth documenting more things in the
+manual.
+There is a minor wart here: the exact name of <code>.res</code> file is hard to
+predict: <a href="https://gcc.gnu.org/PR95224" class="uri">https://gcc.gnu.org/PR95224</a>. I suspect it’s very easy to fix.
+We can also get the call graph of references:</p>
 <pre><code>$ lto-dump -callgraph *.o
 digraph symtab {
     &quot;main/0&quot; -&gt; &quot;four/2&quot;
@@ -148,20 +158,21 @@ digraph symtab {
 }
 
 $ lto-dump -callgraph *.o | dot -Tsvg -o cg.svg</code></pre>
-<h1 id="real-world-example">Real world example</h1>
-<p>In <a href="https://bugs.gentoo.org/723370">https://bugs.gentoo.org/723370</a> Andrew reported a mysterious LTO-only
-link failure of gcc itself. It should not happen as gcc is regularily
-tested on LTO build. And yet:</p>
+<h2 id="real-world-example">Real world example</h2>
+<p>In <a href="https://bugs.gentoo.org/723370" class="uri">https://bugs.gentoo.org/723370</a> Andrew reported a mysterious
+<code>LTO</code>-only link failure of <code>gcc</code> itself. It should not happen as <code>gcc</code>
+is regularly tested on <code>LTO</code> builds. And yet:</p>
 <pre><code>ld: gcc-10.1.0/temp/genmatch.NlicMk.ltrans2.ltrans.o:
   in function `main':
     &lt;artificial&gt;:(.text.startup+0x94ba):
       undefined reference to `libintl_dgettext'</code></pre>
-<p>Looks like a simple error of trying to use undefined <strong>libintl_dgettext</strong> symbol.
-The only annoyance is that it’s unclear what actually tries to pull that undefined
-symbol in. <strong>ltrans2.ltrans.o</strong> is a large intermediate object file pulled together
-from many small object files.</p>
-<p>To simpligy the problem we can enable debugging symbols when building gcc.</p>
-<p>Gentoo provides an easy way to do it:</p>
+<p>Looks like a simple error of trying to use undefined
+<code>libintl_dgettext</code> symbol. The only annoyance is that it’s unclear
+what actually tries to pull that undefined symbol in.
+<code>ltrans2.ltrans.o</code> is a large intermediate object file pulled together
+from many small object files.
+To simplify the problem we can enable debugging symbols when building
+<code>gcc</code>. Gentoo provides an easy way to do it:</p>
 <pre><code>$ STAGE1_CFLAGS=&quot;$(portageq envvar CFLAGS) -ggdb3&quot; STAGE1_CXXFLAGS=&quot;$(portageq envvar CXXFLAGS) -ggdb3&quot; emerge -v1 sys-devel/gcc
 ...
 ..././prev-gcc/xg++ ... -o build/genmatch ... ./../intl/libintl.a
@@ -169,13 +180,15 @@ from many small object files.</p>
 ld: /tmp/genmatch.FJdDDJ.ltrans2.ltrans.o: in function `main':
   gcc-10.1.0/libcpp/files.c:1439:
     undefined reference to `libintl_dgettext'</code></pre>
-<p>Now we can see where that reference comes from: <strong>libcpp/files.c:1439</strong>. Rerunning above
-<strong>/xg++</strong> command with appended <strong>-save-temps</strong> generates useful <strong>res</strong> file:</p>
+<p>Now we can see where that reference comes from: <code>libcpp/files.c:1439</code>.
+Rerunning above <code>xg++</code> command with appended <code>-save-temps</code>
+generates useful <code>.res</code> file:</p>
 <pre><code>$ ..././prev-gcc/xg++ ... -o build/genmatch ... ./../intl/libintl.a -save-temps
 ...
 $ cat -- *.res | fgrep libintl_dgettext
 &lt;nothing!&gt;</code></pre>
-<p>No references. How come? Let’s see how that symbol is defined and how it gets called:</p>
+<p>No references! Let’s see how that symbol is defined and how it gets
+called:</p>
 <pre><code># call site
 $ prev-gcc/lto-dump -list libcpp/files.o  | fgrep dgettext
 function  default     0  *libintl_dgettext
@@ -191,20 +204,24 @@ $ prev-gcc/lto-dump -list -demangle intl/dgettext.o  | fgrep dgettext
 function  default     3  libintl_dgettext</code></pre>
 <p>Here is my interpretation of the above:</p>
 <ol type="1">
-<li>Definition site looks at expected: it’s a nice <strong>libintl_dgettext</strong> symbol.</li>
-<li>Call site is strange: depending on <strong>-demangle</strong> option it completely changes it’s name.</li>
+<li>Definition site looks at expected: it’s a nice <code>libintl_dgettext</code>
+symbol.</li>
+<li>Call site is strange: depending on <code>-demangle</code> option it
+completely changes it’s name.</li>
 </ol>
-<p>This means <strong>dgettext</strong>’s prototype is not a typical prototype you would expect:</p>
+<p>This means <code>dgettext</code> prototype is not a typical prototype you
+would expect:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">char</span> <span class="op">*</span>dgettext <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>__domainname<span class="op">,</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>__msgid<span class="op">)</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>   __asm__ <span class="op">(</span><span class="st">&quot;libintl_dgettext&quot;</span><span class="op">);</span></span></code></pre></div>
-<p>It’s a gcc extension (TODO: which one?) to emit references to <strong>dgettext</strong> C function
-via <strong>libintl_dgettext</strong> assembly labels.</p>
-<p><strong>gcc</strong>’s linker plugin does not know that <strong>libintl_dgettext</strong> reference exists as
-<strong>LTO</strong> phase is ran before an assempler phase. gcc currently does not nderstand
-effect of the assembly symbol mangling.</p>
-<p>Thus the fix here is either avoid assembly or disable <strong>LTO</strong> for all callers
-of this <strong>__asm__</strong>’y declaration. <a href="https://gcc.gnu.org/PR95194">https://gcc.gnu.org/PR95194</a> suggests a proof-of-concept
-style workaround to avoid <strong>__asm__</strong> symbols in <strong>libintl</strong>.</p>
+<p>It’s a <code>gcc</code> extension (<code>TODO</code>: which one?) to emit references to
+<code>dgettext</code> <code>c</code> function via <code>libintl_dgettext</code> assembly labels.
+<code>gcc</code> linker plugin does not know that <code>libintl_dgettext</code>
+reference exists as <code>LTO</code> phase is ran before an assembler phase. <code>gcc</code>
+currently does not understand effect of the assembly symbol mangling.
+Thus the fix here is either avoid assembly or disable <code>LTO</code> for all
+callers of this <code>__asm__</code> declaration.
+<a href="https://gcc.gnu.org/PR95194" class="uri">https://gcc.gnu.org/PR95194</a> suggests a proof-of-concept style
+workaround to avoid <code>__asm__</code> symbols in <code>libintl</code>.</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/intl/libgnuintl.h</span></span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/intl/libgnuintl.h</span></span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -84,25 +84,25 @@ extern &quot;C&quot; {</span></span>
@@ -234,15 +251,18 @@ style workaround to avoid <strong>__asm__</strong> symbols in <strong>libintl</s
 <span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a> /* Auxiliary macros.  */</span>
 <span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a> #ifdef _INTL_REDIRECT_ASM</span>
 <span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a> # define _INTL_ASM(cname) __asm__ (_INTL_ASMNAME (__USER_LABEL_PREFIX__, #cname))</span></code></pre></div>
-<h1 id="parting-words">Parting words</h1>
-<p><strong>lto-dump</strong> and <strong>resolution</strong> files make it very easy to debug <strong>LTO</strong> build failures
-and explore <strong>LTO</strong> build process and there are a few useful hints:</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>lto-dump</code> and <code>.res</code> files make it very easy to debug <code>LTO</code>
+build failures and explore <code>LTO</code> build process and there are a few
+useful hints:</p>
 <ul>
-<li><strong>-g</strong> and friends make linker errors more comprehensible of what went wrong</li>
-<li><strong>-save-temps</strong> dumps a lot of precise information where used symbols are located
-(and how they are partitioned when parallel LTO building happens).</li>
-<li>some advanced tricks with <strong>asm</strong> symbols don’t quite work for LTO and sometimes
-require a fallback to C code or non-LTO build.</li>
+<li><code>-g</code> and friends make linker errors more comprehensible of what went
+wrong</li>
+<li><code>-save-temps</code> dumps a lot of precise information where used symbols
+are located (and how they are partitioned when parallel <code>LTO</code> building
+happens).</li>
+<li>some advanced tricks with <code>asm</code> symbols don’t quite work for <code>LTO</code>
+and sometimes require a fallback to <code>c</code> code or non-<code>LTO</code> build.</li>
 </ul>
 <p>Have fun!</p>
         </div>

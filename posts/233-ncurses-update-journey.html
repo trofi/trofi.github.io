@@ -29,23 +29,25 @@
                 <div class="info">January  3, 2022</div>
             
 
-            <p>A few months ago I decided to upgrade a few packages in <strong>nixpkgs</strong> to
-the latest available versions upstream. Some packages like <strong>gzip</strong>,
-<strong>grep</strong>, <strong>texinfo</strong>, <strong>linuxHeaders</strong> or <strong>terminus_font</strong> were
+            <p>A few months ago I decided to upgrade a few packages in <code>nixpkgs</code> to
+the latest available versions upstream. Some packages like <code>gzip</code>,
+<code>grep</code>, <code>texinfo</code>, <code>linuxHeaders</code> or <code>terminus_font</code> were
 straightforward to handle. Most of them required 1-2 (or none) reverse
-dependencies to fix. Sometimes upstream already had available fixes to pull.</p>
-<h1 id="ncurses-breakage">ncurses breakage</h1>
-<p>But one surprising package was <strong>ncurses</strong>: upstream had <strong>6.3</strong> version
-released for a while while <strong>nixpkgs</strong> had <strong>6.2</strong>. Should be trivial to
-update I thought. Probably just a bunch of new terminals added into <strong>terminfo</strong>.</p>
-<p>I updated <strong>ncurses</strong> locally and instantly got a few build failures. Most
-of those looked similar to the following <strong>mtr</strong> failure:</p>
+dependencies to fix. Sometimes upstream already had available fixes to
+pull.</p>
+<h2 id="ncurses-breakage"><code>ncurses</code> breakage</h2>
+<p>But one surprising package was <code>ncurses</code>: upstream had <code>6.3</code> version
+released for a while but <code>nixpkgs</code> had <code>6.2</code>. Should be trivial to
+update I thought. Probably just a bunch of new terminals added into
+<code>terminfo</code>.
+I updated <code>ncurses</code> locally and instantly got a few build failures.
+Most of those looked similar to the following <code>mtr</code> failure:</p>
 <pre><code>ui/curses.c:765:42:
   error: format not a string literal and no format arguments [-Werror=format-security]
   765 |         mvprintw(rowstat - 1, startstat, msg);
       |                                          ^~~</code></pre>
-<p>The build error popped up because new release of <strong>ncurses</strong> enabled
-<strong>printf</strong>-like annotations to a few it’s frequently used functions:</p>
+<p>The build error popped up because new release of <code>ncurses</code> enabled
+<code>printf</code>-like annotations to a few its frequently used functions:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/include/curses.h.in</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/include/curses.h.in</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -559,7 +557,7 @@</span></span>
@@ -62,20 +64,20 @@ of those looked similar to the following <strong>mtr</strong> failure:</p>
 <span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="va">+               GCC_PRINTFLIKE(2,0);</span></span>
 <span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="va">+extern NCURSES_EXPORT(int) vw_printw (WINDOW *, const char *, va_list) /* implemented */</span></span>
 <span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a><span class="va">+               GCC_PRINTFLIKE(2,0);</span></span></code></pre></div>
-<p>This change enables <strong>GCC_PRINTF</strong> by default and adds extra annotations
-to <strong>vwprintw</strong> and friends. I think <strong>mtr</strong> was broken by <strong>GCC_PRINTF</strong>
-default change.</p>
-<p>The package fixes are usually trivial. <strong>mtr</strong> one looks like
-<a href="https://github.com/traviscross/mtr/pull/411">https://github.com/traviscross/mtr/pull/411</a>:</p>
+<p>This change enables <code>GCC_PRINTF</code> by default and adds extra annotations
+to <code>vwprintw</code> and friends. I think <code>mtr</code> was broken by
+<code>GCC_PRINTF</code> default change.
+The package fixes are usually trivial. <code>mtr</code> one looks like
+<a href="https://github.com/traviscross/mtr/pull/411" class="uri">https://github.com/traviscross/mtr/pull/411</a>:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/ui/curses.c</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/ui/curses.c</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -675,1 +675,1 @@</span></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="st">-                mvprintw(rowstat - 1, startstat, msg);</span></span>
 <span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="va">+                mvprintw(rowstat - 1, startstat, &quot;%s&quot;, msg);</span></span></code></pre></div>
-<h1 id="does-error-flag-a-real-problem">Does error flag a real problem?</h1>
-<p>Is this kind of build errors a big deal or just a nuisance? After all
-all these programs probably work just fine if nobody noticed the infelicity.</p>
-<p>Let’s craft a small example:</p>
+<h2 id="does-error-flag-a-real-problem">Does error flag a real problem?</h2>
+<p>Is this kind of build errors a big deal or just a nuisance? All these
+programs probably work just fine if nobody noticed the infelicity.
+Let’s craft a small example:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $cat a.c</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdarg.h&gt;</span></span>
@@ -101,11 +103,11 @@ all these programs probably work just fine if nobody noticed the infelicity.</p>
 <pre><code>$ gcc a.c -o a -Wall
 $ ./a
 ./a</code></pre>
-<p>Here we just print program’s name as is via <strong>printf(argv[0])</strong>.
-Does not look too bad, right?</p>
-<p>No. Uncontrolled format strings allow for arbitrary memory access.</p>
-<p>We can read register and stack values (needs a tiny bit of platform
-<strong>ABI</strong> knowledge):</p>
+<p>Here we just print program’s name as is via <code>printf(argv[0])</code>. Does
+not look too bad, right?
+No. Uncontrolled format strings allow for arbitrary memory access.
+We can read register and stack values (needs a tiny bit of platform
+<code>ABI</code> knowledge):</p>
 <pre><code>$ ln -s a '%#lx%#lx%#lx%#lx%#lx%#lx%#lx%#lx'
 $ ./%#lx%#lx%#lx%#lx%#lx%#lx%#lx%#lx
 ./0x7ffcc15c01c80x7ffcc15c01d80x7fe1dbea759800x7fe1dbea97e00x7ffcc15c01c80x1000000000x401200</code></pre>
@@ -114,19 +116,20 @@ registers or stack:</p>
 <pre><code>$ ln -s a '%n%n%n%n%n%n%n%n%n%n'
 $ ./%n%n%n%n%n%n%n%n%n%n
 Segmentation fault (core dumped)</code></pre>
-<p><strong>suid</strong> CLI tools are especially vulnerable as commandline
-arguments and environment also reside on stack. We can store
-“any” address there just by running the tool with extra
-environment variables.</p>
-<p><strong>sudo</strong> had a similiar vulnerability in the past that allows
-arbitrary code execution: <a href="https://www.vnsecurity.net/research/2012/02/16/exploiting-sudo-format-string-vunerability.html">https://www.vnsecurity.net/research/2012/02/16/exploiting-sudo-format-string-vunerability.html</a></p>
-<p>Mounting a shell exploit on modern systems is an exercise for the reader :)</p>
-<p>Thus yes, passing uncontrolled text to <strong>printf()</strong>-like function is a
+<p><code>suid</code> CLI tools are especially vulnerable as command line arguments
+and environment also reside on stack. We can store “any” address there
+just by running the tool with extra environment variables.
+<code>sudo</code> had a similar vulnerability in the past that allows arbitrary
+code execution:
+<a href="https://www.vnsecurity.net/research/2012/02/16/exploiting-sudo-format-string-vunerability.html" class="uri">https://www.vnsecurity.net/research/2012/02/16/exploiting-sudo-format-string-vunerability.html</a>
+Mounting a shell exploit on modern systems is an exercise for the reader
+:)</p>
+<p>Thus yes, passing uncontrolled text to <code>printf()</code>-like function is a
 direct path to arbitrary code execution. In case of networking services
-it’s an RCE. In case of CLI tools that interpret external input (say,
-mp3 players or network packet visualisers) it can easily become
-user-assisted RCE.</p>
-<h1 id="wformat">-Wformat=</h1>
+it’s an <code>RCE</code>. In case of CLI tools that interpret external input (say,
+<code>mp3</code> players or network packet visualisers) it can easily become
+user-assisted <code>RCE</code>.</p>
+<h2 id="wformat"><code>-Wformat=</code></h2>
 <p>This kind of bugs used to be a very common programming error until
 compilers learned to catch it when asked:</p>
 <pre><code>$ gcc a.c -o a -Wall -DGCC_PRINTF -Wformat=2
@@ -135,9 +138,9 @@ a.c:25:5: warning: format not a string literal and no format arguments [-Wformat
    25 |     just_like_printf(argv[0]);
       |     ^~~~~~~~~~~~~~~~</code></pre>
 <p>Note that by default it’s just a warning that you need to opt into with
-<strong>-Wformat=2</strong>. Many distributions enable <strong>-Wformat=2</strong> by default either
-in toolchain directly or in package build process.</p>
-<p>For quite a while <strong>nixpkgs</strong> enables <strong>-Werror=format-security</strong> by
+<code>-Wformat=2</code>. Many distributions enable <code>*-Wformat=2</code> by default
+either in toolchain directly or in package build process.
+For quite a while <code>nixpkgs</code> enables <code>-Werror=format-security</code> by
 default which turns warnings on suspicious code into errors:</p>
 <pre><code>$ gcc a.c -o a -Wall -DGCC_PRINTF -Werror=format-security
 a.c: In function 'main':
@@ -146,60 +149,66 @@ a.c:25:5: error: format not a string literal and no format arguments [-Werror=fo
       |     ^~~~~~~~~~~~~~~~
 cc1: some warnings being treated as errors</code></pre>
 <p>Package maintainers usually weed out all these problems when they add a
-new package version to the distribution.</p>
-<p>But case of <strong>ncurses</strong> is a bit special: it’s a very popular decades
-old library with many users. For dacedes there were plenty chances
-of using it’s interfaces in an unsafe manner.</p>
-<h1 id="fixing-all-the-failures">Fixing all the failures</h1>
-<p>Given that <strong>mtr</strong> had this deficiency how many more tools would be broken
-like that? I hoped for “under 10” and started fixing packages one by one.</p>
-<p>After fixing 40 packages (<strong>mtr</strong>, <strong>libcdio</strong>, <strong>aewan</strong>, <strong>tty-solitaire</strong>,
-<strong>bastet</strong>, <strong>mcabber</strong>, <strong>bwm_ng</strong>, <strong>toxic</strong>, <strong>nudoku</strong>, <strong>ecasound</strong>,
-<strong>bemenu</strong>, <strong>tasknc</strong>, <strong>smemstat</strong>, <strong>freesweep</strong>, <strong>gfs2-utils</strong>, <strong>gmu</strong>,
-<strong>hexcurse</strong>, <strong>irqbalance</strong>, <strong>hstr</strong>, <strong>pinfo</strong>, <strong>lifelines</strong>, <strong>tty-clock</strong>,
-<strong>nethogs</strong>, <strong>host</strong>, <strong>jnettop</strong>, <strong>mp3blaster</strong>, <strong>multitail</strong>, <strong>musikcube</strong>,
-<strong>ncdc</strong>, <strong>pacvim</strong>, <strong>powertop</strong>, <strong>profanity</strong>, <strong>sngrep</strong>, <strong>tiptop</strong>,
-<strong>trafficserver</strong>, <strong>vimpc</strong>, <strong>wiimms-iso-tools</strong>, <strong>souffle</strong>)
-I realized I would not be able to find (or fix) all the breakages myself and would
-need help.</p>
-<p>Having asked around I found out I could get a <strong>hydra</strong> build run against a
-<a href="https://github.com/NixOS/nixpkgs/pull/146685">https://github.com/NixOS/nixpkgs/pull/146685</a> pull request. I requested a run
-on <strong>#infra:nixos.org</strong> matrix room.</p>
-<p>Vladimir suggested basing the PR against <strong>master</strong> commit with already present
-<strong>hydra</strong> run. That way <strong>hydra</strong> UI would allow for easy regression comparison
-via “compare-to” drop down. First run (targeted <strong>x86_64-linux</strong> only) took ~5
-days: 1 to 6 Dec. It was a full rebuild of all packages as <strong>ncurses</strong> is a
-<strong>bash</strong> dependency via <strong>readline</strong>. 5 days felt as very quick given that this
-run had low priority against other preempting jobs: builds of <strong>master</strong> itself
-and builds of <strong>staging-next</strong>.</p>
-<p>The initial run looked promising: <a href="https://hydra.nixos.org/eval/1727143?compare=1727080&amp;full=0">https://hydra.nixos.org/eval/1727143?compare=1727080&amp;full=0</a>.</p>
-<p>It reported “Newly Failing Jobs (94)”. Some of these were unrelated flaky failures
-but ~10 of them were more <strong>ncurses</strong> fallouts that I missed from local runs:
-<strong>postgresqlPackages.pg_auto_failover</strong>, <strong>rogue</strong>, <strong>wyrd</strong>, <strong>squishyball</strong>,
-<strong>haskellPackages.ncurses</strong>, <strong>liboping</strong>, <strong>linuxPackages.sysdig</strong>, <strong>tcptrack</strong>,
-<strong>pamix</strong>, <strong>tlf</strong>. Fixing them was straightforward.</p>
-<p>While hydra was running through packages I fixed ~10 more:
-<strong>_2048-in-terminal</strong>, <strong>liboping</strong>, <strong>noice</strong>, <strong>samtools</strong>,
-<strong>libviper</strong>, <strong>vwm</strong>, <strong>gptfdisk</strong>, <strong>spdk</strong>, <strong>nfstrace</strong>.</p>
-<p>I hope to get <strong>ncurses-6.3</strong> merged within first days of 2022 \o/</p>
-<h1 id="does-it-scale">Does it scale?</h1>
+new package version to the distribution.
+But case of <code>ncurses</code> is a bit special: it’s a very popular decades
+old library with many users. For decades there were plenty chances of
+using it’s interfaces in an unsafe manner.</p>
+<h2 id="fixing-all-the-failures">Fixing all the failures</h2>
+<p>Given that <code>mtr</code> had this deficiency how many more tools would be
+broken like that? I hoped for “under 10” and started fixing packages
+one by one.</p>
+<p>After fixing 40 packages (<code>mtr</code>, <code>libcdio</code>, <code>aewan</code>,
+<code>tty-solitaire</code>, <code>bastet</code>, <code>mcabber</code>, <code>bwm_ng</code>, <code>toxic</code>,
+<code>nudoku</code>, <code>ecasound</code>, <code>bemenu</code>, <code>tasknc</code>, <code>smemstat</code>,
+<code>freesweep</code>, <code>gfs2-utils</code>, <code>gmu</code>, <code>hexcurse</code>, <code>irqbalance</code>,
+<code>hstr</code>, <code>pinfo</code>, <code>lifelines</code>, <code>tty-clock</code>, <code>nethogs</code>,
+<code>host</code>, <code>jnettop</code>, <code>mp3blaster</code>, <code>multitail</code>, <code>musikcube</code>,
+<code>ncdc</code>, <code>pacvim</code>, <code>powertop</code>, <code>profanity</code>, <code>sngrep</code>,
+<code>tiptop</code>, <code>trafficserver</code>, <code>vimpc</code>, <code>wiimms-iso-tools</code>,
+<code>souffle</code>) I realized I would not be able to find (or fix) all the
+breakages myself and would need help.
+Having asked around I found out I could get a <code>hydra</code> build run
+against a <a href="https://github.com/NixOS/nixpkgs/pull/146685" class="uri">https://github.com/NixOS/nixpkgs/pull/146685</a> pull request. I
+requested a run on <code>#infra:nixos.org</code> matrix room.
+Vladimir suggested rebasing the pull request against <code>master</code> commit
+with already
+present <code>hydra</code> run. That way <code>hydra</code> UI would allow for easy
+regression comparison via “compare-to” drop down. First run (targeted
+<code>x86_64-linux</code> only) took <code>~5</code> days: 1 to 6 Dec. It was a full rebuild
+of all packages as <code>ncurses</code> is a <code>bash</code> dependency via
+<code>readline</code>. 5 days felt as very quick given that this run had low
+priority against other preempting jobs: builds of <code>master</code> itself and
+builds of <code>staging-next</code>.
+The initial run looked promising:
+<a href="https://hydra.nixos.org/eval/1727143?compare=1727080&amp;full=0" class="uri">https://hydra.nixos.org/eval/1727143?compare=1727080&amp;full=0</a>.
+It reported “Newly Failing Jobs (94)”. Some of these were unrelated
+flaky failures but <code>~10</code> of them were more <code>ncurses</code> fall out that I
+missed from local runs: <code>postgresqlPackages.pg_auto_failover</code>,
+<code>rogue</code>, <code>wyrd</code>, <code>squishyball</code>, <code>haskellPackages.ncurses</code>,
+<code>liboping</code>, <code>linuxPackages.sysdig</code>, <code>tcptrack</code>, <code>pamix</code>,
+<code>tlf</code>. Fixing them was straightforward.
+While hydra was running through packages I fixed <code>~10</code> more:
+<code>_2048-in-terminal</code>, <code>liboping</code>, <code>noice</code>, <code>samtools</code>,
+<code>libviper</code>, <code>vwm</code>, <code>gptfdisk</code>, <code>spdk</code>, <code>nfstrace</code>.
+I hope to get <code>ncurses-6.3</code> merged within first days of 2022 \o/</p>
+<h2 id="does-it-scale">Does it scale?</h2>
 <p>Fixing 60 packages took 2 months. Usually it takes sending a fix
-upstream, proposing a pull request to <strong>nixpkgs</strong> and following
-up both down to acceptance :)</p>
-<p>That gives us one fix per day on average.</p>
-<p>I have a vague plan of trying to get <strong>gcc-10</strong> updated to <strong>gcc-11</strong>.
-That has order of magnitude more failures lurking. <strong>gcc-12</strong> has even
+upstream, proposing a pull request to <code>nixpkgs</code> and following up both
+down to acceptance :)
+That gives us one fix per day on average.
+I have a vague plan of trying to get <code>gcc-10</code> updated to <code>gcc-11</code>.
+That has order of magnitude more failures lurking. <code>gcc-12</code> has even
 more surprises pending. I won’t be able to fix or even report all the
 failures and will need more scalable plan.</p>
-<h1 id="tldr">Tl;DR</h1>
+<h2 id="tldr">Tl;DR</h2>
 <ul>
-<li><strong>__attribute__((format(…)))</strong> with <strong>-Wformat=…</strong> is still
+<li><code>__attribute__((format(...)))</code> with <code>-Wformat=...</code> is still
 a good way to catch trivial format string vulnerabilities.</li>
 <li>While disruptive it’s still useful to add format attributes to
-<strong>printf()</strong>-like library APIs.</li>
-<li>There were ~60 packages to fix after <strong>ncurses</strong> update.</li>
-<li>It takes about 5 days to build all of <strong>x86_64-linux</strong> <strong>nixpkgs</strong>
-on <strong>hydra</strong>.</li>
+<code>printf()</code>-like library APIs.</li>
+<li>There were <code>~60</code> packages to fix after <code>ncurses</code> update.</li>
+<li>It takes about 5 days to build all of <code>x86_64-linux</code> <code>nixpkgs</code> on
+<code>hydra</code>.</li>
 </ul>
 <p>Have fun!</p>
         </div>

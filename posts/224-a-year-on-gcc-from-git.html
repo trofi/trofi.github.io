@@ -30,49 +30,53 @@
             
 
             <p>Almost <a href="../posts/213-gcc-10-in-gentoo.html">a year</a> passed since
-<strong>gcc-10</strong> arrival in gentoo. This means <strong>gcc-11</strong> will release
-very soon!</p>
-<p>Around that time I decided to switch
-my main workstation to <strong>gcc</strong> on git master branch to see how
-long it would survive before it destroys something due to a grave
-compiler bug. Nothing like that happened yet :)</p>
-<p>Having volatile compiler version has all sorts of nasty consequences:
+<code>gcc-10</code> arrival in <code>gentoo</code>. This means <code>gcc-11</code> will release very
+soon!
+Around that time I decided to switch my main workstation to <code>gcc</code> based on
+<code>git master</code> branch to see how long it would survive before it destroys
+something due to a grave compiler bug. Nothing like that happened yet :)
+Having volatile compiler version has all sorts of nasty consequences:
 you could have a library or a binary miscompiled due to some transient
-compiler issue that was fixed a day after it was introduced.</p>
-<p>My solution to stale binaries is to rebuild all packages periodically.
-To ease the load on the system I have a cron job that rebuilds all
-the packages older than a month on my system. It has an effect of
-upgrading compiler itself once a month and rebuilds about 3% of all
-packages daily.</p>
+compiler issue that was fixed a day after it was introduced.
+My solution to stale binaries is to rebuild all packages periodically.
+To ease the load on the system I have a cron job that rebuilds all the
+packages older than a month on my system. It has an effect of upgrading
+compiler itself once a month and rebuilds about 3% of all packages
+daily.</p>
 <p>In this post I’ll share a few issues that came up for such a bleeding
 edge system. It’s not quite a full list, but it touches majority of
 encountered bugs.</p>
-<h1 id="shfgnu_retain-breaks-kernel-boot">SHF<span id="gnu_retain">GNU_RETAIN</span> breaks kernel boot</h1>
-<p>New <strong>SHF_GNU_RETAIN</strong> section flag managed to break kernel boot:
-<a href="https://gcc.gnu.org/PR99113">https://gcc.gnu.org/PR99113</a> (originally reported as <a href="https://sourceware.org/PR27412">https://sourceware.org/PR27412</a>).</p>
-<p>The problem: <strong>gcc-11</strong> changed semantics of existing
-<strong>__attribute__((__used__))</strong> code (kernel happens to use it a lot):</p>
+<h2 id="shf_gnu_retain-breaks-kernel-boot">SHF_GNU_RETAIN breaks kernel boot</h2>
+<p>New <code>SHF_GNU_RETAIN</code> section flag managed to break kernel boot:
+<a href="https://gcc.gnu.org/PR99113" class="uri">https://gcc.gnu.org/PR99113</a> (originally reported as
+<a href="https://sourceware.org/PR27412" class="uri">https://sourceware.org/PR27412</a>).</p>
+<p>The problem: <code>gcc-11</code> changed semantics of existing
+<code>__attribute__((__used__))</code> code (kernel happens to use it a
+lot):</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s <span class="op">{</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">*</span>print_fmt<span class="op">;</span></span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> s print_fmt_napi_poll<span class="op">[</span><span class="dv">1</span><span class="op">];</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>__used__<span class="op">))</span> <span class="kw">struct</span> s event_napi_poll <span class="op">=</span> <span class="op">{</span>print_fmt_napi_poll<span class="op">};</span></span></code></pre></div>
 <ul>
-<li>Before <strong>gcc-11</strong>: variable was placed into <strong>.date</strong> section</li>
-<li>In <strong>gcc-11</strong>: variable was placed into <strong>.data.event_napi_poll</strong></li>
+<li>Before <code>gcc-11</code>: variable was placed into <code>.data</code> section</li>
+<li>In <code>gcc-11</code>: variable was placed into <code>.data.event_napi_poll</code></li>
 </ul>
-<p>Normally such a section name change is not a problem for userspace
-programs as binutils linker script can handle both names.
-But linux kernel has custom linker scripts that did not account for new names.</p>
-<p>The fix: <strong>gcc-11</strong> reverted semantic change and now enables it only
-with new <strong>__attribute__((__retain__))</strong> attribute: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=6347f4a0904fce17eedf5c071be6f3c118680290">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=6347f4a0904fce17eedf5c071be6f3c118680290</a></p>
+<p>Normally such a section name change is not a problem for user space
+programs as <code>binutils</code> linker script can handle both names. But <code>linux</code>
+kernel has custom linker scripts that did not account for new names.</p>
+<p>The fix: <code>gcc-11</code> reverted semantic change and now enables it only
+with new <code>__attribute__((__retain__))</code> attribute:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=6347f4a0904fce17eedf5c071be6f3c118680290" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=6347f4a0904fce17eedf5c071be6f3c118680290</a></p>
 <p>The bug effect: kernel did not boot, kernel build log was full of
 unknown section warnings.</p>
-<h1 id="fipa-modref-breaks-glibcs-printf">-fipa-modref breaks glibc’s printf</h1>
-<p>New <strong>-fipa-modref</strong> gcc optimisation managed to break <strong>glibc</strong>:
-<a href="https://sourceware.org/PR26690">https://sourceware.org/PR26690</a> (originally reported as <a href="https://gcc.gnu.org/PR97264">https://gcc.gnu.org/PR97264</a>).</p>
-<p>The problem: <strong>glibc</strong> had an interesting aliasing violation bug
-in <strong>vfprintf</strong> family of functions. In it’s simpler form bug looked like that:</p>
+<h2 id="fipa-modref-breaks-glibc-printf"><code>-fipa-modref</code> breaks <code>glibc</code> <code>printf</code></h2>
+<p>New <code>-fipa-modref</code> <code>gcc</code> optimization managed to break <code>glibc</code>:
+<a href="https://sourceware.org/PR26690" class="uri">https://sourceware.org/PR26690</a> (originally reported as
+<a href="https://gcc.gnu.org/PR97264" class="uri">https://gcc.gnu.org/PR97264</a>).</p>
+<p>The problem: <code>glibc</code> had an interesting aliasing violation bug in
+<code>vfprintf</code> family of functions. In it’s simpler form bug looked like
+that:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> vfprintf_internal<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> format_string<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span> p <span class="op">=</span> format_string<span class="op">;</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
@@ -82,22 +86,24 @@ in <strong>vfprintf</strong> family of functions. In it’s simpler form bug loo
 <span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// continue using 'p':</span></span>
 <span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <ul>
-<li>Before <strong>gcc-11</strong>: variable <strong>p</strong> was advanced with <strong>[1]</strong></li>
-<li>In <strong>gcc-11</strong>: variable <strong>p</strong> did not change with <strong>[1]</strong> as gcc assumed
-<strong>char</strong> and <strong>unsinged char</strong> (and their pointers) are two different
-types that don’t alias and thus operations on them are independent.</li>
+<li>Before <code>gcc-11</code>: variable <code>p</code> was advanced with <code>[1]</code></li>
+<li>In <code>gcc-11</code>: variable <code>p</code> did not change with <code>[1]</code> as <code>gcc</code>
+assumed <code>char</code> and <code>unsinged char</code> (and their pointers) are two
+different types that don’t alias and thus operations on them are
+independent.</li>
 </ul>
-<p>The fix: the aliasing was fixed in <strong>glibc</strong> with <a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=c0e9ddf59e73e21afe15fca4e94cf7b4b7359bf2">https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=c0e9ddf59e73e21afe15fca4e94cf7b4b7359bf2</a></p>
-<p>The bug effect: <strong>uname -p</strong> did hang up and caused
-<strong>gcc-11</strong> Gentoo users some inconvenience: <a href="https://bugs.gentoo.org/750992">https://bugs.gentoo.org/750992</a>.</p>
-<p>This bug is very scary: it specifically breaks digit parsing
-in format strings like <strong>“%10s”</strong> and has the potential of causing
-silent data corruption.</p>
-<h1 id="fipa-modref-breaks-return-value-optimization">-fipa-modref breaks return value optimization</h1>
-<p>New <strong>-fipa-modref</strong> gcc optimisation managed to break <strong>libsass</strong>
-library tests and exposed a compiler flaw: <a href="https://gcc.gnu.org/PR98499">https://gcc.gnu.org/PR98499</a></p>
+<p>The fix: the aliasing was fixed in <code>glibc</code> with
+<a href="https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=c0e9ddf59e73e21afe15fca4e94cf7b4b7359bf2" class="uri">https://sourceware.org/git/?p=glibc.git;a=commitdiff;h=c0e9ddf59e73e21afe15fca4e94cf7b4b7359bf2</a></p>
+<p>The bug effect: <code>uname -p</code> did hang up and caused <code>gcc-11</code> <code>gentoo</code>
+users some inconvenience: <a href="https://bugs.gentoo.org/750992" class="uri">https://bugs.gentoo.org/750992</a>.
+This bug is very scary: it specifically breaks digit parsing in format
+strings like <code>"%10s"</code> and has the potential of causing silent data
+corruption.</p>
+<h2 id="fipa-modref-breaks-return-value-optimization"><code>-fipa-modref</code> breaks return value optimization</h2>
+<p>New <code>-fipa-modref</code> <code>gcc</code> optimization managed to break <code>libsass</code>
+library tests and exposed a compiler flaw: <a href="https://gcc.gnu.org/PR98499" class="uri">https://gcc.gnu.org/PR98499</a></p>
 <p>The sample example is:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode c++"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> string <span class="op">{</span></span>
+<div class="sourceCode" id="cb3"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> string <span class="op">{</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> <span class="op">*</span> _M_buf<span class="op">;</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="co">// local store</span></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> _M_local_buf<span class="op">[</span><span class="dv">16</span><span class="op">];</span></span>
@@ -117,32 +123,38 @@ library tests and exposed a compiler flaw: <a href="https://gcc.gnu.org/PR98499"
 <span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>   string s <span class="op">=</span> dir_name<span class="op">();</span> </span>
 <span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>   <span class="op">...</span></span>
 <span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Before <strong>gcc-11</strong>:</p>
+<p>Before <code>gcc-11</code>:</p>
 <pre><code>$ g++-10.2.0 -O2 main.cc -o a &amp;&amp; ./a
 &lt;ok&gt;</code></pre>
-<p>In <strong>gcc-11</strong>:</p>
+<p>In <code>gcc-11</code>:</p>
 <pre><code>$ g++-11.0.0 -O2 main.cc -o a &amp;&amp; ./a
 Illegal instruction     (core dumped) ./a</code></pre>
-<p><strong>gcc-11</strong> managed to optimize <strong>if (_M_buf != _M_local_buf) __builtin_trap();</strong>
-into <strong>__builtin_trap();</strong> instead of expected no-op. It happened because <strong>gcc</strong>
-<strong>moderf</strong> analysis wrongly assumed that if <strong>s</strong> is a local variable then
-it’s <strong>s._M_buf</strong> is also a local variable and never escapes.</p>
-<p>Unfortunately Return Value Optimization effectively turns local variables
-into non-local variables as they escape outside the function they are defined.</p>
-<p>The fix: <strong>gcc</strong> was fixed to make less optimistic escaping rules for values
-touched by <strong>RVO</strong>: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=11056ab7687f7156846e93557c9171b77713bd7e">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=11056ab7687f7156846e93557c9171b77713bd7e</a>.</p>
-<p>Longer term <strong>gcc</strong> will improve on <strong>RVO</strong> tracking: <a href="https://gcc.gnu.org/PR98925">https://gcc.gnu.org/PR98925</a></p>
-<p>The bug effect: <a href="https://github.com/sass/libsass">libsass</a> tests started
-failing for <a href="https://github.com/jakubfijalkowski/hlibsass">libsass haskell bindings</a>.</p>
-<p>It took me quite a while (perhaps a week of winter evenings) to extract the reasonably
-sized test case. It was very elusive because bug only appears in cases when <strong>inliner</strong>
-did not do a reasonable job due to various corner cases while <strong>ipa-modref</strong> did
-(that’s why actual test case is full of <strong>__attribute__((noinline))</strong> annotations.</p>
-<p>I also used it as an opportunity to explore and fix my first non-trivial <strong>gcc</strong> bug :)</p>
-<h1 id="firefox-deadlock-in-ltopgo">firefox deadlock in LTO+PGO</h1>
-<p>New change in <strong>-fprofile-generate</strong> around most frequent value
-tracking introduced a deadlock scenario in <strong>firefox</strong>:
-<a href="https://gcc.gnu.org/PR97461">https://gcc.gnu.org/PR97461</a>. Firefox’s code is similar to:</p>
+<p><code>gcc-11</code> managed to optimize <code>if (_M_buf != _M_local_buf) __builtin_trap();</code> into <code>__builtin_trap();</code> instead of expected
+no-op. It happened because <code>gcc</code> <code>moderf</code> analysis wrongly assumed
+that if <code>s</code> is a local variable then it’s <code>s._M_buf</code> is also a
+local variable and never escapes.
+Unfortunately Return Value Optimization effectively turns local
+variables into non-local variables as they escape outside the function
+they are defined.</p>
+<p>The fix: <code>gcc</code> was fixed to make less optimistic escaping rules for
+values touched by <code>RVO</code>:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=11056ab7687f7156846e93557c9171b77713bd7e" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=11056ab7687f7156846e93557c9171b77713bd7e</a>.
+Longer term <code>gcc</code> will improve on <code>RVO</code> tracking:
+<a href="https://gcc.gnu.org/PR98925" class="uri">https://gcc.gnu.org/PR98925</a></p>
+<p>The bug effect: <a href="https://github.com/sass/libsass"><code>libsass</code></a> tests started
+failing for <a href="https://github.com/jakubfijalkowski/hlibsass"><code>libsass</code> <code>haskell</code>
+bindings</a>.</p>
+<p>It took me quite a while (perhaps a week of winter evenings) to extract
+the reasonably sized test case. It was very elusive because bug only
+appears in cases when <code>inliner</code> did not do a reasonable job due to
+various corner cases while <code>ipa-modref</code> did (that’s why actual test
+case is full of <code>__attribute__((noinline))</code> annotations.
+I also used it as an opportunity to explore and fix my first non-trivial
+<code>gcc</code> bug :)</p>
+<h2 id="firefox-deadlock-in-ltopgo"><code>firefox</code> deadlock in <code>LTO</code>+<code>PGO</code></h2>
+<p>New change in <code>-fprofile-generate</code> around most frequent value tracking
+introduced a deadlock scenario in <code>firefox</code>:
+<a href="https://gcc.gnu.org/PR97461" class="uri">https://gcc.gnu.org/PR97461</a>. <code>firefox</code> code is similar to:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Override default malloc with it's own allocator</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> malloc<span class="op">(</span><span class="dt">size_t</span> size<span class="op">)</span> <span class="op">{</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// something with TOPN profile, like:</span></span>
@@ -154,7 +166,7 @@ tracking introduced a deadlock scenario in <strong>firefox</strong>:
 <span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> <span class="op">*</span> p <span class="op">=</span> malloc<span class="op">(</span><span class="dv">8</span><span class="op">);</span></span>
 <span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> p <span class="op">!=</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Code, generated by <strong>gcc</strong> in <strong>-fprofile-generate</strong> mode converts it
+<p>Code, generated by <code>gcc</code> in <code>-fprofile-generate</code> mode converts it
 to:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// inserted by gcc</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> counter __gcov3_malloc<span class="op">;</span></span>
@@ -173,17 +185,17 @@ to:</p>
 <span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span> <span class="op">*</span> p <span class="op">=</span> malloc<span class="op">(</span><span class="dv">8</span><span class="op">);</span></span>
 <span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> p <span class="op">!=</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>New implementation of <strong>gcov_topn_add_value</strong> now uses dynamic
-memory allocation: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=871e5ada6d53d5eb">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=871e5ada6d53d5eb</a>
-(previously it used static (<strong>GCOV_TOPN_VALUES = 4</strong>).</p>
-<p>This started causing infinite recursion:
-<strong>malloc() -&gt; gcov_topn_add_value() -&gt; malloc()</strong>.</p>
-<p>The fix: <strong>gcc</strong>’s <strong>gcov</strong> library now uses <strong>mmap()</strong> directly to
-track <strong>TOPN</strong> counters and avoids <strong>malloc()</strong>:
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=00d79dc4be0b86ec564cfa2b32c47de6c07449e6">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=00d79dc4be0b86ec564cfa2b32c47de6c07449e6</a></p>
-<h1 id="array-attributes-typecheck">Array attributes typecheck</h1>
-<p><strong>gcc</strong> failed to compile <strong>emacs-27.1</strong> that uses unusual <strong>VLA</strong> declaration
-in function parameters: <a href="https://gcc.gnu.org/PR97413">https://gcc.gnu.org/PR97413</a></p>
+<p>New implementation of <code>gcov_topn_add_value</code> now uses dynamic memory
+allocation:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=871e5ada6d53d5eb" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=871e5ada6d53d5eb</a>
+(previously it used static (<code>GCOV_TOPN_VALUES = 4</code>).
+This started causing infinite recursion: <code>malloc() -&gt; gcov_topn_add_value() -&gt; malloc()</code>.</p>
+<p>The fix: <code>gcc</code> <code>gcov</code> library now uses <code>mmap()</code> directly to
+track <code>TOPN</code> counters and avoids <code>malloc()</code>:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=00d79dc4be0b86ec564cfa2b32c47de6c07449e6" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=00d79dc4be0b86ec564cfa2b32c47de6c07449e6</a></p>
+<h2 id="array-attributes-type-check">Array attributes type check</h2>
+<p><code>gcc</code> failed to compile <code>emacs-27.1</code> that uses unusual <code>VLA</code>
+declaration in function parameters: <a href="https://gcc.gnu.org/PR97413" class="uri">https://gcc.gnu.org/PR97413</a></p>
 <pre><code>$ cat fns.c
 int a(long b, const int a1[b], long c, const int a2[c], int a3[c]);
 
@@ -192,12 +204,13 @@ fns.c.c:1:1: error: wrong number of arguments specified for 'access' attribute
     1 | int a(long b, const int a1[b], long c, const int a2[c], int a3[c]);
       | ^~~
 fns.c.c:1:1: note: expected between 1 and 3, found 4</code></pre>
-<p>The fix: <strong>gcc</strong> now correctly tracks function attributes:
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=34efa5c2a84a8c7c7beb855dec24a321eebcbd6b">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=34efa5c2a84a8c7c7beb855dec24a321eebcbd6b</a></p>
-<h1 id="webkit-miscompilation">Webkit miscompilation</h1>
-<p><strong>gcc</strong> incorrectly compiled <strong>webkit-gtk-2.28.4</strong> around placement new:
-<a href="https://gcc.gnu.org/PR98130">https://gcc.gnu.org/PR98130</a>. The following code generates a crashing program:</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode c++"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;new&gt;</span></span>
+<p>The fix: <code>gcc</code> now correctly tracks function attributes:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=34efa5c2a84a8c7c7beb855dec24a321eebcbd6b" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=34efa5c2a84a8c7c7beb855dec24a321eebcbd6b</a></p>
+<h2 id="webkit-miscompilation">Webkit miscompilation</h2>
+<p><code>gcc</code> incorrectly compiled <code>webkit-gtk-2.28.4</code> around placement new:
+<a href="https://gcc.gnu.org/PR98130" class="uri">https://gcc.gnu.org/PR98130</a>. The following code generates a crashing
+program:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;new&gt;</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">int</span> <span class="op">*</span>T<span class="op">;</span></span>
 <span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
@@ -218,17 +231,17 @@ fns.c.c:1:1: note: expected between 1 and 3, found 4</code></pre>
 <span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(!*</span>p<span class="op">)</span></span>
 <span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    <span class="fu">__builtin_abort</span> <span class="op">();</span></span>
 <span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here <strong>gcc-11</strong> assumed that <strong>new (p) T(value);</strong> has no
-side-effect and removed ’<em>p = value’ part entirely as a
-dead store as it did not know ifp</em>* is dereferenced.</p>
-<p>The fix: <strong>gcc-11</strong> avoids the optimization for placement operator new:
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=78c4a9feceaccf487516aa1eff417e0741556e10">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=78c4a9feceaccf487516aa1eff417e0741556e10</a></p>
-<p>That was not the only <strong>webkit</strong> miscompilation related to pointer
+<p>Here <code>gcc-11</code> assumed that <code>new (p) T(value);</code> has no side-effect
+and removed <code>*p = value;</code> part entirely as a dead store as it did not
+know if <code>p</code> is dereferenced.</p>
+<p>The fix: <code>gcc-11</code> avoids the optimization for placement operator new:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=78c4a9feceaccf487516aa1eff417e0741556e10" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=78c4a9feceaccf487516aa1eff417e0741556e10</a></p>
+<p>That was not the only <code>webkit</code> miscompilation related to pointer
 handling.</p>
-<h1 id="unhandled-template-specialization">Unhandled template specialization</h1>
-<p>A few programs based on <strong>gtkmm</strong> library failed to type check:
-<a href="https://gcc.gnu.org/PR98115">https://gcc.gnu.org/PR98115</a>. In my case it was <strong>pavucontrol</strong>.
-Small examle:</p>
+<h2 id="unhandled-template-specialization">Unhandled template specialization</h2>
+<p>A few programs based on <code>gtkmm</code> library failed to type check:
+<a href="https://gcc.gnu.org/PR98115" class="uri">https://gcc.gnu.org/PR98115</a>. In my case it was <code>pavucontrol</code>. Small
+examle:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span>class<span class="op">&gt;</span> class Stringify<span class="op">;</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span><span class="dt">long</span> N<span class="op">&gt;</span> class Stringify<span class="op">&lt;</span><span class="dt">const</span> <span class="dt">char</span><span class="op">[</span>N<span class="op">]&gt;;</span></span></code></pre></div>
 <pre><code>$ g++ layout.ii -c
@@ -238,11 +251,11 @@ layout.ii:2:25: error: partial specialization ‘class Stringify&lt;const char [
 layout.ii:1:24: note: primary template ‘template&lt;class&gt; class Stringify’
     1 | template &lt;class&gt; class Stringify;
       |                        ^~~~~~~~~</code></pre>
-<p><strong>gcc</strong> considered <strong>class</strong> equally unspecialized to <strong>long N</strong>.</p>
-<p>The fix: tweak type comparison in <strong>gcc</strong>’s type checker:
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9d0eb0ae948f0fbee208cfb9a86133abea650f81">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9d0eb0ae948f0fbee208cfb9a86133abea650f81</a></p>
-<h1 id="overriding-target-attribute-behaviour">Overriding target attribute behaviour</h1>
-<p>At some point <strong>gcc</strong> failed <strong>grub</strong> linking with very obscure linker
+<p><code>gcc</code> considered <code>class</code> equally unspecialized to <code>long N</code>.</p>
+<p>The fix: tweak type comparison in <code>gcc</code> type checker:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9d0eb0ae948f0fbee208cfb9a86133abea650f81" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9d0eb0ae948f0fbee208cfb9a86133abea650f81</a></p>
+<h2 id="overriding-target-attribute-behavior">Overriding target attribute behavior</h2>
+<p>At some point <code>gcc</code> failed <code>grub</code> linking with very obscure linker
 failure. I’ll provide only the source example without linker failure:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">// build as:</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="co">//    gcc-11.0.0 -O1 -mcmodel=large -S a.c</span></span>
@@ -258,41 +271,44 @@ failure. I’ll provide only the source example without linker failure:</p>
 <span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(;;)</span></span>
 <span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>    grub_memmove<span class="op">();</span></span>
 <span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here <strong>gcc</strong> effectively removed <strong>-mcmodel=large</strong> due to presence
-of <strong>__attribute__((__target__(“bmi2”)))</strong> and generated invalid
-assembly (<strong>-mcmodel=medium</strong>, assumed <strong>.text</strong> is within 4GB reach).</p>
-<p>The fix: <strong>gcc</strong> was fixed not to ignore <strong>-mcmodel=</strong> and friends
-when overriding target attributes are used: <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=8f1cb70d7ca6a8da7f6bc7f43fb5e758c0ce88b5">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=8f1cb70d7ca6a8da7f6bc7f43fb5e758c0ce88b5</a></p>
-<p>This was a nasty bug. We were lucky that <strong>gcc</strong> managed to generate
-a relocation that linker does not understand instead of silently
-generating invalid <strong>grub</strong>.</p>
-<h1 id="other-minor-gcc-bugs">Other minor gcc bugs</h1>
+<p>Here <code>gcc</code> effectively removed <strong>-mcmodel=large</strong> due to presence of
+<code>__attribute__((__target__("bmi2")))</code> and generated invalid
+assembly (<code>-mcmodel=medium</code>, assumed <code>.text</code> is within 4GB reach).</p>
+<p>The fix: <code>gcc</code> was fixed not to ignore <code>-mcmodel=</code> and friends when
+overriding target attributes are used:
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=8f1cb70d7ca6a8da7f6bc7f43fb5e758c0ce88b5" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=8f1cb70d7ca6a8da7f6bc7f43fb5e758c0ce88b5</a></p>
+<p>This was a nasty bug. We were lucky that <code>gcc</code> managed to generate a
+relocation that linker does not understand instead of silently
+generating invalid <code>grub</code>.</p>
+<h2 id="other-minor-gcc-bugs">Other minor <code>gcc</code> bugs</h2>
 <p>A few more smaller bugs if you like that kind of stuff:</p>
 <ul>
-<li><a href="https://gcc.gnu.org/PR98753">https://gcc.gnu.org/PR98753</a>: <strong>-Wfree-nonheap-object</strong> false positive</li>
-<li><a href="https://gcc.gnu.org/PR98286">https://gcc.gnu.org/PR98286</a>: <strong>g++</strong> accepts <strong>void d(void) { typename foo; }</strong> as valid code</li>
-<li><a href="https://gcc.gnu.org/PR98306">https://gcc.gnu.org/PR98306</a>: <strong>g++</strong> accepts invalid template code as valid</li>
-<li><a href="https://gcc.gnu.org/PR97615">https://gcc.gnu.org/PR97615</a>: dolphin ICE in SLP (vectorization patterns need a tweak)</li>
-<li><a href="https://gcc.gnu.org/PR96863">https://gcc.gnu.org/PR96863</a>: dolphin varasm ICE</li>
-<li><a href="https://gcc.gnu.org/PR97206">https://gcc.gnu.org/PR97206</a>: array typecheck bug</li>
-<li><a href="https://sourceware.org/PR27004">https://sourceware.org/PR27004</a>: glibc tls reference bug</li>
-<li><a href="https://gcc.gnu.org/PR98403">https://gcc.gnu.org/PR98403</a>: grub build hangup</li>
-<li><a href="https://gcc.gnu.org/PR98597">https://gcc.gnu.org/PR98597</a>: ICE in print<span id="mem_ref">mem_ref</span></li>
-<li><a href="https://gcc.gnu.org/PR97830">https://gcc.gnu.org/PR97830</a>: iCE in sccvn</li>
+<li><a href="https://gcc.gnu.org/PR98753" class="uri">https://gcc.gnu.org/PR98753</a>: <code>-Wfree-nonheap-object</code> false
+positive</li>
+<li><a href="https://gcc.gnu.org/PR98286" class="uri">https://gcc.gnu.org/PR98286</a>: <code>g++</code> accepts <code>void d(void) {   typename foo; }</code> as valid code</li>
+<li><a href="https://gcc.gnu.org/PR98306" class="uri">https://gcc.gnu.org/PR98306</a>: <code>g++</code> accepts invalid template code
+as valid</li>
+<li><a href="https://gcc.gnu.org/PR97615" class="uri">https://gcc.gnu.org/PR97615</a>: dolphin <code>ICE</code> in <code>SLP</code> (vectorization
+patterns need a tweak)</li>
+<li><a href="https://gcc.gnu.org/PR96863" class="uri">https://gcc.gnu.org/PR96863</a>: dolphin <code>varasm</code> <code>ICE</code></li>
+<li><a href="https://gcc.gnu.org/PR97206" class="uri">https://gcc.gnu.org/PR97206</a>: array type check bug</li>
+<li><a href="https://sourceware.org/PR27004" class="uri">https://sourceware.org/PR27004</a>: <code>glibc</code> <code>tls</code> reference bug</li>
+<li><a href="https://gcc.gnu.org/PR98403" class="uri">https://gcc.gnu.org/PR98403</a>: <code>grub</code> build hangup</li>
+<li><a href="https://gcc.gnu.org/PR98597" class="uri">https://gcc.gnu.org/PR98597</a>: <code>ICE</code> in <code>print_mem_ref</code></li>
+<li><a href="https://gcc.gnu.org/PR97830" class="uri">https://gcc.gnu.org/PR97830</a>: <code>iCE</code> in <code>sccvn</code></li>
 </ul>
-<h1 id="parting-words">Parting words</h1>
+<h2 id="parting-words">Parting words</h2>
 <p>Running a compiler from a development branch is a lot of fun. Every
-compiler upgrade fixed some existing bugs and introduced new ones.
-It is important to make sure fixes are intentional and not just
-masking bugs by other changes. And always keep a backup ready.
-You will need it.</p>
-<p>Many of the above regressions were not caught with regression tests
-as they were frequently not trivial feature interactions. Real
-world applications keep surprising <strong>gcc</strong>.</p>
-<p><a href="https://www.gentoo.org/">Gentoo</a> makes it very easy to break
-(and fix!) your system if you really want it. It’s perhaps the
-primary reason I keep using it for about 15 years. You might want
-to give it a try as well :)</p>
+compiler upgrade fixed some existing bugs and introduced new ones. It is
+important to make sure fixes are intentional and not just masking bugs
+by other changes. And always keep a backup ready. You will need it.
+Many of the above regressions were not caught with regression tests as
+they were frequently not trivial feature interactions. Real world
+applications keep surprising <code>gcc</code>.</p>
+<p><a href="https://www.gentoo.org/"><code>gentoo</code></a> makes it very easy to break (and fix!)
+your system if you really want it. It’s perhaps the primary reason I
+keep using it for about 15 years. You might want to give it a try as
+well :)</p>
 <p>Have fun!</p>
         </div>
     </body>

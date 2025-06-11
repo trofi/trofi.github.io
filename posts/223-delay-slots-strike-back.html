@@ -29,8 +29,8 @@
                 <div class="info">February 27, 2021</div>
             
 
-            <p>Jeroen found another problem on <strong>hppa</strong> (<strong>PA-RISC</strong>) after switch
-to <strong>gcc-10</strong>: <strong>Python-3.9.0b3</strong> started crashing at build time:</p>
+            <p>Jeroen found another problem on <code>hppa</code> (<code>PA-RISC</code>) after switch to
+<code>gcc-10</code>: <code>Python-3.9.0b3</code> started crashing at build time:</p>
 <pre><code>$ ./configure ... --host=hppa2.0-unknown-linux-gnu ...
 $ make
 ...
@@ -71,15 +71,16 @@ generate-posix-vars failed
 make: *** [Makefile:611: pybuilddir.txt] Error 1</code></pre>
 <p>We have two strange errors here:</p>
 <ol type="1">
-<li><strong>Fatal Python error: init_fs_encoding: failed to get the Python codec of the filesystem encoding</strong></li>
-<li><strong>RuntimeError: cannot release un-acquired lock</strong></li>
+<li><code>Fatal Python error: init_fs_encoding: failed to get the Python     codec of the filesystem encoding</code></li>
+<li><code>RuntimeError: cannot release un-acquired lock</code></li>
 </ol>
-<p>Both errors seem unrelated. They signal internal inconsistency in the interpreter.</p>
-<h1 id="debugging">Debugging</h1>
-<p>Is it a <strong>gcc</strong> bug? I usually assume it’s not and try to find inconsisyency
-in the program. If it’s luck I’ll find the bug in the program. Otherwise I’ll
-get a small reproducer to fix the compiler.</p>
-<p>First, I double-checked it’s a <strong>gcc-10 -O2</strong>:</p>
+<p>Both errors seem unrelated. They signal internal inconsistency in the
+interpreter.</p>
+<h2 id="debugging">Debugging</h2>
+<p>Is it a <code>gcc</code> bug? I usually assume it’s not and try to find
+inconsistency in the program. If it’s luck I’ll find the bug in the
+program. Otherwise I’ll get a small reproducer to fix the compiler.</p>
+<p>First, I double-checked it’s a <code>gcc-10 -O2</code>:</p>
 <pre><code># on hppa host
 # CC=gcc-10.1.0 CFLAGS=-O2 emerge -v1 dev-lang/python:3.9
 &lt;fails&gt;
@@ -88,15 +89,15 @@ get a small reproducer to fix the compiler.</p>
 # CC=gcc-9.3.0 CFLAGS=-O2 emerge -v1 dev-lang/python:3.9
 &lt;works&gt;</code></pre>
 <p>The bug is reproducible. Assuming it’s an obscure python bug I tried
-<strong>AddressSanitizer</strong> and <strong>valigrind</strong> on <strong>amd64</strong>. Neither reported
-any relevant errors. <strong>valgrind</strong> found a seemingly legitimate
-<strong>use-after-free</strong>: <a href="https://bugs.gentoo.org/729570#c8">https://bugs.gentoo.org/729570#c8</a>.</p>
-<p><strong>–with-valgrind</strong> makes that <strong>valgrind</strong> report go away.
-It also makes original bug away. Which is not very useful. I expected
-some diagnostic that would report heap corruption.</p>
-<p>Falling back to original setup. We need to find a function where input
-is the same but the output is different.</p>
-<p>After much <strong>printf</strong> poking I found simple way to observe the problem:</p>
+<code>AddressSanitizer</code> and <code>valigrind</code> on <code>amd64</code>. Neither reported
+any relevant errors. <code>valgrind</code> found a seemingly legitimate
+<code>use-after-free</code>: <a href="https://bugs.gentoo.org/729570#c8" class="uri">https://bugs.gentoo.org/729570#c8</a>.
+<code>--with-valgrind</code> makes that <code>valgrind</code> report go away. It also
+makes original bug away. Which is not very useful. I expected some
+diagnostic that would report heap corruption.
+Falling back to original setup. We need to find a function where input
+is the same but the output is different.
+After much <code>printf</code> poking I found simple way to observe the problem:</p>
 <pre><code>$ git init .; git add .; git commit -m &quot;initial state&quot;
 $ ./configure ... --host=hppa2.0-unknown-linux-gnu ...
 $ make regen-importlib
@@ -113,19 +114,19 @@ $ git diff
      10,114,112,97,114,116,105,116,105,111,110,114,35,0,0,0,
      218,8,114,101,118,101,114,115,101,100,218,6,114,115,112,108,
 ...</code></pre>
-<p>This output means that freshly built interpreter generates bytecode
+<p>This output means that freshly built interpreter generates byte code
 slightly different from already pre-generated. The diff is not expected
-as building python with <strong>-O1</strong> produces no diff on the same test.</p>
-<p>This is a simple enough test to move debugging from debugging on
-<strong>hppa</strong> host to <strong>amd64</strong> host. With <strong>binfmt_misc</strong> wrappers I
-was able to use exatly the same build commands on <strong>amd64</strong> to get
-the same bytecode diff.</p>
-<h1 id="shrinking-the-delta-down">Shrinking the delta down</h1>
-<p>To narrow down on the trigger I wanted to find smallest piece of code
-to build with <strong>-O1</strong> to see the bug disappear (while rest of code is
-built with <strong>-O2</strong>).</p>
-<p>Python build system outputs exact commands used to generate everything.
-I dumped all commands and tweaked <strong>-O2</strong> to <strong>-O1</strong> in a binary search
+as building python with <code>-O1</code> produces no diff on the same test.
+This is a simple enough test to move debugging from debugging on
+<code>hppa</code> host to <code>amd64</code> host. With <code>binfmt_misc</code> wrappers I was
+able to use exactly the same build commands on <code>amd64</code> to get the same
+byte code diff.</p>
+<h2 id="shrinking-the-delta-down">Shrinking the delta down</h2>
+<p>To shrink the trigger I wanted to find smallest piece of code to
+build with <code>-O1</code> to see the bug disappear (while rest of code is built
+with <code>-O2</code>).
+Python build system outputs exact commands used to generate everything.
+I dumped all commands and tweaked <code>-O2</code> to <code>-O1</code> in a binary search
 fashion:</p>
 <pre><code>$ make clean
 $ make | tee build.sh
@@ -136,8 +137,9 @@ hppa2.0-unknown-linux-gnu-gcc -c -Wno-unused-result -Wsign-compare -DNDEBUG  -O2
 ./Lib/zipimport.py \
 ./Python/importlib_zipimport.h.new
 python3.9 ./Tools/scripts/update_file.py ./Python/importlib_zipimport.h ./Python/importlib_zipimport.h.new</code></pre>
-<p>Now I can just edit <strong>build.sh</strong> slightly and rerun it. To avoid
-recompilation impact I used <strong>ccache</strong> shadows for <strong>hppa2.0-unknown-linux-gnu-gcc</strong>:</p>
+<p>Now I can just edit <code>build.sh</code> slightly and rerun it. To avoid
+recompilation impact I used <code>ccache</code> shadows for
+<code>hppa2.0-unknown-linux-gnu-gcc</code>:</p>
 <pre><code>$ which hppa2.0-unknown-linux-gnu-gcc
 /usr/lib/ccache/bin/hppa2.0-unknown-linux-gnu-gcc</code></pre>
 <p>That way our “full rebuild” is as cheap as incremental rebuild:</p>
@@ -145,23 +147,24 @@ recompilation impact I used <strong>ccache</strong> shadows for <strong>hppa2.0-
 real 0m2,258s
 user 0m1,673s
 sys  0m0,595s</code></pre>
-<p>2.5 seconds on my 10 years old machine. That gives us very
-interactive debugging environment.</p>
-<p>After a bit of poking I found that rebuilding <strong>Objects/longobject.c</strong>
-with <strong>-O1</strong> is enough to make bug disappear:</p>
+<p>2.5 seconds on my 10 years old machine. That gives us very responsive
+debugging environment.
+After a bit of poking I found that rebuilding <code>Objects/longobject.c</code>
+with <code>-O1</code> is enough to make bug disappear:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/build.sh</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/build.sh</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -39 +39 @@ hppa2.0-unknown-linux-gnu-gcc -c -Wno-unused-result -Wsign-compare -DNDEBUG  -O2</span></span>
 <span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="st">-hppa2.0-unknown-linux-gnu-gcc ... -O2 ... Objects/longobject.c</span></span>
 <span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="va">+hppa2.0-unknown-linux-gnu-gcc ... -O1 ... Objects/longobject.c</span></span></code></pre></div>
-<p>Now we can use advanced pragmas and attributes to re-enable <strong>-O2</strong>
-only for subset of <strong>Objects/longobject.c</strong>. The tools are:</p>
+<p>Now we can use advanced pragmas and attributes to re-enable <code>-O2</code> only
+for subset of <code>Objects/longobject.c</code>. The tools are:</p>
 <ol type="1">
-<li><strong>#pragma GCC push_options</strong> / <strong>#pragma GCC optimize(2)</strong> / <strong>#pragma GCC pop_options</strong>:
-change optimization level only for a subset of functions in a file to narrow down the code
-which triggers problematic behaviour.</li>
-<li><strong>__attribute__((noipa))</strong>: make a function
-opaque to inliner as if it was in a separate compilation unit. Useful when shrinking test
+<li><code>#pragma GCC push_options</code> / <code>#pragma GCC optimize(2)</code> /
+<code>#pragma GCC pop_options</code>: change optimization level only for a
+subset of functions in a file to narrow down the code which triggers
+problematic behavior.</li>
+<li><code>__attribute__((noipa))</code>: make a function opaque to inliner as
+if it was in a separate compilation unit. Useful when shrinking test
 example down to a single file.</li>
 </ol>
 <p>Usage example looks like that:</p>
@@ -195,15 +198,16 @@ example down to a single file.</li>
 <span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a> #endif</span>
 <span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a> }</span>
 <span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a><span class="va">+#pragma GCC pop_options</span></span></code></pre></div>
-<p>With the above tricks I arrived at <strong>long_richcompare()</strong>. I could not see the immediate
-bug in the code. It looks very clean and simple.</p>
-<h1 id="shrinking-down-test-example">Shrinking down test example</h1>
-<p><strong>long_richcompare()</strong> implements a comparison operator for ‘int’
+<p>With the above tricks I arrived at <code>long_richcompare()</code>. I could not
+see the immediate bug in the code. It looks very clean and simple.</p>
+<h2 id="shrinking-down-test-example">Shrinking down test example</h2>
+<p><code>long_richcompare()</code> implements a comparison operator for <code>int</code>
 class (arbitrary precision integer) in python. It’s a simple
-mathematical operation.</p>
-<p>I added a few <strong>printf()</strong> statements to extract exact exact inputs/outputs
-where <strong>long_richcompare()</strong> changes it’s behaviour. It was <strong>long_richcompare(0xFFFFffff, 1, EQ)</strong>.</p>
-<p>The full extracted example was:</p>
+mathematical operation.
+I added a few <code>printf()</code> statements to extract exact exact
+inputs/outputs where <code>long_richcompare()</code> changes it’s behaviour. It
+was <code>long_richcompare(0xFFFFffff, 1, EQ)</code>.
+The full extracted example was:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="co">   The test is extracted from Python-3.9.0 miscompilation</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="co">   on hppa2.0: https://bugs.gentoo.org/729570</span></span>
@@ -273,14 +277,14 @@ where <strong>long_richcompare()</strong> changes it’s behaviour. It was <stro
 <span id="cb9-67"><a href="#cb9-67" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> res <span class="op">=</span> long_richcompare<span class="op">(&amp;</span>l<span class="op">,</span> <span class="op">&amp;</span>r<span class="op">,</span> <span class="dv">0</span><span class="op">);</span></span>
 <span id="cb9-68"><a href="#cb9-68" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;long_richcompare(2, 1, EQ) = </span><span class="sc">%s</span><span class="st"> (expect FALSE)</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> res <span class="op">?</span> <span class="st">&quot;TRUE&quot;</span> <span class="op">:</span> <span class="st">&quot;FALSE&quot;</span><span class="op">);</span></span>
 <span id="cb9-69"><a href="#cb9-69" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Note: it’s not a real comparison anymore. <strong>cmp()</strong> is an elaborate no-op.
-This file is very easy to trace through and verify that it has no problems
-related to undefined behaviour.</p>
-<p>I asked <strong>GCC</strong> developers for help in <a href="https://gcc.gnu.org/PR96015">https://gcc.gnu.org/PR96015</a> and Eric
-immediately suggested trying <strong>-fno-delayed-branch</strong> to see if it makes a
-difference. It did!</p>
-<p>Using <strong>-fno-delayed-branch</strong> allowed me to simplify the example even further
-with <strong>cvise</strong>. It produced the following example:</p>
+<p>Note: it’s not a real comparison anymore. <code>cmp()</code> is an elaborate
+no-op. This file is very easy to trace through and verify that it has no
+problems related to the undefined behavior.
+I asked <code>gcc</code> developers for help in <a href="https://gcc.gnu.org/PR96015" class="uri">https://gcc.gnu.org/PR96015</a> and
+Eric immediately suggested trying <code>-fno-delayed-branch</code> to see if it
+makes a difference. It did!
+Using <code>-fno-delayed-branch</code> allowed me to simplify the example even
+further with <code>cvise</code>. It produced the following example:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> b<span class="op">,</span> c<span class="op">;</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> a<span class="op">()</span> __attribute__<span class="op">((</span>noipa<span class="op">));</span></span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> a<span class="op">(</span><span class="dt">int</span> <span class="op">*</span>d<span class="op">,</span> <span class="dt">int</span> <span class="op">*</span>f<span class="op">,</span> <span class="dt">int</span> g<span class="op">)</span> <span class="op">{</span></span>
@@ -306,13 +310,13 @@ with <strong>cvise</strong>. It produced the following example:</p>
 0
 $ hppa2.0-unknown-linux-gnu-gcc -O2 bug_test.c -o good -fno-delayed-branch; ./good; echo $?
 1</code></pre>
-<h1 id="generated-code">Generated code</h1>
+<h2 id="generated-code">Generated code</h2>
 <p>Let’s peek at generated code in this example:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; hppa2.0-unknown-linux-gnu-gcc -O2 -S ../bug_test.c -o bug.S</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>        bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; ret = 0; return ret;</span></span>
 <span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>         ldi <span class="dv">0</span><span class="op">,%</span>r28 <span class="co">; delayed slot for 'ret = 0'</span></span></code></pre></div>
-<p>This is very short and wrong ‘return 0’ code.</p>
+<p>This is very short and wrong <code>return 0</code> code.</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; hppa2.0-unknown-linux-gnu-gcc -O2 -S ../bug_test.c -o bug.S -fno-delayed-branch</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>        comclr<span class="op">,&lt;&gt;</span> <span class="op">%</span>r26<span class="op">,%</span>r25<span class="op">,%</span>r0 <span class="co">; compare d == f</span></span>
@@ -342,41 +346,44 @@ $ hppa2.0-unknown-linux-gnu-gcc -O2 bug_test.c -o good -fno-delayed-branch; ./go
 <span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a><span class="fu">.L8:</span></span>
 <span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>        ldi <span class="dv">1</span><span class="op">,%</span>r28    <span class="co">; ret = 1</span></span>
 <span id="cb13-29"><a href="#cb13-29" aria-hidden="true" tabindex="-1"></a>        bv<span class="op">,</span>n <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; return ret;</span></span></code></pre></div>
-<p>This is somewhat long and correct code.</p>
-<p>So what is so special about <strong>-fno-delayed-branch</strong>? Why does it turn things upside down?</p>
-<h1 id="delay-slots">Delay slots</h1>
-<p>Delay slot (<a href="https://en.wikipedia.org/wiki/Delay_slot">https://en.wikipedia.org/wiki/Delay_slot</a>) is a simple concept: on simple
-architectures some instructions take not unual one clock but two clock cycles. Instead of
-stalling the CPU pipeline for extra cycle CPU just executes next instruction (or a few of those)
-following such heavyweight instruction (wat?). Such place in code is called a
-a “delay slot”.</p>
-<p>Simple example on <strong>hppa</strong>:</p>
+<p>This is somewhat long and correct code.
+So what is so special about <code>-fno-delayed-branch</code>? Why does it turn
+things upside down?</p>
+<h2 id="delay-slots">Delay slots</h2>
+<p>Delay slot (<a href="https://en.wikipedia.org/wiki/Delay_slot" class="uri">https://en.wikipedia.org/wiki/Delay_slot</a>) is a simple
+concept: on simple architectures some instructions take not usual one
+clock but two clock cycles. Instead of stalling the CPU pipeline for
+extra cycle CPU just executes next instruction (or a few of those)
+following such heavyweight instruction (wat?). Such place in code is
+called a “delay slot”. Simple example on <code>hppa</code>:</p>
 <pre><code>a:
     bv %r0(%r2) ; 'return ret' ; takes 2 cycles
      ldi 0,%r28 ; 'ret = 0'    ; takes 1 cycle, executes in parallel to 'bv'
 ; total execution time: 2 cycles</code></pre>
-<p>Here <strong>bv</strong> (branch vectored) takes clock 2 cycles and CPU always
-executes one instruction after it. The actual execution sequence
-is equivalent to:</p>
+<p>Here <code>bv</code> (branch vectored) takes clock 2 cycles and CPU always
+executes one instruction after it. The actual execution sequence is
+equivalent to:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    ldi <span class="dv">0</span><span class="op">,%</span>r28  <span class="co">; takes 1 cycle</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; takes 2 cycles</span></span>
 <span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>     <span class="bu">nop</span>        <span class="co">; takes 1 cycle; executes in parallel to 'bv'</span></span>
 <span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="co">; total execution time: 3 cycles</span></span></code></pre></div>
-<p>It sounds like a simple transformation. But it’s full of fancy corner cases:</p>
+<p>It sounds like a simple transformation. But it’s full of fancy corner
+cases:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">a:</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">; invalid</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span>  <span class="co">; 'return ret' ; takes 2 cycles</span></span>
 <span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>     bv <span class="op">%</span>r0<span class="op">(%</span>r2<span class="op">)</span> <span class="co">; 'return ret' ; takes 2 cycles, overlaps with previous</span></span>
 <span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>      <span class="bu">nop</span>        <span class="co">; does it get executed?</span></span></code></pre></div>
-<p>Thankfuly <strong>hppa</strong> forbids putting branch instructions themselves into delay slot.</p>
-<p>A few other architectures that use delay slot are: <strong>mips</strong>,
-<strong>superh</strong>, <strong>sparc</strong>. But not <strong>arm</strong>, not <strong>powerpc</strong> and not <strong>riscv</strong>.</p>
-<p>Having slightly tweaked my example I managed to reproduce the
-same bug on <strong>sh4</strong>(<strong>superh</strong>): <a href="https://gcc.gnu.org/PR96015#c27">https://gcc.gnu.org/PR96015#c27</a>.</p>
-<p>The bug ended up being in gcc’s <strong>reporg</strong> pass: a late pass that handles
-instruction reordering to pick the better sequence. It made incorrect
-assumptions about instructions with delay slots.</p>
+<p>Thankfully <code>hppa</code> forbids putting branch instructions themselves into
+delay slot.
+A few other architectures that use delay slot are: <code>mips</code>, <code>superh</code>,
+<code>sparc</code>. But not <code>arm</code>, not <code>powerpc</code> and not <code>riscv</code>.
+Having slightly tweaked my example I managed to reproduce the same bug
+on <code>sh4</code>(<code>superh</code>): <a href="https://gcc.gnu.org/PR96015#c27" class="uri">https://gcc.gnu.org/PR96015#c27</a>.
+The bug ended up being in <code>gcc</code> <code>reporg</code> pass: a late pass that
+handles instruction reordering to pick the better sequence. It made
+incorrect assumptions about instructions with delay slots.</p>
 <p>Have fun!</p>
         </div>
     </body>

@@ -29,83 +29,97 @@
                 <div class="info">February  2, 2018</div>
             
 
-            <p>One of <strong>gentoo</strong> <a href="https://bugs.gentoo.org/579278">bugs</a>
-was about <strong>gentoo</strong> install CD not being able to boot <strong>Itanium</strong> boxes.</p>
-<h1 id="the-bug">The bug</h1>
-<p>The symptom is <strong>EFI</strong> loader error:</p>
+            <p>One of <code>gentoo</code> <a href="https://bugs.gentoo.org/579278">bugs</a> was about
+<code>gentoo</code> install <code>CD</code> not being able to boot <code>Itanium</code> (<code>ia64</code>) boxes.</p>
+<h2 id="the-bug">The bug</h2>
+<p>The symptom is <code>EFI</code> loader error:</p>
 <pre><code>Loading.: Gentoo Linux
 ImageAddress: pointer is outside of image
 ImageAddress: pointer is outside of image
 LoadPe: Section 1 was not loaded
 Load of Gentoo Linux failed: Not Found
 Paused - press any key to continue</code></pre>
-<p>which looks like a simple error if you have the hardware and
-source code of the loader that prints the error.</p>
-<p>I had neither.</p>
-<p>My plan was to extend <strong>ski</strong> emulator to be able to handle
-early <strong>EFI</strong> stuff. I started reading <a href="https://www.thailand.intel.com/content/dam/www/public/us/en/documents/specification-updates/itanium-system-abstraction-layer-specification.pdf">docs on early itanium boot life</a>:
-on <strong>SAL</strong>s (system abstraction layers), <strong>PAL</strong>s (platform abstration layers), monarch processors, rendevouz protocols
-to handle <strong>MCA</strong>s (machine check aborts) and expected system state when hand off to <strong>EFI</strong>
-happens.</p>
-<p>But <strong>SAL</strong> spec touches <strong>EFI</strong> only at <strong>SAL</strong>-&gt;**EFI** interface
-boundary. I dreaded to open <strong>EFI</strong> spec before finishing reading
-<strong>SAL</strong> paper.</p>
-<h1 id="how-ia64-actually-boots">How ia64 actually boots</h1>
-<p>But recently I got access to real management processor (sometimes also called <strong>MP</strong>,
-<strong>BMC</strong> (baseboard managenet controller), <strong>iLO</strong> (integrated lights-out)) on <strong>rx3600</strong> machine and I gave up on extending <strong>ski</strong> for a while.</p>
-<p>The very first thing I attempted is to get to serial console of operating system
-from <strong>iLO</strong>. It happened to be not as straightforward as passing <strong>console=ttyS0</strong> to kernel.
-I ended up learning a bit about <strong>EFI</strong> shell, <strong>ia64</strong>-specific <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/ia64/serial.txt">serial port numbering</a>
-and <strong>elilo</strong>.</p>
-<p>Eventually I was able to boot arbitrary kernel directly from <strong>EFI</strong> shell and get to kernel’s
-console! I needed that as a fallback in case I screw default boot loader, boot loader config
-or default boot options as I don’t have physical access to <strong>ia64</strong> machine.</p>
-<p>Here is an example of booting from <strong>CD</strong> and controlling it from <strong>iLO</strong> virtual serial console:</p>
+<p>This looks like a simple error if you have the hardware and source code
+of the loader that prints the error. I had neither.</p>
+<p>My plan was to extend <code>ski</code> emulator to be able to handle early
+<code>EFI</code> stuff. I started reading <a href="https://www.thailand.intel.com/content/dam/www/public/us/en/documents/specification-updates/itanium-system-abstraction-layer-specification.pdf">docs on early <code>itanium</code> boot
+life</a>:
+on <code>SAL</code>s (system abstraction layers), <code>PAL</code>s (platform abstraction
+layers), monarch processors, rendezvous protocols to handle <code>MCA</code>s
+(machine check aborts) and expected system state when hand off to
+<code>EFI</code> happens. But <code>SAL</code> spec touches <code>EFI</code> only at <code>SAL</code> -&gt; <code>EFI</code>
+interface boundary. I dreaded to open <code>EFI</code> spec before finishing reading
+<code>SAL</code> paper.</p>
+<h2 id="how-ia64-actually-boots">How <code>ia64</code> actually boots</h2>
+<p>Recently I got access to real management processor (sometimes also
+called <code>MP</code>, <code>BMC</code> (baseboard management controller): <code>iLO</code>
+(integrated lights-out)) on <code>rx3600</code> machine and I gave up on
+extending <code>ski</code> for a while.
+The very first thing I attempted is to get to serial console of
+operating system from <code>iLO</code>. It happened to be not as straightforward
+as passing <code>console=ttyS0</code> to kernel. I ended up learning a bit about
+<code>EFI</code> shell, <code>ia64</code>-specific <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/ia64/serial.txt">serial port
+numbering</a>
+and <code>elilo</code>.
+Eventually I was able to boot arbitrary kernel directly from <code>EFI</code>
+shell and get to kernel’s console! I needed that as a fallback in case
+I screw default boot loader, boot loader config or default boot options
+as I don’t have physical access to <code>ia64</code> machine.
+Here is an example of booting from <code>CD</code> and controlling it from
+<code>iLO</code> virtual serial console:</p>
 <pre><code>fs0:\efi\boot\bootia64.efi -i gentoo.igz gentoo initrd=gentoo.igz root=/dev/ram0 init=/linuxrc dokeymap looptype=squashfs loop=/image.squashfs cdroot console=ttyS1,115200n8</code></pre>
-<p>here <strong>fs0</strong> is a <strong>FAT</strong> file system (on CD, could be on HDD) with <strong>EFI</strong> applications.
-<strong>bootia64.efi</strong> is a <strong>sys-boot/elilo</strong> application in disguse. <strong>console=ttyS1,115200n8</strong>
-matches <strong>EFI</strong> setup of second serial console.</p>
-<p>After successful boot from <strong>CD</strong> of known good old kernel (from 2009) I was not
-afraid of messing with main <strong>HDD</strong> install or even upgrading to brand new kernels,
-I even managed to squash another <strong>ia64</strong>-specific kernel and GCC bug! I’ll try to
-write another post about that.</p>
-<p>This poking also helped me to understand boot process in more detail. <strong>ia64</strong>
-boots in the following way:</p>
+<p>Here <code>fs0</code> is a <code>FAT</code> file system (on <code>CD</code>, could be on <code>HDD</code>) with
+<code>EFI</code> applications. <code>bootia64.efi</code> is a <code>sys-boot/elilo</code>
+application in disguise. <code>console=ttyS1,115200n8</code> matches <code>EFI</code> setup
+of second serial console.
+After successful boot from <code>CD</code> of known good old kernel (from 2009) I
+was not afraid of messing with main <code>HDD</code> install or even upgrading to
+brand new kernels, I even managed to squash another <code>ia64</code>-specific
+kernel and GCC bug! I’ll try to write another post about that.
+This poking also helped me to understand boot process in more detail.
+<code>ia64</code> boots in the following way:</p>
 <ol type="1">
-<li><strong>SAL</strong>: when machine powers on it executes <strong>SAL</strong> (and <strong>PAL</strong>) code to initialize
-<strong>S</strong>ystem and <strong>P</strong>rocessors. This code is not easily updateable
-and usually stays the same across OS updates.</li>
-<li><strong>EFI</strong>: Then <strong>SAL</strong> hands control to <strong>EFI</strong> (also not easily updateable) where
-I can interactively pick boot device or even get <strong>EFI</strong> shell to run
-<strong>EFI</strong> applications (programs for <strong>EFI</strong> environment).</li>
-<li><strong>Bootloader (EFI application)</strong>: Normally <strong>EFI</strong> is set up to start boot loader
-after a few seconds. It’s up to the user (finally!) to provide a bootloader implementation.
-<a href="https://wiki.gentoo.org/wiki/Handbook:IA64">Gentoo ia64 handbook</a> suggests
-<strong>sys-boot/elilo</strong> package.</li>
-<li><strong>OS kernel</strong>: bootloader finds OS kernel, loads it and hands control off to kernel.</li>
+<li><code>SAL</code>: when machine powers on it executes <code>SAL</code> (and <code>PAL</code>)
+code to initialize System and Processors. This code is not
+easily to update and usually stays the same across <code>OS</code> updates.</li>
+<li><code>EFI</code>: Then <code>SAL</code> hands control to <code>EFI</code> (also not easily
+to update) where I can interactively pick boot device or even get
+<code>EFI</code> shell to run <code>EFI</code> applications (programs for <code>EFI</code>
+environment).</li>
+<li><code>Bootloader (EFI application)</code>: Normally <code>EFI</code> is set up to
+start boot loader after a few seconds. It’s up to the user
+(finally!) to provide a boot loader implementation. <a href="https://wiki.gentoo.org/wiki/Handbook:IA64">Gentoo <code>ia64</code>
+handbook</a> suggests
+<code>sys-boot/elilo</code> package.</li>
+<li><code>OS kernel</code>: boot loader finds <code>OS</code> kernel, loads it and hands
+control off to kernel.</li>
 </ol>
-<h1 id="searching-for-the-clues">Searching for the clues</h1>
-<p>Our problem happened at stage <strong>3</strong> where <strong>EFI</strong> failed to load <strong>elilo</strong> application.</p>
-<p>Gentoo builds <strong>.iso</strong> images automatically and continuously. Here you can find <a href="http://distfiles.gentoo.org/releases/ia64/autobuilds/">ia64 isos</a>.
-Older disks are available on actual builder machines.</p>
-<p>As <strong>elilo</strong> used to work on images from 2008 and even <strong>2016</strong> (!) I
-passed through a few autobuilt <strong>ISO</strong> images and collected a few working
-and non-working samples and started comparing them.</p>
-<p>I extracted <strong>elilo.efi</strong> files from 3 disks:</p>
+<h2 id="searching-for-the-clues">Searching for the clues</h2>
+<p>Our problem happened at stage <code>3</code> where <code>EFI</code> failed to load
+<code>elilo</code> application.
+<code>gentoo</code> builds <code>.iso</code> images automatically and continuously. Here you
+can find <a href="http://distfiles.gentoo.org/releases/ia64/autobuilds/"><code>ia64</code>
+isos</a>. Older
+disks are available on actual builder machines.
+As <code>elilo</code> used to work on images from 2008 and even <code>2016</code> (!) I
+passed through a few autobuilt <code>ISO</code> images and collected a few
+working and non-working samples and started comparing them.
+I extracted <code>elilo.efi</code> files from 3 disks:</p>
 <ul>
-<li><strong>elilo-2014-works.efi</strong>: good, picked from machine I have access to</li>
-<li><strong>elilo-2016-works.efi</strong>: good, picked from <strong>2016</strong> install CD</li>
-<li><strong>elilo-2018-does-not-work.efi</strong>: bad, freshly built on modern software</li>
+<li><code>elilo-2014-works.efi</code>: good, picked from machine I have access to</li>
+<li><code>elilo-2016-works.efi</code>: good, picked from <code>2016</code> install <code>CD</code></li>
+<li><code>elilo-2018-does-not-work.efi</code>: bad, freshly built on modern
+software</li>
 </ul>
-<p>Normally I would start from running <strong>readelf -a</strong> on each executable
-and diff for suspicious changes. The files however are not <strong>ELF</strong>s:</p>
+<p>Normally I would start from running <code>readelf -a</code> on each executable
+and diff for suspicious changes. The files however are not <code>ELF</code>s:</p>
 <pre><code>$ file *.efi
 elilo-2014-works.efi:         PE32+ executable (EFI application) Intel Itanium (stripped to external PDB), for MS Windows
 elilo-2016-works.efi:         PE32 executable (EFI application) Intel Itanium (stripped to external PDB), for MS Windows
 elilo-2018-does-not-work.efi: PE32+ executable (EFI application) Intel Itanium (stripped to external PDB), for MS Windows</code></pre>
-<p>One of them is not even <strong>PE32+</strong> but still happens to boot.</p>
-<p>Binutils has more generic <strong>readelf -a</strong> equivalent: it’s <strong>objdump -x</strong>.
-Comparing two good files:</p>
+<p>One of them is not even <code>PE32+</code> but still happens to boot.
+<code>binutils</code> has more generic <code>readelf -a</code> equivalent: it’s
+<code>objdump -x</code>. Comparing two good files:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>$ objdump -x elilo-2014-works.efi &gt; 2014.good</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>$ objdump -x elilo-2016-works.efi &gt; 2016.good</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">--- 2014.good   2018-01-27 23:34:10.118197637 +0000</span></span>
@@ -138,10 +152,11 @@ Comparing two good files:</p>
 <span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a><span class="st">-CheckSum               00067705</span></span>
 <span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a><span class="va">+SizeOfHeaders          00000400</span></span>
 <span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a><span class="va">+CheckSum               00069054</span></span></code></pre></div>
-<p>There is a lot of odd going on here: the file on 2016 live CD is actually from 2006
-and it’s actually older than file from 2014. It has different PE type and as a result
-different file alignment. Thus I discarded <strong>elilo-2016-works.efi</strong> as too old.</p>
-<p>Comparing bad/good:</p>
+<p>There is a lot of odd going on here: the file on 2016 live <code>CD</code> is
+actually from 2006 and it’s actually older than file from 2014. It has
+different PE type and as a result different file alignment. Thus I
+discarded <code>elilo-2016-works.efi</code> as too old.
+Comparing bad/good:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>$ objdump -x elilo-2014-works.efi &gt; 2014.good</span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>$ objdump -x elilo-2018-does-not-work.efi &gt; 2018.bad</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>$ diff -U0 2014.good 2018.bad</span>
@@ -198,22 +213,25 @@ different file alignment. Thus I discarded <strong>elilo-2016-works.efi</strong>
 <span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a><span class="va">+[584](sec  2)(fl 0x00)(ty   0)(scl   2) (nx 0) 0x0000000000000110 Optind</span></span></code></pre></div>
 <p>This looks better. A few notable things:</p>
 <ul>
-<li><strong>Time/Date</strong> field is not initialized for the bad file: sane date vs. all zeros</li>
-<li><strong>BaseOfCode</strong> looks uninitialized: <strong>0x1000</strong> vs. <strong>0x0000</strong></li>
-<li><strong>MinorLinkerVersion</strong> says good file was built with <strong>binutils-2.23</strong>, bad file
-was built with <strong>binutils-2.29</strong></li>
-<li>File has only 2 relocations: <strong>Number of fixups 2</strong>. We could check them manually!</li>
-<li>And a lot of symbols: <strong>570</strong> vs. <strong>580</strong></li>
+<li><code>Time/Date</code> field is not initialized for the bad file: sane date vs.
+all zeros</li>
+<li><code>BaseOfCode</code> looks uninitialized: <code>0x1000</code> vs. <code>0x0000</code></li>
+<li><code>MinorLinkerVersion</code> says good file was built with
+<code>binutils-2.23</code>, bad file was built with <code>binutils-2.29</code></li>
+<li>File has only 2 relocations: <code>Number of fixups 2</code>. We could check
+them manually!</li>
+<li>And a lot of symbols: <code>570</code> vs. <code>580</code></li>
 </ul>
-<p>I tried to build <strong>elilo</strong> with <strong>binutils-2.25</strong>: it produced the same
-binary as <strong>elilo-2018-does-not-work.efi</strong>.</p>
-<p>My only clue was that <strong>BaseOfCode</strong> is zero. It felt like something used to
-reside in the first page before code section and now it does not anymore.
-What could it be?</p>
-<h1 id="gnu-binutils-linker-scripts">GNU binutils linker scripts</h1>
-<p>Time to look at how decision is made what to put into the first page at link time!</p>
-<p>The build process of <strong>elilo.efi</strong> is truly unusual. Let’s run <strong>emerge -1 sys-boot/elilo</strong>
-and check what commands are being executed to yield it:</p>
+<p>I tried to build <code>elilo</code> with <code>binutils-2.25</code>: it produced the same
+binary as <code>elilo-2018-does-not-work.efi</code>.
+My only clue was that <code>BaseOfCode</code> is zero. It felt like something
+used to reside in the first page before code section and now it does not
+anymore. What could it be?</p>
+<h2 id="gnu-binutils-linker-scripts">GNU <code>binutils</code> linker scripts</h2>
+<p>Time to look at how the decision is made what to put into the first page at
+link time!
+The build process of <code>elilo.efi</code> is truly unusual. Let’s run <code>emerge -1 sys-boot/elilo</code> and check what commands are being executed to yield
+it:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># emerge -1 sys-boot/elilo</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> <span class="at">-j1</span> ... ARCH=ia64</span>
@@ -246,136 +264,155 @@ and check what commands are being executed to yield it:</p>
 <span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;&gt;&gt;</span> Source <span class="ex">compiled.</span></span></code></pre></div>
 <p>Here we see the following steps:</p>
 <ul>
-<li>With exception of <strong>-frename-registers -mfixed-range=f32-f127</strong> the process of building <strong>EFI</strong> application
-is almost like building normal shared library.</li>
-<li>Non-standard <strong>/usr/lib/elf_ia64_efi.lds</strong> linker script is used.</li>
-<li><strong>objcopy –target=efi-app-ia64</strong> is used to create <strong>PE32+</strong> file out of <strong>ELF64</strong>. Very dark magic.</li>
+<li>With exception of <code>-frename-registers -mfixed-range=f32-f127</code> the
+process of building <code>EFI</code> application is almost like building normal
+shared library.</li>
+<li>Non-standard <code>/usr/lib/elf_ia64_efi.lds</code> linker script is used.</li>
+<li><code>objcopy --target=efi-app-ia64</code> is used to create <code>PE32+</code> file
+out of <code>ELF64</code>. Very dark magic.</li>
 </ul>
-<p>Luckily <strong>gnu-efi</strong> and <strong>elilo</strong> have <a href="https://sourceforge.net/p/gnu-efi/code/ci/master/tree/README.gnuefi">superb documentation</a>
-(10 pages). All the obscure corners are explained in every detail. <strong>Part 2: Inner Workings</strong> is the short description
-of how every dynamic linker works with a light touch of <strong>ELF</strong> -&gt; <strong>PE32+</strong> conversion. I wish I have
-seen this doc years ago :)</p>
-<p>Let’s looks at the <strong>elf_ia64_efi.lds</strong> linker script to get full understanding
-of where every byte comes from when <strong>elilo.so</strong> is being linked
-(<a href="https://sourceforge.net/p/gnu-efi/code/ci/master/tree/gnuefi/elf_ia64_efi.lds">sourceforge viewer</a>):</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode c++"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>OUTPUT_FORMAT<span class="op">(</span><span class="st">&quot;elf64-ia64-little&quot;</span><span class="op">)</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>OUTPUT_ARCH<span class="op">(</span>ia64<span class="op">)</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>ENTRY<span class="op">(</span>_start_plabel<span class="op">)</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>SECTIONS</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>  ImageBase <span class="op">=</span> <span class="op">.;</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>hash <span class="op">:</span> <span class="op">{</span> <span class="op">*(.</span>hash<span class="op">)</span> <span class="op">}</span><span class="co">/* this MUST come first! */</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>text <span class="op">:</span></span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>   _text <span class="op">=</span> <span class="op">.;</span></span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>text<span class="op">)</span></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>text<span class="op">.*)</span></span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>gnu<span class="op">.</span>linkonce<span class="op">.</span>t<span class="op">.*)</span></span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>   <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">16</span><span class="op">);</span></span>
-<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>  _etext <span class="op">=</span> <span class="op">.;</span></span>
-<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>  _text_size <span class="op">=</span> <span class="op">.</span> <span class="op">-</span> _text<span class="op">;</span></span>
-<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>  __gp <span class="op">=</span> ALIGN <span class="op">(</span><span class="dv">8</span><span class="op">)</span> <span class="op">+</span> <span class="bn">0x200000</span><span class="op">;</span></span>
-<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>sdata <span class="op">:</span></span>
-<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>   _data <span class="op">=</span> <span class="op">.;</span></span>
-<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>got<span class="op">.</span>plt<span class="op">)</span></span>
-<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>got<span class="op">)</span></span>
-<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>srodata<span class="op">)</span></span>
-<span id="cb7-28"><a href="#cb7-28" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>sdata<span class="op">)</span></span>
-<span id="cb7-29"><a href="#cb7-29" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>sbss<span class="op">)</span></span>
-<span id="cb7-30"><a href="#cb7-30" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>scommon<span class="op">)</span></span>
-<span id="cb7-31"><a href="#cb7-31" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb7-32"><a href="#cb7-32" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-33"><a href="#cb7-33" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>data <span class="op">:</span></span>
-<span id="cb7-34"><a href="#cb7-34" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb7-35"><a href="#cb7-35" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>rodata<span class="op">*)</span></span>
-<span id="cb7-36"><a href="#cb7-36" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>ctors<span class="op">)</span></span>
-<span id="cb7-37"><a href="#cb7-37" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>data<span class="op">*)</span></span>
-<span id="cb7-38"><a href="#cb7-38" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>gnu<span class="op">.</span>linkonce<span class="op">.</span>d<span class="op">*)</span></span>
-<span id="cb7-39"><a href="#cb7-39" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>plabel<span class="op">)</span><span class="co">/* data whose relocs we want to ignore */</span></span>
-<span id="cb7-40"><a href="#cb7-40" aria-hidden="true" tabindex="-1"></a>   <span class="co">/* the EFI loader doesn't seem to like a .bss section, so we stick</span></span>
-<span id="cb7-41"><a href="#cb7-41" aria-hidden="true" tabindex="-1"></a><span class="co">      it all into .data: */</span></span>
-<span id="cb7-42"><a href="#cb7-42" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>dynbss<span class="op">)</span></span>
-<span id="cb7-43"><a href="#cb7-43" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(.</span>bss<span class="op">)</span></span>
-<span id="cb7-44"><a href="#cb7-44" aria-hidden="true" tabindex="-1"></a>   <span class="op">*(</span>COMMON<span class="op">)</span></span>
-<span id="cb7-45"><a href="#cb7-45" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb7-46"><a href="#cb7-46" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>note<span class="op">.</span>gnu<span class="op">.</span>build<span class="op">-</span>id <span class="op">:</span> <span class="op">{</span> <span class="op">*(.</span>note<span class="op">.</span>gnu<span class="op">.</span>build<span class="op">-</span>id<span class="op">)</span> <span class="op">}</span></span>
-<span id="cb7-47"><a href="#cb7-47" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-48"><a href="#cb7-48" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-49"><a href="#cb7-49" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>dynamic  <span class="op">:</span> <span class="op">{</span> <span class="op">*(.</span>dynamic<span class="op">)</span> <span class="op">}</span></span>
-<span id="cb7-50"><a href="#cb7-50" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-51"><a href="#cb7-51" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>rela <span class="op">:</span></span>
-<span id="cb7-52"><a href="#cb7-52" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb7-53"><a href="#cb7-53" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>text<span class="op">)</span></span>
-<span id="cb7-54"><a href="#cb7-54" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>data<span class="op">*)</span></span>
-<span id="cb7-55"><a href="#cb7-55" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>sdata<span class="op">)</span></span>
-<span id="cb7-56"><a href="#cb7-56" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>got<span class="op">)</span></span>
-<span id="cb7-57"><a href="#cb7-57" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>gnu<span class="op">.</span>linkonce<span class="op">.</span>d<span class="op">*)</span></span>
-<span id="cb7-58"><a href="#cb7-58" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>stab<span class="op">)</span></span>
-<span id="cb7-59"><a href="#cb7-59" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>ctors<span class="op">)</span></span>
-<span id="cb7-60"><a href="#cb7-60" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb7-61"><a href="#cb7-61" aria-hidden="true" tabindex="-1"></a>  _edata <span class="op">=</span> <span class="op">.;</span></span>
-<span id="cb7-62"><a href="#cb7-62" aria-hidden="true" tabindex="-1"></a>  _data_size <span class="op">=</span> <span class="op">.</span> <span class="op">-</span> _etext<span class="op">;</span></span>
-<span id="cb7-63"><a href="#cb7-63" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-64"><a href="#cb7-64" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>reloc <span class="op">:</span><span class="co">/* This is the PECOFF .reloc section! */</span></span>
-<span id="cb7-65"><a href="#cb7-65" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb7-66"><a href="#cb7-66" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>reloc<span class="op">)</span></span>
-<span id="cb7-67"><a href="#cb7-67" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb7-68"><a href="#cb7-68" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-69"><a href="#cb7-69" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>dynsym   <span class="op">:</span> <span class="op">{</span> <span class="op">*(.</span>dynsym<span class="op">)</span> <span class="op">}</span></span>
-<span id="cb7-70"><a href="#cb7-70" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span> <span class="op">=</span> ALIGN<span class="op">(</span><span class="dv">4096</span><span class="op">);</span></span>
-<span id="cb7-71"><a href="#cb7-71" aria-hidden="true" tabindex="-1"></a>  <span class="op">.</span>dynstr   <span class="op">:</span> <span class="op">{</span> <span class="op">*(.</span>dynstr<span class="op">)</span> <span class="op">}</span></span>
-<span id="cb7-72"><a href="#cb7-72" aria-hidden="true" tabindex="-1"></a>  <span class="op">/</span>DISCARD<span class="op">/</span> <span class="op">:</span></span>
-<span id="cb7-73"><a href="#cb7-73" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb7-74"><a href="#cb7-74" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>plabel<span class="op">)</span></span>
-<span id="cb7-75"><a href="#cb7-75" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>rela<span class="op">.</span>reloc<span class="op">)</span></span>
-<span id="cb7-76"><a href="#cb7-76" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>IA_64<span class="op">.</span>unwind<span class="op">*)</span></span>
-<span id="cb7-77"><a href="#cb7-77" aria-hidden="true" tabindex="-1"></a>    <span class="op">*(.</span>IA64<span class="op">.</span>unwind<span class="op">*)</span></span>
-<span id="cb7-78"><a href="#cb7-78" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb7-79"><a href="#cb7-79" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Even though the file is very big it’s easy to read. Linker script defines symbols (as <strong>symbol = expression</strong>,
-<strong>.</strong> (dot) means “current address”) and output section (as <strong>.output-section : { expressions }</strong>) in terms of
-input sections.</p>
-<p>Here is what linker script tries to achieve:</p>
+<p>Luckily <code>gnu-efi</code> and <code>elilo</code> have <a href="https://sourceforge.net/p/gnu-efi/code/ci/master/tree/README.gnuefi">superb
+documentation</a>
+(10 pages). All the obscure corners are explained in every detail.
+<code>Part 2: Inner Workings</code> is the short description of how every dynamic
+linker works with a light touch of <code>ELF</code> -&gt; <code>PE32+</code> conversion. I
+wish I have seen this doc years ago :)
+Let’s looks at the <code>elf_ia64_efi.lds</code> linker script to get full
+understanding of where every byte comes from when <code>elilo.so</code> is being
+linked (<a href="https://sourceforge.net/p/gnu-efi/code/ci/master/tree/gnuefi/elf_ia64_efi.lds">sourceforge
+viewer</a>):</p>
+<pre><code>OUTPUT_FORMAT(&quot;elf64-ia64-little&quot;)
+OUTPUT_ARCH(ia64)
+ENTRY(_start_plabel)
+SECTIONS
+{
+  . = 0;
+  ImageBase = .;
+  .hash : { *(.hash) }/* this MUST come first! */
+  . = ALIGN(4096);
+  .text :
+  {
+   _text = .;
+   *(.text)
+   *(.text.*)
+   *(.gnu.linkonce.t.*)
+   . = ALIGN(16);
+  }
+  _etext = .;
+  _text_size = . - _text;
+  . = ALIGN(4096);
+  __gp = ALIGN (8) + 0x200000;
+  .sdata :
+  {
+   _data = .;
+   *(.got.plt)
+   *(.got)
+   *(.srodata)
+   *(.sdata)
+   *(.sbss)
+   *(.scommon)
+  }
+  . = ALIGN(4096);
+  .data :
+  {
+   *(.rodata*)
+   *(.ctors)
+   *(.data*)
+   *(.gnu.linkonce.d*)
+   *(.plabel)/* data whose relocs we want to ignore */
+   /* the EFI loader doesn't seem to like a .bss section, so we stick
+      it all into .data: */
+   *(.dynbss)
+   *(.bss)
+   *(COMMON)
+  }
+  .note.gnu.build-id : { *(.note.gnu.build-id) }
+
+  . = ALIGN(4096);
+  .dynamic  : { *(.dynamic) }
+  . = ALIGN(4096);
+  .rela :
+  {
+    *(.rela.text)
+    *(.rela.data*)
+    *(.rela.sdata)
+    *(.rela.got)
+    *(.rela.gnu.linkonce.d*)
+    *(.rela.stab)
+    *(.rela.ctors)
+  }
+  _edata = .;
+  _data_size = . - _etext;
+  . = ALIGN(4096);
+  .reloc :/* This is the PECOFF .reloc section! */
+  {
+    *(.reloc)
+  }
+  . = ALIGN(4096);
+  .dynsym   : { *(.dynsym) }
+  . = ALIGN(4096);
+  .dynstr   : { *(.dynstr) }
+  /DISCARD/ :
+  {
+    *(.rela.plabel)
+    *(.rela.reloc)
+    *(.IA_64.unwind*)
+    *(.IA64.unwind*)
+  }
+}</code></pre>
+<p>Even though the file is very big it’s easy to read. Linker script
+defines symbols (as <code>symbol = expression</code>, <code>.</code> (dot) means “current
+address”) and output section (as *<code>output-section : { expressions }</code>)
+in terms of input sections.
+Here is what linker script tries to achieve:</p>
 <ul>
-<li><strong>. = 0;</strong> sets load address to <strong>0</strong>. It does not really matter. At load time module will be relocated anyway.</li>
-<li><strong>ImageBase = .</strong> means that new symbol <strong>ImageBase</strong> is created and pointed at current address:
-the very start of the whole output as nothing was collected yet.</li>
-<li><strong>.hash : { *(.hash) }</strong> means to collect all <strong>DT_HASH</strong> input symbol sections into output <strong>DT_HASH</strong> section.
-<strong>DT_HASH</strong> defines mandatory section of fast symbol lookup. Linker uses that section to resolve symbol name to
-symbol type and offset in the file.</li>
-<li><strong>. = ALIGN(4096)</strong> forces linker to pad output (with zeros) to <strong>4K</strong> boundary (<strong>EFI</strong> defines page size as <strong>4K</strong>).</li>
-<li>Only then goes <strong>.text : …</strong> section. <strong>BaseOfCode</strong> is the very first byte of <strong>.text</strong> section.</li>
+<li><code>. = 0;</code> sets load address to <code>0</code>. It does not really matter. At
+load time module will be relocated anyway.</li>
+<li><code>ImageBase = .</code> means that the new symbol <code>ImageBase</code> is created and
+pointed at current address: the very start of the whole output as
+nothing was collected yet.</li>
+<li><code>.hash : { *(.hash) }</code> means to collect all <code>DT_HASH</code> input
+symbol sections into output <code>DT_HASH</code> section. <code>DT_HASH</code> defines
+mandatory section of fast symbol lookup. Linker uses that section to
+resolve symbol name to symbol type and offset in the file.</li>
+<li><code>. = ALIGN(4096)</code> forces linker to pad output (with zeros) to <code>4K</code>
+boundary (<code>EFI</code> defines page size as <code>4K</code>).</li>
+<li>Only then goes <code>.text : ...</code> section. <code>BaseOfCode</code> is the very
+first byte of <code>.text</code> section.</li>
 <li>Other things go below.</li>
 </ul>
-<h1 id="gnu-hash-mystery">GNU hash mystery</h1>
-<p>Later <strong>objcopy</strong> is used to produce final (<strong>PE32+</strong>) binary by copying whitelisted sections passed via <strong>-j</strong>:</p>
+<h2 id="gnu-hash-mystery">GNU hash mystery</h2>
+<p>Later <code>objcopy</code> is used to produce final (<code>PE32+</code>) binary by copying
+whitelisted sections passed via <code>-j</code>:</p>
 <pre><code>objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym -j .rel \
         -j .rela -j .reloc --target=efi-app-ia64 elilo.so elilo.efi</code></pre>
-<p>While <strong>objcopy</strong> does not copy <strong>.hash</strong> section into final binary it’s mere presence in <strong>elilo.so</strong> file
-changes <strong>.text</strong> offset as linker already allocated space for it in <strong>elilo.so</strong> and resolved other reloactions
-taking offset into account.</p>
-<p>So why offset disappeared? Simple! Because <strong>gentoo</strong> does not generate <strong>.hash</strong> sections <a href="https://bugs.gentoo.org/575300#c20">since 2014</a>!
-<strong>.gnu.hash</strong> (<strong>DT_GNU_HASH</strong>) is being used instead. <strong>DT_GNU_HASH</strong> was <a href="https://sourceware.org/ml/binutils/2006-06/msg00418.html">added to binutils/glibc</a>
-around 2006 as an optional mechanism to speed up dynamic linking and dynamic loading.</p>
-<p>But linker script does not deal with <strong>.gnu.hash</strong> sections!</p>
-<p>It’s easy to mimic handling of both section types:</p>
+<p>While <code>objcopy</code> does not copy <code>.hash</code> section into final binary
+it’s mere presence in <code>elilo.so</code> file changes <code>.text</code> offset as
+linker already allocated space for it in <code>elilo.so</code> and resolved other
+relocations taking offset into account.
+So why offset disappeared? Simple! Because <code>gentoo</code> does not generate
+<code>.hash</code> sections <a href="https://bugs.gentoo.org/575300#c20">since 2014</a>!
+<code>.gnu.hash</code> (<strong>DT_GNU_HASH</strong>) is being used instead. <code>DT_GNU_HASH</code>
+was <a href="https://sourceware.org/ml/binutils/2006-06/msg00418.html">added to
+binutils/glibc</a>
+around 2006 as an optional mechanism to speed up dynamic linking and
+dynamic loading.
+But linker script does not deal with <code>.gnu.hash</code> sections!
+It’s easy to mimic handling of both section types:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gnuefi/elf_ia64_efi.lds</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gnuefi/elf_ia64_efi.lds</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -7,2 +7,3 @@ SECTIONS</span></span>
 <span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>   ImageBase = .;</span>
 <span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>   .hash : { *(.hash) } /* this MUST come first! */</span>
 <span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="va">+  .gnu.hash : { *(.gnu.hash) }</span></span></code></pre></div>
-<p>This fix alone was enough to restore <strong>elilo.efi</strong>! A few other architectures
-did not handle it either. See full <a href="https://sourceforge.net/p/gnu-efi/code/ci/2cc0b085fb82e80d43cc08c8376dff9f9532a72d/">upstream fix</a>.</p>
-<h1 id="breakage-mechanics">Breakage mechanics</h1>
-<p>But why does it matter? What does it mean to drop <strong>.hash</strong> section completely?
-<strong>PE</strong> format does not have a <strong>.hash</strong> equivalent.</p>
-<p>Let’s inspect what actually changes in <strong>elilo.so</strong> file before and after the patch:</p>
+<p>This fix alone was enough to restore <code>elilo.efi</code>! A few other
+architectures did not handle it either. See full <a href="https://sourceforge.net/p/gnu-efi/code/ci/2cc0b085fb82e80d43cc08c8376dff9f9532a72d/">upstream
+fix</a>.</p>
+<h2 id="breakage-mechanics">Breakage mechanics</h2>
+<p>But why does it matter? What does it mean to drop <code>.hash</code> section
+completely? <code>PE</code> format does not have a <code>.hash</code> equivalent.
+Let’s inspect what actually changes in <code>elilo.so</code> file before and
+after the patch:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>$ objdump -x elilo.efi.no.gnu.hash &gt; elilo.efi.no.gnu.hash.od</span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>$ objdump -x elilo.efi.gnu.hash &gt; elilo.efi.gnu.hash.od</span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="kw">--- elilo.efi.no.gnu.hash.od    2018-01-29 23:05:25.776000000 +0000</span></span>
@@ -406,29 +443,32 @@ did not handle it either. See full <a href="https://sourceforge.net/p/gnu-efi/co
 <span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>...</span>
 <span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a><span class="va">+[583](sec  2)(fl 0x00)(ty   0)(scl   2) (nx 0) 0x0000000000000110 Optind</span></span>
 <span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>...</span></code></pre></div>
-<p>Here internal <strong>ImageBase</strong> symbol became external symbol! Which means <strong>EFI</strong>
-would have to resolve <strong>ImageBase</strong> at application startup. That’s why we have
-seen loader error (as opposed to <strong>elilo.efi</strong> runtime errors or kernel boot
-errors).</p>
-<p><strong>ELF</strong> spec says shared objects and dynamic executables are required to have
-<strong>.hash</strong> (or <strong>.gnu.hash</strong>) section to be valid executable but linker script
-did not maintain this requirement and all hell broke loose.</p>
-<p>Perhaps linker could be tweaked to report warnings when symbol table is missing from output file.
-But as you can see linker scripts are much more powerful than just implementing fixed output format.</p>
-<h1 id="fun-details">Fun details</h1>
-<p><strong>gnu-efi</strong> has a lot of other jewels!</p>
-<p>For example, entry point has to point to <strong>ia64</strong> function
-descriptor (<strong>FDESCR</strong>). <strong>FDESCR</strong> is a pair of pointers: pointer
-to code section (actual entry point) and value of <strong>gp</strong> register
-(global pointer, base pointer used by <strong>PIC</strong> code).</p>
-<p>These two pointers are both absolute addresses. But <strong>EFI</strong> application
-needs to be relocatable (loadable at different addresses).</p>
-<p>Entry point <strong>FDESCR</strong> needs to be relocated by <strong>EFI</strong> loader.</p>
-<p>How would you inject <strong>ia64</strong> relocation to two 64-bit pointers in
-<strong>PE32+</strong> format? <strong>gnu-efi</strong> does a very crazy thing (even more crazy
-than relying on <strong>objcopy</strong> to Just Work)): it injects
-<strong>PE32+</strong> relocation directly into <strong>ia64</strong> <strong>ELF</strong> code! That’s how
-it does the trick (the snippet below is the very tail of <a href="https://sourceforge.net/p/gnu-efi/code/ci/master/tree/gnuefi/crt0-efi-ia64.S">crt0-efi-ia64.S file</a>):</p>
+<p>Here internal <code>ImageBase</code> symbol became external symbol! Which means
+<code>EFI</code> would have to resolve <code>ImageBase</code> at application startup.
+That’s why we have seen loader error (as opposed to <code>elilo.efi</code>
+runtime errors or kernel boot errors).
+<code>ELF</code> spec says shared objects and dynamic executables are required to
+have <code>.hash</code> (or <code>.gnu.hash</code>) section to be valid executable but
+linker script did not maintain this requirement and all hell broke
+loose.
+Perhaps linker could be tweaked to report warnings when symbol table is
+missing from output file. But as you can see linker scripts are much
+more powerful than just implementing fixed output format.</p>
+<h2 id="fun-details">Fun details</h2>
+<p><code>gnu-efi</code> has a lot of other jewels!</p>
+<p>For example, entry point has to point to <code>ia64</code> function descriptor
+(<code>FDESCR</code>). <code>FDESCR</code> is a pair of pointers: pointer to code section
+(actual entry point) and value of <code>gp</code> register (global pointer, base
+pointer used by <code>PIC</code> code).
+These two pointers are both absolute addresses. But <code>EFI</code> application
+needs to be relocatable (loadable at different addresses).
+Entry point <code>FDESCR</code> needs to be relocated by <code>EFI</code> loader.
+How would you inject <code>ia64</code> relocation to two 64-bit pointers in
+`<code>PE32+</code> format? <code>gnu-efi</code> does a very crazy thing (even more crazy
+than relying on <code>objcopy</code> to Just Work)): it injects <code>PE32+</code>
+relocation directly into <code>ia64</code> <code>ELF</code> code! That’s how it does the
+trick (the snippet below is the very tail of <a href="https://sourceforge.net/p/gnu-efi/code/ci/master/tree/gnuefi/crt0-efi-ia64.S">crt0-efi-ia64.S
+file</a>):</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>// PE32<span class="op">+</span> wants a PLABEL<span class="op">,</span> <span class="op">not</span> the code address of the entry point<span class="op">:</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>.<span class="bu">align</span> <span class="dv">16</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>.global _start_plabel</span>
@@ -448,23 +488,30 @@ it does the trick (the snippet below is the very tail of <a href="https://source
 <span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>    data2    <span class="op">(</span>IMAGE_REL_BASED_DIR64<span class="op">&lt;&lt;</span><span class="dv">12</span><span class="op">)</span> <span class="op">+</span>  <span class="dv">8</span> <span class="op">//</span> reloc for plabel<span class="st">'s global pointer</span></span></code></pre></div>
 <p>This code generates two sections:</p>
 <ul>
-<li><strong>.plabel</strong> with yet unrelocated <strong>_start</strong> and <strong>_gp</strong> pointers (crafts <strong>FDESCR</strong> itself)</li>
-<li><strong>.reloc</strong> with synthesised raw bytes that look like <strong>PE32+</strong> relocation. It’s format is
-slightly more complicated and is defined by <strong>PE32+</strong> spec:
+<li><code>.plabel</code> with yet unrelocated <code>_start</code> and <code>_gp</code> pointers
+(crafts <code>FDESCR</code> itself)</li>
+<li><code>.reloc</code> with synthesised raw bytes that look like <code>PE32+</code>
+relocation. It’s format is slightly more complicated and is defined
+by <code>PE32+</code> spec:
 <ul>
-<li>[4 bytes] 32-bit offset to some blob where relocations are to be applied, in our case it’s <strong>_start_plabel</strong></li>
-<li>[4 bytes] full size of this relocation entry</li>
-<li>[2 bytes * N relocations] list of tuples: (4 bits for relocation type, 12-bit offset to data to relocate)</li>
+<li><code>[4 bytes]</code> 32-bit offset to some blob where relocations are to be
+applied, in our case it’s <code>_start_plabel</code></li>
+<li><code>[4 bytes]</code> full size of this relocation entry</li>
+<li><code>[2 bytes * N relocations]</code> list of tuples: (4 bits for relocation
+type, 12-bit offset to data to relocate)</li>
 </ul></li>
 </ul>
-<p>Here we have two relocations that add <strong>ImageBase</strong>: to <strong>_start</strong> and to <strong>_gp</strong>.
-And it’s precisely these two relocations that <strong>EFI</strong> loader reported as invalid:</p>
+<p>Here we have two relocations that add <code>ImageBase</code>: to <code>_start</code> and
+to <code>_gp</code>. And it’s precisely these two relocations that <code>EFI</code>
+loader reported as invalid:</p>
 <pre><code>ImageAddress: pointer is outside of image
 ImageAddress: pointer is outside of image
 LoadPe: Section 1 was not loaded</code></pre>
-<p>Before <strong>.gnu.hash</strong> fix <strong>ImageBase</strong> (<strong>ImageAddress</strong> in <strong>EFI</strong> terminology) was indeed pointing somewhere else.</p>
-<p>How about searching internets for source of this <strong>EFI</strong> loader error? <strong>tianocode</strong> has
-<a href="https://github.com/tianocore/edk2/blob/master/DuetPkg/EfiLdr/PeLoader.c#L324">one hit</a>
+<p>Before <code>.gnu.hash</code> fix <code>ImageBase</code> (<code>ImageAddress</code> in <code>EFI</code>
+terminology) was indeed pointing somewhere else.
+How about searching internets for source of this <code>EFI</code> loader error?
+<code>tianocore</code> has <a href="https://github.com/tianocore/edk2/blob/master/DuetPkg/EfiLdr/PeLoader.c#L324">one
+hit</a>
 in commented out code:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">//...</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>Base <span class="op">=</span> EfiLdrPeCoffImageAddress <span class="op">(</span>Image<span class="op">,</span> <span class="op">(</span>UINTN<span class="op">)</span>Section<span class="op">-&gt;</span>VirtualAddress<span class="op">);</span></span>
@@ -477,13 +524,15 @@ in commented out code:</p>
 <span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
 <span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="co">//...</span></span></code></pre></div>
 <p>Not very useful but still fun :)</p>
-<h1 id="parting-words">Parting words</h1>
-<p>Itanium was the first system <strong>EFI</strong> was targeted at and was later morphed into <strong>UEFI</strong>.
-Surprisingly I managed to ignore <strong>(U)EFI</strong>-based boot on modern machines and this bug
-was my first experience to deal with it. And it was not too bad! :)</p>
-<p>I found out a few things along the way:</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>Itanium</code> was the first system <code>EFI</code> was targeted at and was later
+morphed into <code>UEFI</code>. Surprisingly I managed to ignore <code>(U)EFI</code>-based
+boot on modern machines and this bug was my first experience to deal
+with it. And it was not too bad! :)
+I found out a few things along the way:</p>
 <ul>
-<li><strong>ia64</strong> <strong>EFI</strong> is a rich interface to <strong>OS</strong> and <strong>iLO</strong> to control the machine remotely</li>
+<li><code>ia64</code> <code>EFI</code> is a rich interface to <code>OS</code> and <code>iLO</code> to control
+the machine remotely</li>
 <li>Linker scripts can do a lot more than I realized:
 <ul>
 <li>merge sections</li>
@@ -492,12 +541,13 @@ was my first experience to deal with it. And it was not too bad! :)</p>
 <li>handle alignments</li>
 <li>rename sections</li>
 </ul></li>
-<li>With certain care <strong>objcopy</strong> can convert binaries across different object file formats.
-In this case <strong>ELF64</strong> to <strong>PE32+</strong></li>
-<li>Assembler allows you to inject absolutely arbitrary sections into object files. Just make
-sure you handle those in your linker script.</li>
-<li>Modern GNU toolchain still can breathe life into decade old hardware to teach us a trick or two.</li>
-<li><strong>objdump -x</strong> is a cool equivalent of <strong>readelf</strong>.</li>
+<li>With certain care <code>objcopy</code> can convert binaries across different
+object file formats. In this case <code>ELF64</code> to <code>PE32+</code></li>
+<li>Assembler allows you to inject absolutely arbitrary sections into
+object files. Just make sure you handle those in your linker script.</li>
+<li>Modern GNU toolchain still can breathe life into decade old hardware
+to teach us a trick or two.</li>
+<li><code>objdump -x</code> is a cool equivalent of <code>readelf</code>.</li>
 </ul>
 <p>Have fun!</p>
         </div>
