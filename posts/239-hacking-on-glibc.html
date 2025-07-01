@@ -30,25 +30,25 @@
             
 
             <h1 id="intro">Intro</h1>
-<p>Sometimes it’s useful to check fresh <strong>glibc</strong> out and test a fix
-against it. Or add a few <strong>printf()</strong> statements into relevant modules.
+<p>Sometimes it’s useful to check fresh <code>glibc</code> out and test a fix
+against it. Or add a few <code>printf()</code> statements into relevant modules.
 Fun past cases of the above are
 <a href="../posts/189-glibc-on-ia64-or-how-relocations-bootstrap.html">here</a>,
 <a href="../posts/205-stack-protection-on-mips64.html">here</a> and
-<a href="../posts/209-tracking-down-mysterious-memory-corruption.html">here</a>.</p>
-<p>We’ll look in more detail how to build and use local glibc for debugging
+<a href="../posts/209-tracking-down-mysterious-memory-corruption.html">here</a>.
+We’ll look in more detail how to build and use local <code>glibc</code> for debugging
 purposes. I’ll focus on redirecting the toolchain (and not on the ways to
-break glibc with rare <strong>CFLAGS</strong> or configure <strong>--options</strong>). That would
-be a separate big and entertaining topic :)</p>
-<p>It also might be useful for folks who deal with systems that involve
-multiple <strong>glibc</strong> versions present in the system simultaneously
+break <code>glibc</code> with rare <code>CFLAGS</code> or configure <code>--options</code>). That would
+be a separate big and entertaining topic :)
+It also might be useful for folks who deal with systems that involve
+multiple <code>glibc</code> versions present in the system simultaneously
 (for bootstrap, embedded development or testing purposes).</p>
-<h1 id="hello-world-anatomy">Hello World anatomy</h1>
-<p>Suppose you have just built a fresh experimental <strong>glibc</strong> version.
+<h2 id="hello-world-anatomy">Hello World anatomy</h2>
+<p>Suppose you have just built a fresh experimental <code>glibc</code> version.
 How do you build and run a simple “hello world” program against it
-without modifying already installed system <strong>glibc</strong> and <strong>gcc</strong>?</p>
-<p>Let’s dissect a simple “hello world” in detail and try to extract
-a few assumptions that <strong>gcc</strong> and <strong>binutils</strong> already embeds.
+without modifying already installed system <code>glibc</code> and <code>gcc</code>?
+Let’s dissect a simple “hello world” in detail and try to extract
+a few assumptions that <code>gcc</code> and <code>binutils</code> already embed.
 Here is our specimen:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// hello.c:</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
@@ -58,17 +58,17 @@ Here is our specimen:</p>
 $ gcc hello.o -o hello
 $ ./hello
 hello!</code></pre>
-<p>If you are somewhat familiar with the C toolchain you might already know
+<p>If you are somewhat familiar with the <code>c</code> toolchain you might already know
 that there are a few stages involved:</p>
 <ul>
-<li><strong>compilation</strong>: C-source preprocessing (include substitution) and
-translation of preprocessed C-source file into <strong>.o</strong> file</li>
-<li><strong>linkage</strong>: <strong>.o</strong> files and their dependencies are joined together into
+<li><code>compilation</code>: <code>c</code>-source pre-processing (include substitution) and
+translation of pre-processed C-source file into an <code>.o</code> file</li>
+<li><code>linkage</code>: <code>.o</code> files and their dependencies are joined together into
 final executable file</li>
 </ul>
-<p>Let’s look at the preprocessing stage. Where do preprocessed headers
-come from? We can have a peek at it by looking at preprocessed output
-using <strong>-E</strong> flag:</p>
+<p>Let’s look at the pre-processing stage. Where do pre-processed headers
+come from? We can have a peek at it by looking at pre-processed output
+using <code>-E</code> flag:</p>
 <pre><code>$ gcc -E hello.c -o - | head -n 10 | unnix
 
 # 0 &quot;hello.c&quot;
@@ -82,9 +82,9 @@ using <strong>-E</strong> flag:</p>
 # 27 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/stdio.h&quot; 3 4
 # 1 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/bits/libc-header-start.h&quot; 1 3 4
 ...</code></pre>
-<p>As expected <strong>&lt;stdio.h&gt;</strong> comes from <strong>glibc</strong>. On <strong>FHS</strong> systems
-that is usually <strong>/usr/include</strong>.</p>
-<p>There also is another mysterious header: <strong>stdc-predef.h</strong> (also a <strong>glibc</strong>
+<p>As expected <code>&lt;stdio.h&gt;</code> comes from <code>glibc</code>. On <code>FHS</code> systems
+that is usually <code>/usr/include</code>.
+There also is another mysterious header: <code>stdc-predef.h</code> (also a <code>glibc</code>
 one). It gets added even into empty files:</p>
 <pre><code>$ echo | gcc -E - -o - | head -n 10 | unnix
 
@@ -94,12 +94,12 @@ one). It gets added even into empty files:</p>
 # 1 &quot;/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108-dev/include/stdc-predef.h&quot; 1 3 4
 # 0 &quot;&lt;command-line&gt;&quot; 2
 # 1 &quot;&lt;stdin&gt;&quot;</code></pre>
-<p><strong>stdc-predef.h</strong> is a header <strong>gcc</strong> knows to import if it targets <strong>glibc</strong>
-(but not other libcs): <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/glibc-c.cc" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/glibc-c.cc</a>.</p>
-<p>Preprocessing was straightforward. Ideally translation should not
-depend on glibc specifics. In practice it might but we’ll ignore it here.</p>
-<p>Let’s now look at linking phase.
-We’ll use <strong>-Wl,-t</strong> flag (thanks MaskRay!) to get details of what linker actually
+<p><code>stdc-predef.h</code> is a header <code>gcc</code> knows to import if it targets <code>glibc</code>
+(but not other <code>libcs</code>): <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/glibc-c.cc" class="uri">https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/config/glibc-c.cc</a>.</p>
+<p>Pre-processing was straightforward. Ideally translation should not
+depend on <code>glibc</code> specifics. In practice it might but we’ll ignore it here.
+Let’s now look at linking phase.
+We’ll use <code>-Wl,-t</code> flag (thanks MaskRay!) to get details of what linker actually
 pulls in:</p>
 <pre><code>$ LANG=C gcc hello.o -o hello -Wl,-t |&amp; unnix
 
@@ -124,35 +124,36 @@ hello.o
 /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/12.1.0/crtend.o
 /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crtn.o</code></pre>
 <p>That is a lot of output! But be not afraid. Some things repeat here 4
-times and inflate the output a bit.</p>
-<p>All these files above are used in linking process:</p>
+times and inflate the output a bit.
+All these files above are used in linking process:</p>
 <ul>
-<li><strong>crt{1,i,n}.o</strong>: <strong>glibc</strong>’s runtime startup and shutdown support files (<strong>__attribute__((contructor))</strong> support)</li>
-<li><strong>crt{begin,end}</strong>: <strong>gcc</strong>’s runtime startup and shutdown support files (c++ global constructor and destructor support)</li>
-<li><strong>hello.o</strong>: our own file!</li>
-<li><strong>libgcc.a</strong>, <strong>libgcc_s.so</strong>: <strong>gcc</strong>’s runtime support for primitives that compiler
+<li><code>crt{1,i,n}.o</code>: <code>glibc</code> runtime startup and shutdown support files (<code>__attribute__((contructor))</code> support)</li>
+<li><code>crt{begin,end}</code>: <code>gcc</code> runtime startup and shutdown support files (<code>c++</code> global constructor and destructor support)</li>
+<li><code>hello.o</code>: our own file!</li>
+<li><code>libgcc.a</code>, <code>libgcc_s.so</code>: <code>gcc</code> runtime support for primitives that compiler
 needs when CPU does not always provide as instructions (128-bit integer multiplication, stack unwinders,
-atomic promitives on unusual type size and similar).</li>
-<li><strong>libc.so</strong>, <strong>libc_nonshared.a</strong>: actual C library that implements <strong>puts()</strong> (<strong>printf()</strong>) and friends.</li>
-<li><strong>ld-linux-x86-64.so.2</strong>: <strong>glibc</strong>’s dynamic loader.</li>
+atomic primitives on unusual type size and similar).</li>
+<li><code>libc.so</code>, <code>libc_nonshared.a</code>: actual <code>c</code> library that implements <code>puts()</code> (<code>printf()</code>) and friends.</li>
+<li><code>ld-linux-x86-64.so.2</code>: <code>glibc</code> dynamic loader.</li>
 </ul>
-<h1 id="custom-glibc">Custom glibc</h1>
-<p>We found out that <strong>glibc</strong> provides us at least:</p>
+<h2 id="custom-glibc">Custom <code>glibc</code></h2>
+<p>We found out that <code>glibc</code> provides us at least:</p>
 <ul>
 <li>include headers</li>
-<li><strong>crt{1,i,n}.o</strong> object files</li>
-<li><strong>libc.so</strong> shared object files</li>
-<li><strong>libc_nonshared.a</strong> static library files</li>
-<li><strong>ld-linux-x86-64.so.2</strong>: dynamic loader</li>
+<li><code>crt{1,i,n}.o</code> object files</li>
+<li><code>libc.so</code> shared object files</li>
+<li><code>libc_nonshared.a</code> static library files</li>
+<li><code>ld-linux-x86-64.so.2</code>: dynamic loader</li>
 </ul>
-<p>Now we should be able to redirect all these pieces. Let’ build our custom glibc first:</p>
+<p>Now we should be able to redirect all these pieces. Let’ build our custom
+<code>glibc</code> first:</p>
 <pre><code>$ git clone https://sourceware.org/git/glibc.git /tmp/custom-glibc-src
 $ mkdir -p /tmp/custom-glibc-build /tmp/custom-glibc-install
 
 $ cd /tmp/custom-glibc-build
 $ /tmp/custom-glibc-src/configure --prefix=/tmp/custom-glibc-install
 $ make &amp;&amp; make install</code></pre>
-<p>We can already use resulting <strong>glibc</strong> to run other programs:</p>
+<p>We can already use resulting <code>glibc</code> to run other programs:</p>
 <pre><code>$ /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 --library-path /tmp/custom-glibc-install/lib $(which id)
 
 uid=1000(slyfox) gid=100(users) groups=100(users),1(wheel),26(video)
@@ -167,22 +168,22 @@ $ LD_DEBUG=all /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 --library-path
    2844932:     relocation processing: /tmp/custom-glibc-install/lib/librt.so.1 (lazy)
    2844932:     relocation processing: /run/current-system/sw/bin/id
    2844932:     relocation processing: /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2</code></pre>
-<p>I’m searching for “relocation” here as a hack to see all loaded files in memory.</p>
-<p>From the above we see that <strong>libc.so</strong>, <strong>libdl.so</strong> and
-<strong>libpthread.so</strong> are used from our custom <strong>glibc</strong>. But <strong>libattr.so</strong>
-(<strong>attr</strong> package), <strong>libacl.so</strong> (<strong>acl</strong> package), <strong>libcrypto.so</strong>
-(<strong>openssl</strong> package) are used from their current locations. It is safe
+<p>I’m searching for “relocation” here as a hack to see all loaded files in memory.
+From the above we see that <code>libc.so</code>, <code>libdl.so</code> and
+<code>libpthread.so</code> are used from our custom <code>glibc</code>. But <code>libattr.so</code>
+(<code>attr</code> package), <code>libacl.so</code> (<code>acl</code> package), <code>libcrypto.so</code>
+(<code>openssl</code> package) are used from their current locations. It is safe
 to load such libraries only if they were built against same or older
-<strong>glibc</strong> versions. All thanks to <strong>glibc</strong> being backwards compatible.</p>
-<p>If we would, say, use use <strong>glibc-2.8</strong> as a custom version things would
-probaby fail to load as those libraries depend on fresh symbols:</p>
+<code>glibc</code> versions. All thanks to <code>glibc</code> being backwards compatible.
+If we would, say, use use <code>glibc-2.8</code> as a custom version things would
+probably fail to load as those libraries depend on fresh symbols:</p>
 <pre><code>$ LD_DEBUG=all /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2 --library-path /tmp/custom-glibc-install/lib $(which id) |&amp; fgrep libcrypto | fgrep GLIBC_2.17 | unnix
     532869:     checking for version `GLIBC_2.17' in file /tmp/custom-glibc-install/lib/libc.so.6 [0] required by file /&lt;&lt;NIX&gt;&gt;/openssl-1.1.1m/lib/libcrypto.so.1.1 [0]</code></pre>
-<p>In this case <strong>id</strong> binary requires at least <strong>glibc-2.17</strong> (via <strong>libcrypto.so</strong> dependency).</p>
-<p>Ok, so running against modified glibc is straightforward. It would be
-useful to rebuild <strong>id</strong> (and <strong>openssl</strong>) against older <strong>glibc</strong>.
-Let’s now try building our toy example against modified <strong>glibc</strong>.</p>
-<p>To deal with preprocessor we can use <strong>-I</strong> option:</p>
+<p>In this case <code>id</code> binary requires at least <code>glibc-2.17</code> (via <code>libcrypto.so</code> dependency).
+Ok, so running against modified <code>glibc</code> is straightforward. It would be
+useful to rebuild <code>id</code> (and <code>openssl</code>) against older <code>glibc</code>.
+Let’s now try building our toy example against modified <code>glibc</code>.
+To deal with pre-processor we can use <code>-I</code> option:</p>
 <pre><code>$ gcc -E hello.c -o - -I/tmp/custom-glibc-install/include | head -n 10 | unnix
 # 0 &quot;hello.c&quot;
 # 0 &quot;&lt;built-in&gt;&quot;
@@ -195,10 +196,10 @@ Let’s now try building our toy example against modified <strong>glibc</strong>
 # 27 &quot;/tmp/custom-glibc-install/include/stdio.h&quot;
 # 1 &quot;/tmp/custom-glibc-install/include/bits/libc-header-start.h&quot; 1
 ...</code></pre>
-<p>For complex cases <strong>gcc</strong> supports many other flavours of handling include
-paths: <strong>-isystem</strong>, <strong>-idirafter</strong>, <strong>-isysroot</strong>, <strong>-iquote</strong> and
-many more :) We will use simplest <strong>-I</strong>.</p>
-<p>Now let’s deal with the <strong>libc.so</strong> location. Normally <strong>-L</strong> option would
+<p>For complex cases <code>gcc</code> supports many other flavours of handling include
+paths: <code>-isystem</code>, <code>-idirafter</code>, <code>-isysroot</code>, <code>-iquote</code> and
+many more. We will use simplest <code>-I</code>.
+Now let’s deal with the <code>libc.so</code> location. Normally <code>-L</code> option would
 be enough to specify library lookup path:</p>
 <pre><code>{ LANG=C gcc hello.o -o hello -Wl,--verbose -L/tmp/custom-glibc-install/lib | fgrep succeeded; } |&amp; unnix
 /&lt;&lt;NIX&gt;&gt;/binutils-2.35.2/bin/ld: /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crt1.o: in function `_start':
@@ -226,12 +227,16 @@ attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu
 attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/crtn.o succeeded</code></pre>
 <p>Almost worked!</p>
 <ul>
-<li><p>good: we successfully redirected <strong>libc.so.6</strong> and <strong>libc_nonshared.a</strong>
-(as expected); and even <strong>ld-linux-x86-64.so.2</strong> was redirected!</p></li>
-<li><p>bad: <strong>crt{1,i,n}.o</strong> set of files were not redirected; they are not exactly libraries, thus it’s fine.</p></li>
+<li>good: we successfully redirected <code>libc.so.6</code> and <code>libc_nonshared.a</code>
+(as expected); and even <code>ld-linux-x86-64.so.2</code> was redirected!</li>
+<li>bad: <code>crt{1,i,n}.o</code> set of files were not redirected; they are not
+exactly libraries, thus it’s expected.</li>
 </ul>
-<p><strong>crt{1,i,n}.o</strong> are still pulled in from system <strong>glibc</strong>. Such a mix of parts from different <strong>glibc</strong> versions causes linkage failure: <strong>undefined reference to ‘__libc_csu_fini’</strong>.</p>
-<p>Object files can be redirected with <strong>-B</strong> (or can be redirected with <strong>-nostartfiles /path/to/crt{1,i,n}.o</strong>):</p>
+<p><code>crt{1,i,n}.o</code> are still pulled in from system <code>glibc</code>. Such a mix of
+parts from different <code>glibc</code> versions causes linkage failure:
+<code>undefined reference to '__libc_csu_fini'</code>.
+Object files can be redirected with <code>-B</code> (or can be redirected with
+<code>-nostartfiles /path/to/crt{1,i,n}.o</code>):</p>
 <pre><code>$ LANG=C gcc hello.o -o hello -Wl,--verbose -L/tmp/custom-glibc-install/lib -B/tmp/custom-glibc-install/lib | fgrep succeeded |&amp; unnix
 attempt to open /tmp/custom-glibc-install/lib/crt1.o succeeded
 attempt to open /tmp/custom-glibc-install/lib/crti.o succeeded
@@ -251,9 +256,9 @@ attempt to open /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/libgcc_s.so.1 succeeded
 attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/libgcc.a succeeded
 attempt to open /&lt;&lt;NIX&gt;&gt;/gcc-11.2.0/lib/gcc/x86_64-unknown-linux-gnu/11.2.0/crtend.o succeeded
 attempt to open /tmp/custom-glibc-install/lib/crtn.o succeeded</code></pre>
-<p>Let’s ignore <strong>libgcc_s.so</strong> for now. It’s not really a part of <strong>glibc</strong> but
-a <strong>nixpkgs</strong> idiosyncrasy. The rest of <strong>glibc</strong> files is successfully redirected!</p>
-<p>Does final result look good now? Let’s try!</p>
+<p>Let’s ignore <code>libgcc_s.so</code> for now. It’s not really a part of <code>glibc</code> but
+a <code>nixpkgs</code> idiosyncrasy. The rest of <code>glibc</code> files is successfully redirected!
+Does final result look good now? Let’s try!</p>
 <pre><code>$ LANG=C ./hello
 Segmentation fault (core dumped)</code></pre>
 <p>Our program can’t even run. Why is that?</p>
@@ -261,8 +266,8 @@ Segmentation fault (core dumped)</code></pre>
    1359934:     relocation processing: /tmp/custom-glibc-install/lib/libc.so.6 (lazy)
    1359934:     relocation processing: ./hello (lazy)
    1359934:     relocation processing: /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-linux-x86-64.so.2</code></pre>
-<p><strong>LD_DEBUG=all</strong> hints at dynamic loader from our system <strong>glibc</strong>
-and not from custom <strong>glibc</strong>. That path is embedded into <strong>gcc</strong> itself:</p>
+<p><code>LD_DEBUG=all</code> hints at dynamic loader from our system <code>glibc</code>
+and not from custom <code>glibc</code>. That path is embedded into <code>gcc</code> itself:</p>
 <pre><code>gcc -dumpspecs |&amp; fgrep ld-linux | unnix
 ...
     -dynamic-linker %{muclibc:/lib/ld64-uClibc.so.0;:
@@ -270,9 +275,10 @@ and not from custom <strong>glibc</strong>. That path is embedded into <strong>g
                     %{mmusl:/&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib/ld-musl-x86_64.so.1;:
                     /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib64/ld-linux-x86-64.so.2}}}
 ...</code></pre>
-<p>Here linker spec always passes <strong>-dynamic-linker /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib64/ld-linux-x86-64.so.2</strong>
-path to the linker until it’s explicitly overridden. Let’s override it explicitly.</p>
-<p>Here is our final combined result of overriding headers, libraries,
+<p>Here linker spec always passes <code>-dynamic-linker /&lt;&lt;NIX&gt;&gt;/glibc-2.33-108/lib64/ld-linux-x86-64.so.2</code>
+path to the linker until it’s explicitly overridden. Let’s override it
+explicitly.
+Here is our final combined result of overriding headers, libraries,
 object files and dynamic linker:</p>
 <pre><code>$ gcc hello.c -o hello \
     -I/tmp/custom-glibc-install/include \
@@ -288,30 +294,30 @@ $ LD_DEBUG=all ./hello |&amp; fgrep reloc | unnix
    1398510:     relocation processing: /tmp/custom-glibc-install/lib/libc.so.6 (lazy)
    1398510:     relocation processing: ./hello (lazy)
    1398510:     relocation processing: /tmp/custom-glibc-install/lib/ld-linux-x86-64.so.2</code></pre>
-<p>Success! We completely untangled from host’s <strong>glibc</strong>.</p>
-<p>Sometimes (usually in bare-metal space) it’s easier to drop defaults
+<p>Success! We completely untangled from host’s <code>glibc</code>.
+Sometimes (usually in bare-metal space) it’s easier to drop defaults
 entirely and specify all the dependencies as explicit arguments.
-A few related options you might want to explore in <strong>gcc</strong> are:</p>
+A few related options you might want to explore in <code>gcc</code> are:</p>
 <ul>
-<li><strong>-nostdinc</strong></li>
-<li><strong>-nostdlib</strong></li>
-<li><strong>-nolibc</strong></li>
-<li><strong>-nodefaultlibs</strong></li>
-<li><strong>-nostartfiles</strong></li>
-<li><strong>-ffreestanding</strong></li>
+<li><code>-nostdinc</code></li>
+<li><code>-nostdlib</code></li>
+<li><code>-nolibc</code></li>
+<li><code>-nodefaultlibs</code></li>
+<li><code>-nostartfiles</code></li>
+<li><code>-ffreestanding</code></li>
 </ul>
 <p>They explicitly disable search paths or object files inclusion for:
-include paths, startup files or standard and runtime support libraries.
+include paths, start up files or standard and runtime support libraries.
 Their interaction is subtle. I won’t get into detail here either.</p>
-<h1 id="parting-words">Parting words</h1>
-<p>It is straightforward to experiment with new <strong>glibc</strong> without damaging
+<h2 id="parting-words">Parting words</h2>
+<p>It is straightforward to experiment with new <code>glibc</code> without damaging
 your main install on most Linux distributions. Just make sure you set the
 environment up correctly and override all the bits.</p>
-<p><strong>glibc</strong> has many moving parts to watch for when you replace parts of
-it: headers (<strong>-I</strong>), object files (<strong>-B</strong>), shared libraris (<strong>-L</strong>),
-static libraries (also <strong>-L</strong>) and dynamic linker (<strong>ld-linux-x86-64.so.2</strong>).</p>
-<p><strong>LD_DEBUG=</strong> is extremely useful for dynamic loader debugging.</p>
-<p>Mixing parts from different <strong>glibc</strong> versions in a single binary is a
+<p><code>glibc</code> has many moving parts to watch for when you replace parts of
+it: headers (<code>-I</code>), object files (<code>-B</code>), shared libraries (<code>-L</code>),
+static libraries (also <code>-L</code>) and dynamic linker (<code>ld-linux-x86-64.so.2</code>).</p>
+<p><code>LD_DEBUG=</code> is extremely useful for dynamic loader debugging.</p>
+<p>Mixing parts from different <code>glibc</code> versions in a single binary is a
 sure way to get build failure and even runtime crashes.</p>
 <p>Have fun!</p>
         </div>
