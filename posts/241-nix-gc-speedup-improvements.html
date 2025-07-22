@@ -29,19 +29,19 @@
                 <div class="info">April  4, 2022</div>
             
 
-            <p>I wondered the other day: why my <strong>nix store gc</strong> takes an hour to run
+            <p>I wondered the other day: why does my <code>nix store gc</code> take an hour to run
 on a system with a few terabytes of garbage packages to clean up. Is it
-a typical time or could something be optimised to make it slightly
+a typical time or could something be optimized to make it slightly
 faster?</p>
-<p>I ran <strong>top</strong> while <strong>nix store gc</strong> was churning and noticed it was a
+<p>I ran <code>top</code> while <code>nix store gc</code> was churning and noticed it was a
 CPU-bound task. That was unusual.</p>
-<h1 id="background">Background</h1>
-<p><strong>nix</strong> package manager never changes files inplace when it installs new
-packages into <strong>/nix/store</strong>. This makes installation and uninstallation
-operations cheap: no need for <strong>sync()</strong>-style calls or file locks.</p>
+<h2 id="background">Background</h2>
+<p><code>nix</code> package manager never changes files in-place when it installs new
+packages into <code>/nix/store</code>. This makes installation and uninstallation
+operations cheap: no need for <code>sync()</code>-style calls or file locks.</p>
 <p>Single package installation could be viewed as 2 steps:</p>
 <ol type="1">
-<li>unpack new package to <strong>/nix/store/…-package-version</strong> (if it does
+<li>unpack new package to <code>/nix/store/...-package-version</code> (if it does
 not already exist)</li>
 <li>refer to unpacked files (usually via symlinks, via
 scripts, configs or embedded binary)</li>
@@ -51,37 +51,36 @@ scripts, configs or embedded binary)</li>
 <li>stop referring to the package (by creating a new closure of needed packages)</li>
 </ol>
 <p>This procedure does not require any file or directory removal.
-On <strong>NixOS</strong> it’s a matter of updating a single <strong>/run/current-system</strong>
-symlink.</p>
-<p>As a result over normal lifetime the system accumulates unreferenced
-packages as files and directories in <strong>/nix/store/</strong>. If you have enough
-storage you can completely ignore these unreferenced files.</p>
-<p>But sometimes it’s useful to delete unreferenced data to free up some
+On <code>NixOS</code> it’s a matter of updating a single <code>/run/current-system</code>
+symlink to get a new version of <code>NixOS</code> active.
+As a result over normal lifetime the system accumulates unreferenced
+packages as files and directories in <code>/nix/store/</code>. If you have enough
+storage you can completely ignore these unreferenced files.
+But sometimes it’s useful to delete unreferenced data to free up some
 space or to check that there are no missing references in current package
-closure. Such cleaning is done with <strong>nix-collect-garbage</strong>
-(or <strong>nix store gc</strong>). Or their lower level sibling
-<strong>nix-store --delete …</strong> (or <strong>nix store delete …</strong>).</p>
-<h1 id="actual-gc-speed">Actual GC speed</h1>
+closure. Such cleaning is done with <code>nix-collect-garbage</code>
+(or <code>nix store gc</code>). Or their lower level sibling
+<code>nix-store --delete ...</code> (or <code>nix store delete ...</code>).</p>
+<h2 id="actual-gc-speed">Actual <code>GC</code> speed</h2>
 <p>All the above sounds nice, but how fast that garbage collection is in
 practice? Should it take 1 second, 1 minute or 1 hour on an average
-system? On a heavily cluttered system?</p>
-<p>Let’s find out! I have 2 systems:</p>
+system? On a heavily cluttered system? Let’s find out! I have 2 systems:</p>
 <ol type="1">
-<li><p><strong>i7</strong> host: <strong>HDD</strong>-based 10+ years old web server with daily updates
-which never saw a garbage collection run. It’s whole <strong>/nix/store</strong>
+<li><p><code>i7</code> host: <code>HDD</code>-based 10+ years old web server with daily updates
+which never saw a garbage collection run. It’s whole <code>/nix/store</code>
 is 26GB.</p></li>
-<li><p><strong>nz</strong> host: <strong>NVMe</strong>-based 1 year old desktop where I build A Lot of
+<li><p><code>nz</code> host: <code>NVMe</code>-based 1 year old desktop where I build A Lot of
 packages daily and run garbage collection once a month. It’s whole
-<strong>/nix/store</strong> is <strong>380GB</strong>.</p></li>
+<code>/nix/store</code> is <code>380GB</code>.</p></li>
 </ol>
-<p><strong>i7</strong> dry run:</p>
+<p><code>i7</code> dry run:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real 3m18.522s
 ...</code></pre>
 <p>~200 seconds. Is it a lot? The process touches no disk. According to
-<strong>top</strong> it’s a CPU-bound problem. What does it do? Runnig
-<strong>perf top -p $pid</strong> shows the following:</p>
+<code>top</code> it’s a CPU-bound problem. What does it do? Running
+<code>perf top -p $pid</code> shows the following:</p>
 <pre><code>$ sudo perf top -p 6217
 &lt;wait 5 seconds&gt;
    6.82%  libstdc++.so.6.0.28  [.] std::istream::get
@@ -92,12 +91,12 @@ real 3m18.522s
    2.73%  libc-2.33.so         [.] malloc
    2.55%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec
    2.31%  [kernel]             [k] syscall_exit_to_user_mode</code></pre>
-<p>Looks like some string parsing and <strong>sqlite3</strong> reading. Could be
-optimised a bit around that strange <strong>std::istream::get</strong> but
+<p>Looks like some string parsing and <code>sqlite3</code> reading. Could be
+optimized a bit around that strange <code>std::istream::get</code> but
 otherwise looks reasonable. Not exactly an interactive latency,
 but not too bad if ran infrequently. Maybe there is just a lot
 to do in this case?</p>
-<p><strong>nz</strong> run:</p>
+<p><code>nz</code> run:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real    28m24,295s
@@ -116,14 +115,14 @@ with large amount of clutter? Let’s find out!</p>
    3,03%  libc-2.33.so         [.] malloc
    2,38%  libnixstore.so       [.] nix::parseString
    2,30%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec</code></pre>
-<p>The profile is very close to <strong>i7</strong> one: same <strong>std::istream::get</strong>
-at the top and a <strong>memcmp()</strong> implementation that follows.</p>
-<h1 id="the-first-attempt">The first attempt</h1>
-<p>Profile clearly tells us that <strong>istream</strong> related parsing is the
+<p>The profile is very close to <code>i7</code> one: same <code>std::istream::get</code>
+at the top and a <code>memcmp()</code> implementation that follows.</p>
+<h2 id="the-first-attempt">The first attempt</h2>
+<p>Profile clearly tells us that <code>istream</code> related parsing is the
 bottleneck.</p>
 <p>Quick quiz: does it?</p>
-<p>The parser is supposed to extract <strong>/nix/store</strong> references out of
-<strong>.drv</strong> files which usually look like the example below:</p>
+<p>The parser is supposed to extract <code>/nix/store</code> references out of
+<code>.drv</code> files which usually look like the example below:</p>
 <pre><code>$ nix show-derivation /nix/store/6xcvz9zp757knf005g4q1p451p6wslpk-ninja-1.10.2.drv
 
 {
@@ -158,41 +157,42 @@ bottleneck.</p>
       &quot;buildPhase&quot;: &quot;python configure.py --bootstrap\n# \&quot;./ninja -vn manual\&quot; output copied here to support cross compilation.\nasciidoc -b docbook -d book -o build/manual.xml doc/manual.asciidoc\nxsltproc --nonet doc/docbook.xsl build/manual.xml &gt; doc/manual.html\n&quot;,
       &quot;builder&quot;: &quot;/nix/store/v3rml3r7liky77iwipjg9bxmm874ra6g-bash-5.1-p12/bin/bash&quot;,
 ...</code></pre>
-<p>Here <strong>inputDrvs</strong>, <strong>inputSrcs</strong> and some <strong>env</strong> references are
+<p>Here <code>inputDrvs</code>, <code>inputSrcs</code> and some <code>env</code> references are
 interesting edges for garbage collector. But some are possibly not
-(like build-only <strong>env.builder</strong>).</p>
-<p>The parsing format looked trivial and I tried a quick hack to
-substitute <strong>istream</strong> for a manual parser in <a href="https://github.com/NixOS/nix/pull/6266" class="uri">https://github.com/NixOS/nix/pull/6266</a>.</p>
-<p>This gave a 25% speedup (7 minutes faster on <strong>nz</strong>). Sounds like a
-lot for a simple 80-line change.</p>
-<p>But Eelco did not see any speedup improvement on his system. Moreover
-Eelso’s GC times were ridiculously short: 17 seconds instead of minutes.</p>
-<p>That made me think: what is parser’s parse speed if I see so large
-an improvement? My system has to parse A Lot of <strong>.drv</strong> files to make
+(like build-only <code>env.builder</code>).
+The parsing format looked trivial and I tried a quick hack to
+substitute <code>istream</code> for a manual parser in <a href="https://github.com/NixOS/nix/pull/6266" class="uri">https://github.com/NixOS/nix/pull/6266</a>.
+This gave a 25% speedup (7 minutes faster on <code>nz</code>). Sounds like a
+lot for a simple 80-line change.
+But Eelco did not see any speedup improvement on his system. Moreover
+Eelso’s <code>GC</code> times were ridiculously short: 17 seconds instead of minutes.
+That made me think: what is parser’s parse speed if I see so large
+an improvement? My system has to parse A Lot of <code>.drv</code> files to make
 it measurable.</p>
 <p>To put the example into some abstract numbers:
-if parse speed is even as low as 100MB/s then running it for 7 minutes
-would be able to parse ~40GB of <strong>.drv</strong> files. I don’t have that many.
-All my <strong>/nix/store/*.drv</strong> files are ~1GB (~270K files).</p>
-<p>Does it mean my system parses the same files multiple times? Is my system
-somehow special to have many of them?</p>
-<p>Running <strong>strace -f</strong> against the <strong>nix-daemon</strong> confirmed that some of
-<strong>.drv</strong> files were opened and read repeatedly. That’s strange.</p>
-<h1 id="the-second-attempt">The second attempt</h1>
+if parse speed is even as low as <code>100MB/s</code> then running it for 7 minutes
+would be able to parse <code>~40GB</code> of <code>.drv</code> files. I don’t have that many.
+All my <code>/nix/store/*.drv</code> files are <code>~1GB</code> (<code>~270K</code> files).
+Does it mean my system parses the same files multiple times? Is my system
+somehow special to have many of them?
+Running <code>strace -f</code> against the <code>nix-daemon</code> confirmed that some of
+<code>.drv</code> files were opened and read repeatedly. That’s strange.</p>
+<h2 id="the-second-attempt">The second attempt</h2>
 <p>My naive understanding of graph traversal for garbage collection purposes
-told me that each node should be traversed once.</p>
-<p>I added a few <strong>debug()</strong> calls to
-<a href="https://github.com/NixOS/nix/blob/master/src/libstore/gc.cc">src/libstore/gc.cc</a>
-around repeated <strong>.drv</strong> visits and found … a bug!</p>
-<p>For some <strong>nix.conf</strong> setups (like the ones with
-<strong>keep-derivations = true</strong>) <strong>.drv</strong> files are themselves considered
+told me that each node should be traversed once.
+I added a few <code>debug()</code> calls to
+<a href="https://github.com/NixOS/nix/blob/master/src/libstore/gc.cc"><code>src/libstore/gc.cc</code></a>
+around repeated <code>.drv</code> visits and found … a bug!</p>
+<p>For some <code>nix.conf</code> setups (like the ones with
+<code>keep-derivations = true</code>) <code>.drv</code> files are themselves considered
 (implicit) referrers. They should be retained on garbage
-collection (live paths). By keeping related <strong>.drv</strong> files around
+collection (live paths). By keeping related <code>.drv</code> files around
 we keep possible prerequisites in case we want to rebuild a derivation.
 Which is handy for package development.</p>
-<p>The bug was in treatment of the <strong>.drv</strong> files: they were correctly traversed
-as referrers, but they were not added to <strong>alive</strong> set of visited nodes.
-As a result <strong>.drv</strong> file was visited every time some path pulled a <strong>.drv</strong> in.</p>
+<p>The bug was in treatment of the <code>.drv</code> files: they were correctly traversed
+as referrers, but they were not added to <code>alive</code> set of visited nodes.
+As a result <code>.drv</code> file was visited every time some path pulled a
+<code>.drv</code> in.</p>
 <p>Thus the fix was a two-liner: <a href="https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e" class="uri">https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e</a></p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/libstore/gc.cc</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/libstore/gc.cc</span></span>
@@ -206,14 +206,14 @@ As a result <strong>.drv</strong> file was visited every time some path pulled a
 <span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>                     for (auto &amp; p : closure)</span>
 <span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>                         alive.insert(p);</span>
 <span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>                 } catch (InvalidPath &amp;) { }</span></code></pre></div>
-<p>Before the change <strong>computeFSClosure()</strong> was called with implicit default
-<strong>gcKeepDerivations = false</strong> argument. After the change it started honoring
-user’s configuration.</p>
-<p>The fun thing is that <strong>keep-derivations = true</strong> is a default enabled option!
-Unless you switched it off explicitly you probably have it enabled on <strong>NixOS</strong>.</p>
-<h1 id="benchmarks">Benchmarks</h1>
+<p>Before the change <code>computeFSClosure()</code> was called with implicit default
+<code>gcKeepDerivations = false</code> argument. After the change it started honoring
+user’s configuration.
+The fun thing is that <code>keep-derivations = true</code> is a default enabled option!
+Unless you switched it off explicitly you probably have it enabled on <code>NixOS</code>.</p>
+<h2 id="benchmarks">Benchmarks</h2>
 <p>Let’s benchmark this change on the same setup as above. I plugged the patch
-into <strong>configuration.nix</strong> as:</p>
+into <code>configuration.nix</code> as:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>  nixpkgs<span class="op">.</span>overlays = <span class="op">[</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span><span class="va">final</span><span class="op">:</span> <span class="va">prev</span><span class="op">:</span> <span class="op">{</span> <span class="va">nix</span> <span class="op">=</span> prev<span class="op">.</span>nix<span class="op">.</span>overrideAttrs <span class="op">(</span><span class="va">oa</span><span class="op">:</span> <span class="op">{</span></span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>      <span class="va">patches</span> <span class="op">=</span> <span class="op">(</span>oa<span class="op">.</span>patches <span class="kw">or</span> <span class="op">[])</span> <span class="op">++</span> <span class="op">[</span> <span class="op">(</span>prev<span class="op">.</span>fetchpatch <span class="op">({</span></span>
@@ -223,22 +223,22 @@ into <strong>configuration.nix</strong> as:</p>
 <span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>      <span class="op">}))</span> <span class="op">];</span></span>
 <span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">});})</span></span>
 <span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">]</span>;</span></code></pre></div>
-<p><strong>i7</strong>:</p>
+<p><code>i7</code>:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real    0m7.403s
 ...</code></pre>
-<p>7 seconds compared to previous 200 seconds. ~29x speedup.</p>
-<p><strong>nz</strong>:</p>
+<p>7 seconds compared to previous 200 seconds. <code>~29x</code> speedup.</p>
+<p><code>nz</code>:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real    1m0,140s
 ...</code></pre>
-<p>60 seconds compared to previous 1800 seonds. ~30x speedup as well.</p>
-<h1 id="full-run">Full run</h1>
+<p>60 seconds compared to previous 1800 seconds. <code>~30x</code> speedup as well.</p>
+<h2 id="full-run">Full run</h2>
 <p>Time to run the actual garbage collection that includes file removal
 from disk and path unregistration from database:</p>
-<p><strong>i7</strong>:</p>
+<p><code>i7</code>:</p>
 <pre><code># dry run
 $ time nix store gc --dry-run
 
@@ -261,19 +261,19 @@ $ time nix store gc
 real    0m7.708s
 ...</code></pre>
 <p>Note that actual package removal is 5 times slower than
-GC dry run. This ratio depends a lot on how many files are
+<code>GC</code> dry run. This ratio depends a lot on how many files are
 to delete, what filesystem and what mode you are using.
 But the gist of it is that the difference is not that big
-compared to dry run.</p>
-<p>Dry-run before and after garbage collection did not change
+compared to dry run.
+Dry-run before and after garbage collection did not change
 much. This means we did not delete that many packages
 compared to alive set of packages. After the cleanup
-<strong>/nix/store</strong> is only 2.3GB with 2300 store paths.</p>
-<p>Thus we deleted about the half the store paths and about
-90% of content size.</p>
-<p>The speed of removal is about 70 store paths (packages)
+<code>/nix/store</code> is only <code>2.3GB</code> with 2300 store paths.
+Thus we deleted about the half the store paths and about
+90% of content size.
+The speed of removal is about 70 store paths (packages)
 per second.</p>
-<p><strong>nz</strong>:</p>
+<p><code>nz</code>:</p>
 <pre><code># dry run
 $ time nix store gc --dry-run
 
@@ -295,19 +295,19 @@ $ time nix store gc
 
 real    0m4,528s
 ...</code></pre>
-<p>Again, actual file deletion is only 6 times slower than GC dry run.
-Alive set after GC is 15K packages with 34GB storage.</p>
-<p>The speed of removal is about ~800 store paths (packages)
-per second.</p>
-<p>How many packages per second can your distribution delete?
+<p>Again, actual file deletion is only 6 times slower than <code>GC</code> dry run.
+Alive set after <code>GC</code> is <code>15K</code> packages with <code>34GB</code> storage.
+The speed of removal is about <code>~800</code> store paths (packages)
+per second.
+How many packages per second can your distribution delete?
 Does it scale well with amount of packages already installed in system?</p>
-<h1 id="parting-words">Parting words</h1>
+<h2 id="parting-words">Parting words</h2>
 <p>Garbage collection should take no more than one minute :)</p>
-<p>It was surprisingly easy to get ~30x speedup of garbage collector with
+<p>It was surprisingly easy to get <code>~30x</code> speed up of garbage collector with
 a two-liner patch. The improvement will help systems with default
-<strong>nix.conf</strong> configuration. Upcoming <strong>nix-2.8</strong> will contain the
+<code>nix.conf</code> configuration. Upcoming <code>nix-2.8</code> will contain the
 improvement.</p>
-<p>Initially I was fooled by <strong>perf top</strong> output and optimised the parser
+<p>Initially I was fooled by <code>perf top</code> output and optimized the parser
 to get 25% speedup. The real bug was in tracking visited nodes.</p>
 <p>Have fun!</p>
         </div>
