@@ -42,14 +42,14 @@ glitch in the led. Flashing looked a bit too frequent for a machine that
 does nothing. I was worried if it was trying to wear out my SSD as
 quickly as possible.</p>
 <h2 id="getting-the-clues">Getting the clues</h2>
-<p>So I started debugging … a led /o\.</p>
-<p>I closed all the applications including browser and window manager. I
+<p>So I started debugging … a led /o\.
+I closed all the applications including browser and window manager. I
 ran <code>sync</code> to commit all the in-flight writes to disk. Disk led was
-still flashing rapidly.</p>
-<p>I ran <code>iotop -a</code>. It claimed there was no visible I/O happening. Does it
-mean it’s just a led problem?</p>
-<p>I tried heavyweight hammer and ran <code>perf ftrace</code> to see if kernel is
-doing anything related to NVME:</p>
+still flashing rapidly.
+I ran <code>iotop -a</code>. It claimed there was no visible I/O happening. Does it
+mean it’s just a led problem?
+I tried heavyweight hammer and ran <code>perf ftrace</code> to see if kernel is
+doing anything related to <code>NVME</code>:</p>
 <pre><code># perf ftrace -a -T 'nvme*' | cat
 
 # tracer: function
@@ -66,11 +66,11 @@ doing anything related to NVME:</p>
     kworker/6:1H-298     [006]   2569.853209: nvme_setup_discard &lt;-nvme_setup_cmd
     kworker/6:1H-298     [006]   2569.958198: nvme_setup_cmd &lt;-nvme_queue_rq
     kworker/6:1H-298     [006]   2569.958202: nvme_setup_discard &lt;-nvme_setup_cmd</code></pre>
-<p>Here we see that every 100ms kernel runs <code>nvme_setup_discard</code> function
-from kernel’s <code>kworker</code> thread. These requests looked suspicious.</p>
-<p>This trace was from <code>linux-6.2</code>. When I booted back to <code>linux-6.1</code> this
-<code>discard</code> storm disappeared. All was quiet.</p>
-<p>In case you are not familiar with SSD <code>discard</code> (or <code>trim</code>) is an
+<p>Here we see that every <code>100ms</code> kernel runs <code>nvme_setup_discard</code> function
+from kernel’s <code>kworker</code> thread. These requests looked suspicious.
+This trace was from <code>linux-6.2</code>. When I booted back to <code>linux-6.1</code> this
+<code>discard</code> storm disappeared. All was quiet.
+In case you are not familiar with SSD <code>discard</code> (or <code>trim</code>) is an
 operation that gives a hint to device that a particular block of data
 does not contain useful data and can be recycled for other uses.
 <code>discard</code> is neither read nor write operation. That’s why <code>iotop -a</code> did
@@ -78,12 +78,12 @@ not see it.</p>
 <p>Are these discards useful or harmful? Are they intentional? Why
 <code>linux-6.1</code> was unaffected? No idea!</p>
 <h2 id="bisecting-the-kernel">Bisecting the kernel</h2>
-<p>Given that it’s seemingly a behaviour change between <code>6.1</code> and <code>6.2</code>
-kernel versions I attempted to bisect the kernel.</p>
-<p>Bisecting it was easy: I redirected local <code>linux</code> kernel package
+<p>Given that it’s seemingly a behavior change between <code>6.1</code> and <code>6.2</code>
+kernel versions I attempted to bisect the kernel.
+Bisecting it was easy: I redirected local <code>linux</code> kernel package
 definition to local <code>linux.git</code> checkout and rebuilt my system against
-it.</p>
-<p>Here is a diff against <code>nixpkgs</code> I used at some point:</p>
+it.
+Here is a diff against <code>nixpkgs</code> I used at some point:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/os-specific/linux/kernel/common-config.nix</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/os-specific/linux/kernel/common-config.nix</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -839,8 +833,6 @@ let</span></span>
@@ -194,18 +194,18 @@ anything about <code>btrfs</code> implementation:</p>
 <span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a> 	clear_bit(BTRFS_DEV_STATE_IN_FS_METADATA, &amp;device-&gt;dev_state);</span>
 <span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a> 	device-&gt;mode = flags;</span></code></pre></div>
 <h2 id="the-workaround">The workaround</h2>
-<p>To restore previous behaviour (until we find out if it’s expected) I
-added <code>"nodiscard"</code> mount option at startup and got an old behaviour on
+<p>To restore previous behavior (until we find out if it’s expected) I
+added <code>"nodiscard"</code> mount option at startup and got an old behavior on
 <code>6.2</code>!</p>
 <p>I also sent <a href="https://www.spinics.net/lists/linux-btrfs/msg133128.html">the question</a>
-to <code>linux-btrfs@</code> ML to se if it’s an expected behaviour.</p>
+to <code>linux-btrfs@</code> ML to see if it’s an expected behavior.</p>
 <h2 id="digging-deeper">Digging deeper</h2>
 <p>Now that we have a workaround let’s try to explore where these <code>discard</code>
-requests come from.</p>
-<p>I re-enabled <code>discard=async</code> with <code>sudo mount -oremount,discard=async /</code>
+requests come from.
+I re-enabled <code>discard=async</code> with <code>sudo mount -oremount,discard=async /</code>
 and spent some time in <code>firefox</code> to trigger the storm condition again
-when disk led started flashing again.</p>
-<p>I checked discards still get generated (and while at it confirmed it’s
+when disk led started flashing again.
+I checked discards still get generated (and while at it confirmed it’s
 related to <code>btrfs</code>):</p>
 <pre><code>$ sudo perf ftrace -a -T '*btrfs*discard*' -T '**nvme*' | cat
 
@@ -239,10 +239,10 @@ related to <code>btrfs</code>):</p>
           &lt;idle&gt;-0       [002]  34878.379315: nvme_unmap_data &lt;-nvme_pci_complete_batch
           &lt;idle&gt;-0       [002]  34878.379318: nvme_complete_batch_req &lt;-nvme_pci_complete_batch</code></pre>
 <p>It looks like <code>btrfs</code> keeps seeing free space being returned back to the
-system which triggers extent discard worker thread.</p>
-<p>Ideally I would expect <code>free</code> / <code>discard</code> / <code>free</code> loop to cease at some
-point. But it never does.</p>
-<p>Let’s try to find where does <code>__btrfs_add_free_space</code> come from:</p>
+system which triggers extent discard worker thread.
+Ideally I would expect <code>free</code> / <code>discard</code> / <code>free</code> loop to cease at some
+point. But it never does.
+Let’s try to find where does <code>__btrfs_add_free_space</code> come from:</p>
 <pre><code>$ sudo perf ftrace -a -T '__btrfs_add_free_space' | cat
 
    kworker/u64:1-2379115 [001]  35176.238428: __btrfs_add_free_space &lt;-do_trimming
@@ -252,7 +252,7 @@ point. But it never does.</p>
    kworker/u64:1-2379115 [001]  35176.653996: __btrfs_add_free_space &lt;-do_trimming
    kworker/u64:1-2379115 [001]  35176.758335: __btrfs_add_free_space &lt;-do_trimming</code></pre>
 <p>If I read it correctly it’s initiated by
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/free-space-cache.c?h=v6.2#n3630">do_trimming()</a>:</p>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/free-space-cache.c?h=v6.2#n3630"><code>do_trimming()</code></a>:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> do_trimming<span class="op">(</span><span class="kw">struct</span> btrfs_block_group <span class="op">*</span>block_group<span class="op">,</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>		       u64 <span class="op">*</span>total_trimmed<span class="op">,</span> u64 start<span class="op">,</span> u64 bytes<span class="op">,</span></span>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>		       u64 reserved_start<span class="op">,</span> u64 reserved_bytes<span class="op">,</span></span>
@@ -312,7 +312,7 @@ point. But it never does.</p>
 <span id="cb8-57"><a href="#cb8-57" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>It’s a long function, but not too complicated:</p>
 <ul>
-<li>block groups are ~256MB chunk of bytes on disk that contains various
+<li>block groups are <code>~256MB</code> chunk of bytes on disk that contains various
 items</li>
 <li>there are 3 types of block groups: <code>DATA</code> (user’s bytes), <code>MEATADATA</code>
 (file system metadata) and <code>SYSTEM</code> (tiny amount of metadata that
@@ -320,10 +320,10 @@ spans multiple devices).</li>
 <li><code>btrfs</code> tracks two ranges per block group: used range and reserved
 range.</li>
 <li><code>btrfs</code> uses
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/extent-tree.c?h=v6.2#n1319">btrfs_discard_extent()</a>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/extent-tree.c?h=v6.2#n1319"><code>btrfs_discard_extent()</code></a>
 to mark extent as freed.</li>
 <li><code>btrfs</code> uses
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/free-space-cache.c?h=v6.2#n2609">__btrfs_add_free_space()</a> to cache free space
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/free-space-cache.c?h=v6.2#n2609"><code>__btrfs_add_free_space()</code></a> to cache free space
 info on disk.</li>
 </ul>
 <p>Let’s repeat the exercise of chasing what initiates the trim to see if
@@ -339,7 +339,7 @@ $ sudo perf ftrace -a -T 'trim_no_bitmap' | head -n 10 | tail -n 1
    worker/6:1-2382788 [006]  36709.360688: process_one_work &lt;-worker_thread</code></pre>
 <p>We hit a dead end: <code>worker_thread()</code> pulls in work items from somewhere
 and processes them. Let’s find what queues those up!</p>
-<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n446">btrfs_discard_workfn()</a>
+<p><a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n446"><code>btrfs_discard_workfn()</code></a>
 definition is also not too complicated:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * Discard work queue callback</span></span>
@@ -424,7 +424,7 @@ definition is also not too complicated:</p>
 <span id="cb10-81"><a href="#cb10-81" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Here worker thread expects items of <code>struct btrfs_discard_ctl</code> type to
 process. Scrolling the file around
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n324">btrfs_discard_queue_work()</a>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n324"><code>btrfs_discard_queue_work()</code></a>
 seems to be most plausible candidate we are looking for:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> __btrfs_discard_schedule_work<span class="op">(</span><span class="kw">struct</span> btrfs_discard_ctl <span class="op">*</span>discard_ctl<span class="op">,</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>					  u64 now<span class="op">,</span> <span class="dt">bool</span> override<span class="op">)</span></span>
@@ -478,10 +478,10 @@ seems to be most plausible candidate we are looking for:</p>
 <span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>	<span class="op">}</span></span>
 <span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Note that this handler does not execute the discard requests as soon as
-possible! It has has at least one rate limiter based on
+possible! It has at least one rate limiter based on
 <code>discard_ctl-&gt;kbps_limit</code>.</p>
 <p>And there are even more rate limiters defined by
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n545">btrfs_discard_calc_delay()</a></p>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c?h=v6.2#n545"><code>btrfs_discard_calc_delay()</code></a></p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> btrfs_discard_calc_delay<span class="op">(</span><span class="kw">struct</span> btrfs_discard_ctl <span class="op">*</span>discard_ctl<span class="op">)</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>	s32 discardable_extents<span class="op">;</span></span>
@@ -549,12 +549,12 @@ kbps_limit:     0
 max_discard_size:       67108864</code></pre>
 <p>I’m not sure I believe <code>discardable_bytes=19484499968</code> value. This is
 supposed to be a discard backlog queued but I’m skeptical. It never goes
-down to zero. Looks more like broken accounting. What is worse this
+down to zero. Looks more like broken accounting. Worse this
 (invalid) value is being used to calculate latency of a next request.</p>
 <h2 id="discard-requests-timing-patterns">Discard requests timing patterns</h2>
 <p>So, it looks like 10 discards/sec are expected default on <code>linux-6.2</code>.
 Let’s find the source of those discards. Looking at
-<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c">discard.c</a>
+<a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/btrfs/discard.c"><code>discard.c</code></a>
 these functions looked plausible:</p>
 <pre><code>$ sudo perf ftrace -a -T 'btrfs_discard_workfn' -T 'btrfs_issue_discard' -T 'btrfs_discard_queue_work'
 btrfs-transacti-407     [011]  42800.424027: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
@@ -562,8 +562,8 @@ btrfs-transacti-407     [011]  42800.424070: btrfs_discard_queue_work &lt;-__btr
 ...
 btrfs-transacti-407     [011]  42800.425053: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
 btrfs-transacti-407     [011]  42800.425055: btrfs_discard_queue_work &lt;-__btrfs_add_free_space</code></pre>
-<p>I saw 193 entries of <code>btrfs_discard_queue_work</code> above. It took 1ms to
-enqueue all of the work into the work queue. Very quick and not too
+<p>I saw 193 entries of <code>btrfs_discard_queue_work</code> above. It took <code>1ms</code> to
+enqueue all the work into the work queue. Very quick and not too
 large. Right after it we see actual discards being sent to the device:</p>
 <pre><code>kworker/u64:1-2379115 [000]  42800.487010: btrfs_discard_workfn &lt;-process_one_work
 kworker/u64:1-2379115 [000]  42800.487028: btrfs_issue_discard &lt;-btrfs_discard_extent
@@ -575,20 +575,20 @@ kworker/u64:15-2396822 [007]  42830.441502: btrfs_issue_discard &lt;-btrfs_disca
 kworker/u64:15-2396822 [000]  42830.546497: btrfs_discard_workfn &lt;-process_one_work
 kworker/u64:15-2396822 [000]  42830.546524: btrfs_issue_discard &lt;-btrfs_discard_extent</code></pre>
 <p>286 pairs of <code>btrfs_discard_workfn</code> / <code>btrfs_issue_discard</code>.
-Each pair takes 100ms to process, which seems to match <code>iops_limit=10</code>.</p>
-<p>And 30s is also a <code>btrfs</code> commit interval where the next batch of
+Each pair takes <code>100ms</code> to process, which seems to match <code>iops_limit=10</code>.</p>
+<p>And <code>30s</code> is also a <code>btrfs</code> commit interval where the next batch of
 discard work gets landed:</p>
 <pre><code>btrfs-transacti-407     [002]  42830.634216: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
 btrfs-transacti-407     [002]  42830.634228: btrfs_discard_queue_work &lt;-__btrfs_add_free_space
 ...</code></pre>
 <p>That means I can get about 300 discards per second max. Also, given that
-discards were being sent over full span of 30s I think that work queue
+discards were being sent over full span of <code>30s</code> I think that work queue
 was not exhausted and there still was backlog in the queue.</p>
 <p>I think <code>discardable_bytes</code> / <code>discardable_extents</code> is the backlog
 metric, but I’m not sure as it never gets down to zero.</p>
 <h2 id="another-workaround">Another workaround</h2>
 <p>Now it’s clear we can manipulate the pace by changing the delay between
-discards. To speed up the discard pace we can drop IO limit with:</p>
+discards. To speed up the discard pace we can drop <code>IO</code> limit with:</p>
 <pre><code># echo 10000 &gt; /sys/fs/btrfs/&lt;UUID&gt;/discard/iops_limit</code></pre>
 <p>That allows getting rid of discard backlog. But I don’t know if it’s a
 reasonable fix or it’s better to keep discards be delayed for a while.</p>
@@ -596,7 +596,7 @@ reasonable fix or it’s better to keep discards be delayed for a while.</p>
 <p><code>btrfs</code> uses <code>discard</code> to mark extents as free for an underlying device.</p>
 <p><code>linux-6.2</code> enabled automatic async discard for <code>btrfs</code> on appropriate
 SSD devices. This manifests as a constant device activity if you have
-any reasonable amount of IO on your device (even trivial super block
+any reasonable amount of <code>IO</code> on your device (even trivial super block
 commits are enough).</p>
 <p>Default async discard rate limits <code>linux</code> has today are:</p>
 <ul>

@@ -36,14 +36,14 @@ I broke it at least three times:</p>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/281182">fix deleted <code>required pam_lastlog</code> module</a></li>
 <li><a href="https://github.com/NixOS/nixpkgs/pull/298994">fix broken empty password handling</a></li>
 </ul>
-<p>It’s not great. But at least each breakage is slightly different.
-Exploring it gives me some insight into how <code>libpam</code> works.</p>
-<p>Let’s have a look at the most recent breakage related to empty passwords.</p>
+<p>It’s not great. But at least each bug is slightly different.
+Exploring it gives me some insight into how <code>libpam</code> works.
+Let’s look at the most recent breakage related to empty passwords.</p>
 <h2 id="actual-password-handling-bug">actual password handling bug</h2>
 <p>In <a href="https://github.com/NixOS/nixpkgs/issues/297920"><code>nixpkgs</code> issue#297920</a>
 Thomas M. DuBuisson reported that users with empty passwords no longer
-work on <code>NixOS</code>.</p>
-<p>An example <code>/etc/nixos/configuration.nix</code> snippet to create such an user
+work on <code>NixOS</code>.
+An example <code>/etc/nixos/configuration.nix</code> snippet to create such an user
 is:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="op">...</span> <span class="op">}</span>:</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -58,7 +58,7 @@ is:</p>
 Password:
 
 Login incorrect</code></pre>
-<p>Why did it break? Let’s have a look at how passwords are stored in <code>linux</code>.</p>
+<p>Why did it break? Let’s look at the way passwords are stored in <code>linux</code>.</p>
 <h2 id="etcshadow-structure"><code>/etc/shadow</code> structure</h2>
 <p>On <code>linux</code> desktops hashed user passwords are usually stored in
 <code>/etc/shadow</code>:</p>
@@ -67,8 +67,8 @@ Login incorrect</code></pre>
 nobody:!:1::::::
 nulloktest:$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.:1::::::</code></pre>
 <p><a href="https://manpages.opensuse.org/Tumbleweed/shadow/shadow.5.en.html"><code>man 5 shadow</code></a>
-from <code>shadow</code> package has more detail on what each field means.</p>
-<p>As hashed passwords are still sensitive information <code>/etc/shadow</code> is not
+from <code>shadow</code> package has more detail on what each field means.
+As hashed passwords are still sensitive information <code>/etc/shadow</code> is not
 readable by most users:</p>
 <pre><code>$ ls -l /etc/shadow
 -rw-r----- 1 root shadow 3454 Mar 29 07:03 /etc/shadow</code></pre>
@@ -77,11 +77,11 @@ readable by most users:</p>
 <h2 id="hash-structure">hash structure</h2>
 <p><code>$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.</code>
 is not just a hash string of a well known hash algorithm. It used to be.
-But not any more.</p>
-<p><a href="https://manpages.opensuse.org/Tumbleweed/libxcrypt-devel/crypt.5.en.html"><code>man 5 crypt</code></a>
+But not any more.
+<a href="https://manpages.opensuse.org/Tumbleweed/libxcrypt-devel/crypt.5.en.html"><code>man 5 crypt</code></a>
 from <code>libxcrypt</code> package explains the string format in detail. It’s 10
-pages long!</p>
-<p>The main takeaway from that page is that there are a few ways to encode
+pages long!
+The main takeaway from that page is that there are a few ways to encode
 empty (“” password) and blank (no password prompt) passwords for a user:</p>
 <pre><code>nulloktest:$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.:1::::::
 nulloktest::1::::::</code></pre>
@@ -108,7 +108,7 @@ probably only needs to authenticate current user.</p>
 example is the session screen locker like <code>swaylock</code> or <code>i3lock</code>: those
 lock your screen until you type current user’s password. How do they
 manage to validate current user’s password without having a <code>SUID</code>
-<code>root</code> bit? <code>libpam</code> does it by by calling external <code>unix_chkpwd</code>
+<code>root</code> bit? <code>libpam</code> does it by calling external <code>unix_chkpwd</code>
 <code>SUID</code> <code>root</code> program from <code>libpam</code> package:</p>
 <pre><code>$ ls -l `which unix_chkpwd`
 -r-s--x--x 1 root root 63472 Mar 29 04:41 /run/wrappers/bin/unix_chkpwd</code></pre>
@@ -125,10 +125,10 @@ Here are two diagrams to show the effect of that change.</p>
 <p>To phrase it in words: <code>libpam-1.5.3</code> used <code>unix_chkpwd</code> external helper
 program only if <code>program</code> was not already ran as <code>root</code>. <code>libpam-1.6.0</code>
 in contrast always uses <code>unix_chkpwd</code>.</p>
-<p>In theory both versions should work the same.</p>
-<p>In practice <code>unix_chkpwd</code> disallows empty passwords (bug) but allows the
-blank ones (feature).</p>
-<p>Mechanically the bug happens as <code>unix_chkpwd</code> adds
+<p>In theory both versions should work the same.
+In practice <code>unix_chkpwd</code> disallows empty passwords (bug) but allows the
+blank ones (feature).
+Mechanically the bug happens as <code>unix_chkpwd</code> adds
 <a href="https://github.com/linux-pam/linux-pam/commit/9e74e90147c530801e3ea3428d64371722c90e01">this extra bit of code</a>:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/modules/pam_unix/passverify.c</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/modules/pam_unix/passverify.c</span></span>
@@ -193,20 +193,20 @@ verified instead.</p>
 code and check for password length and not for hash length to handle
 <code>nullok</code> <code>libpam</code> configuration.</p>
 <h2 id="debugging-tips">debugging tips</h2>
-<p><code>unix_chkpwd</code> is a <code>SUID</code> <code>root</code> binary. Moreover it changes it’s
-behaviour based on actual user calling it. I wanted to find a way to
+<p><code>unix_chkpwd</code> is a <code>SUID</code> <code>root</code> binary. Moreover, it changes it’s
+behavior based on actual user calling it. I wanted to find a way to
 probe directly it’s ability to validate <code>/etc/shadow</code> contents without
-involving external <code>login</code> binary.</p>
-<p>On a system with <code>libpam</code> installed password checking session for an
+involving external <code>login</code> binary.
+On a system with <code>libpam</code> installed password checking session for an
 arbitrary user could be done this way:</p>
 <pre><code>$ printf &quot;correct-password\0&quot; | sudo unix_chkpwd testuser nullok; echo $?
 0
 $ printf &quot;incorrect-password\0&quot; | sudo unix_chkpwd testuser nullok; echo $?
 7</code></pre>
-<p>You need to pass null-terminated password into <code>unix_chkpwd</code>’s <code>stdin</code>
+<p>You need to pass null-terminated password into <code>unix_chkpwd</code> <code>stdin</code>
 descriptor. The error code will tell you back if the check succeeded or
-why it failed.</p>
-<p>I needed an equivalent check for a locally built <code>unix_chkpwd</code> from
+why it failed.
+I needed an equivalent check for a locally built <code>unix_chkpwd</code> from
 <code>linux-pam</code> <code>git</code> repository. I came up with this hack:</p>
 <pre><code># build unix_chkpwd
 $ cd linux-pam
@@ -256,9 +256,9 @@ $6$AgpQ6azd$0YmJW0VFg0FwyPgSW1KSiF8cy5qB8NB/.IcMbjMa1OCbGH3ki9a4bkuhtMxQupeMeiag
 <h2 id="parting-words">parting words</h2>
 <p><code>libpam</code> updates are tricky. Every time I update <code>libpam</code> I break
 something. This time it was a somewhat benign case of empty password
-handling. We need more tests. The empty password fix fix was merged to
-<code>libpam</code> as <a href="https://github.com/linux-pam/linux-pam/pull/784">PR#784</a>
-and to <code>nixpkgs</code> as <a href="https://github.com/NixOS/nixpkgs/pull/298994">PR#298994</a>.</p>
+handling. We need more tests. The empty password fix was merged to
+<code>libpam</code> as <a href="https://github.com/linux-pam/linux-pam/pull/784"><code>PR#784</code></a>
+and to <code>nixpkgs</code> as <a href="https://github.com/NixOS/nixpkgs/pull/298994"><code>PR#298994</code></a>.</p>
 <p>If you are affected by an empty password bug you can set the password to
 a blank hash with <code>hashedPassword = ""</code>. Or set it to blank with
 <code>passwd -d $user</code>. Both are equivalent.</p>

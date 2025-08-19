@@ -30,12 +30,12 @@
             
 
             <p>I got a bit more free weekend time and I’m slowly going through a
-backlog of topics to write about.</p>
-<p>Today I’ll write about the <code>GHC</code> bug from 4 years ago.</p>
+backlog of topics to write about.
+Today I’ll write about the <code>GHC</code> bug from 4 years ago.</p>
 <h2 id="the-problem">The problem</h2>
-<p>John Paul Adrian Glaubitz found yet another interesting case of <strong>GHC</strong> doing
-<a href="https://gitlab.haskell.org/ghc/ghc/-/issues/15338">something very unusual</a>.</p>
-<p>Namely <strong>ghc-pkg</strong> was not able to print it’s own version when (and only when)
+<p>John Paul Adrian Glaubitz found yet another interesting case of <code>GHC</code> doing
+<a href="https://gitlab.haskell.org/ghc/ghc/-/issues/15338">something very unusual</a>.
+Namely <code>ghc-pkg</code> was not able to print it’s own version when (and only when)
 redirected to a … pipe(!):</p>
 <pre><code># good:
 $ ghc-pkg --version
@@ -45,8 +45,8 @@ GHC package manager version 8.2.2
 $ ghc-pkg --version | cat
 </code></pre>
 <p>“Looks like a very simple coding error” was my thought. I attempted the
-same test on <strong>ghc-HEAD</strong> and reproduced strange behaviour.</p>
-<p><strong>ghc-pkg</strong> is a
+same test on <code>ghc-HEAD</code> and reproduced strange behavior.</p>
+<p><code>ghc-pkg</code> is a
 <a href="https://gitlab.haskell.org/ghc/ghc/-/blob/master/utils/ghc-pkg/Main.hs">simple single-source tool</a>.
 It was easy to reduce the original down to the following minimal example:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- a.hs</span></span>
@@ -58,23 +58,23 @@ It was easy to reduce the original down to the following minimal example:</p>
 <span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    hPutStrLn stdout <span class="st">&quot;hello&quot;</span></span></code></pre></div>
 <p>Quiz question: what do you think is a bug here?</p>
 <p>The caveat is that all this happens on
-<a href="https://en.wikipedia.org/wiki/SuperH">SuperH</a> architecture.</p>
+<a href="https://en.wikipedia.org/wiki/SuperH"><code>SuperH</code></a> architecture.</p>
 <pre><code>$ inplace/bin/ghc-stage1 --make a.hs -O1 -dynamic
 $ /usr/bin/qemu-sh4 -L /usr/sh4-unknown-linux-gnu/ ./a
 &lt;empty&gt;</code></pre>
-<p>Already see the bug? Me neiter.</p>
-<h2 id="what-is-superh">What is SuperH?</h2>
-<p><strong>SuperH</strong> (or <strong>sh</strong>) is a 32-bit <strong>RISC</strong> architecture designed by
-<strong>Hitachi</strong>. <strong>Sega Saturn</strong>, <strong>Sega 32X</strong> and <strong>Sega Dreamcast</strong>
-all use <strong>sh</strong>-based chips. <strong>SuperH</strong> also hides in many controllers
-like <strong>CD-ROM</strong>.</p>
-<p><strong>SuperH</strong> recently got new life in development community
+<p>Already see the bug? Me neither.</p>
+<h2 id="what-is-superh">What is <code>SuperH</code>?</h2>
+<p><code>SuperH</code> (or <code>sh</code>) is a 32-bit <code>RISC</code> architecture designed by
+<code>Hitachi</code>. <code>Sega Saturn</code>, <code>Sega 32X</code> and <code>Sega Dreamcast</code>
+all use <code>sh</code>-based chips. <code>SuperH</code> also hides in many controllers
+like <code>CD-ROM</code>.</p>
+<p><code>SuperH</code> recently got new life in development community
 after a bunch of related patents expired in 2015.</p>
-<p>From a software development standpoint (as in, shared bugs) <strong>sh</strong>
-feels like <strong>m68k</strong>. For example it’s instruction length is 2 bytes
-which drives some low-level toolchain decisions to be similar to <strong>m68k</strong>.</p>
-<p>Let’s have a look at a disassembly of a <strong>fabs</strong> function in
-<strong>glibc</strong> to get a feel for this architecture:</p>
+<p>From a software development standpoint (as in, shared bugs) <code>sh</code>
+feels like <code>m68k</code>. For example it’s instruction length is 2 bytes
+which drives some low-level toolchain decisions to be similar to <code>m68k</code>.</p>
+<p>Let’s have a look at a disassembly of a <code>fabs</code> function in
+<code>glibc</code> to get a feel for this architecture:</p>
 <pre><code>000213cc &lt;fabs@@GLIBC_2.2&gt;:
    213cc:       c6 2f           mov.l   r12,@-r15
    213ce:       0e c7           mova    21408 &lt;fabs@@GLIBC_2.2+0x3c&gt;,r0
@@ -114,47 +114,47 @@ which drives some low-level toolchain decisions to be similar to <strong>m68k</s
    21412:       fe ff           fmac    fr0,fr15,fr15</code></pre>
 <p>A few things to note here:</p>
 <ul>
-<li><p>Instructions are only 2 bytes long. This makes the task of
+<li>Instructions are only 2 bytes long. This makes the task of
 encoding large branch offsets especially tricky: you need to
-store 32-bit offset somere in nearby memory. In the example
-above it’s <strong>.word 0x0048; .word 0x0000</strong>.</p></li>
-<li><p><strong>r15</strong> is a stack pointer</p></li>
-<li><p><strong>SuperH</strong> support increments/decrements as part of the main
-instruction:</p>
+store 32-bit offset somewhere in nearby memory. In the example
+above it’s <code>.word 0x0048; .word 0x0000</code>.</li>
+<li><code>r15</code> is a stack pointer</li>
+<li><code>SuperH</code> support increments/decrements as part of the main
+instruction:
 <ul>
-<li><strong>sts.l pr,@-r15</strong>: push return address on stack (pre-decrement)</li>
-<li><strong>lds.l <span class="citation" data-cites="r15">@r15</span>+,pr</strong>: pop return address from stack (post-increment)</li>
+<li><code>sts.l   pr,@-r15</code>: push return address on stack (pre-decrement)</li>
+<li><code>lds.l   @r15+,pr</code>: pop return address from stack (post-increment)</li>
 </ul></li>
-<li><p>There are <strong>FPU</strong> instructions like <strong>fabs</strong> itself.</p></li>
+<li>There are <code>FPU</code> instructions like <code>fabs</code> itself.</li>
 </ul>
 <p>Handy! But it does not really matter all that for our particular bug :)</p>
 <h2 id="the-gist-of-the-bug">The gist of the bug</h2>
 <p>Before digging deeper into the bug I tried the same reproducer on a
-bunch of targets using <strong>qemu</strong> and using real hardware where I could
+bunch of targets using <code>qemu</code> and using real hardware where I could
 reach. Results were:</p>
 <ul>
-<li>broken: <strong>sh4</strong> and <strong>m68k</strong></li>
-<li>working: <strong>x86_64</strong>, <strong>mipsn32</strong>, <strong>powerpc</strong>, <strong>powerpc64</strong>, <strong>sparc</strong></li>
+<li>broken: <code>sh4</code> and <code>m68k</code></li>
+<li>working: <code>x86_64</code>, <code>mipsn32</code>, <code>powerpc</code>, <code>powerpc64</code>, <code>sparc</code></li>
 </ul>
-<p><strong>x86_64</strong> and <strong>powerpc{,64}</strong> are targets with native <strong>GHC</strong> code
-generation. <strong>mips</strong>, <strong>sparc</strong>, <strong>sh4</strong> and <strong>m68k</strong> are <strong>via-C</strong>
-(<strong>unregisterised</strong>) targets. Thus it’s probably not just a bug in
+<p><code>x86_64</code> and <code>powerpc{,64}</code> are targets with native <code>GHC</code> code
+generation. <code>mips</code>, <code>sparc</code>, <code>sh4</code> and <code>m68k</code> are <code>via-C</code>
+(<code>unregisterised</code>) targets. Thus it’s probably not just a bug in
 unregisterised backend.</p>
-<p>It also not just 32 vs 64 bit bug (<strong>sparc</strong> is 32-bit here).</p>
-<p>I dug a bit more into the failure and found that <strong>haskell</strong>-level
-<strong>System.IO.stdout</strong> closure (rough equivalent of <strong>C</strong>’s <strong>stdout</strong>
+<p>It also not just 32 vs 64 bit bug (<code>sparc</code> is 32-bit here).</p>
+<p>I dug a bit more into the failure and found that <code>haskell</code>-level
+<code>System.IO.stdout</code> closure (rough equivalent of <code>C</code>’s <code>stdout</code>
 global) is present in memory in multiple places! And different
 pieces of code access different copies of it.</p>
-<p>Specifically the code that initialises <strong>System.IO.stdout</strong> fills
+<p>Specifically the code that initializes <code>System.IO.stdout</code> fills
 all fields diligently. But code that writes to it uses default
 object full of zeros.</p>
-<p>Jessica Clarke pointed at <strong>GHC</strong>’s use of <strong>-Bsymbolic</strong> linker
-option that breaks various <strong>C</strong>-level assumptions. <strong>GHC</strong>’s native
+<p>Jessica Clarke pointed at <code>GHC</code>’s use of <code>-Bsymbolic</code> linker
+option that breaks various <code>C</code>-level assumptions. <code>GHC</code>’s native
 code generator specifically tries to generate code compatible with
-<strong>-Bsymbolic</strong>. But when unregisterised backend is used <strong>GHC</strong> has
-no control of what <strong>gcc</strong> produces. And <strong>gcc</strong> breaks the assumptions.</p>
-<p>In <strong>GHC</strong>’s case <strong>-Bsymbolic</strong> is a performance optimization. It’s not
-a requirement to get haskell compiler on a platform. Thus the simple fix
+<code>-Bsymbolic</code>. But when unregisterised backend is used <code>GHC</code> has
+no control of what <code>gcc</code> produces. And <code>gcc</code> breaks the assumptions.</p>
+<p>In <code>GHC</code>’s case <code>-Bsymbolic</code> is a performance optimization. It’s not
+a requirement to get <code>haskell</code> compiler on a platform. Thus the simple fix
 was to avoid use of it in unregisterised codegen with
 <a href="https://gitlab.haskell.org/ghc/ghc/-/commit/8ec48990fee9e245bb2fe40dc6f65b61b8612157">the patch</a>:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/compiler/main/SysTools.hs</span></span>
@@ -164,10 +164,10 @@ was to avoid use of it in unregisterised codegen with
 <span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="st">-                                [&quot;-Wl,-Bsymbolic&quot;]</span></span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="va">+                                [&quot;-Wl,-Bsymbolic&quot; | not unregisterised]</span></span></code></pre></div>
 <h2 id="but-how-exactly-did-it-break">But how exactly did it break?</h2>
-<p>The above probably does not make much sense. What is <strong>-Bsymbolic</strong>?
+<p>The above probably does not make much sense. What is <code>-Bsymbolic</code>?
 Why does it make things worse if it’s just an optimization? Why do some
-unreg targets are not affected?</p>
-<p>Let’s look at a smaller example in <strong>C</strong>:</p>
+unregisterised targets are not affected?</p>
+<p>Let’s look at a smaller example in <code>C</code>:</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* lib.c: */</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> g <span class="op">=</span> <span class="dv">42</span><span class="op">;</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> lib_g<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> g<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
@@ -184,10 +184,10 @@ unreg targets are not affected?</p>
 <span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;after:  main.g=</span><span class="sc">%i</span><span class="st">; lib_g()=</span><span class="sc">%i\n</span><span class="st">&quot;</span><span class="op">,</span> g<span class="op">,</span> lib_g<span class="op">());</span></span>
 <span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
 <span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Here we have library code with one global variable <strong>g</strong> and
-a getter function <strong>lib_g()</strong>. And a main program where
-<strong>main()</strong> function prints initial value of <strong>g</strong> global directly
-and via <strong>lib_g()</strong> getter. We also change <strong>g</strong> value directly
+<p>Here we have library code with one global variable <code>g</code> and
+a getter function <code>lib_g()</code>. And a main program where
+<code>main()</code> function prints initial value of <code>g</code> global directly
+and via <code>lib_g()</code> getter. We also change <code>g</code> value directly
 and print result again.</p>
 <p>Nothing too complicated.</p>
 <p>Here is how things work when we build it as a single executable:</p>
@@ -197,8 +197,8 @@ before: main.g=42; lib_g()=42
 after:  main.g=12345678; lib_g()=12345678</code></pre>
 <p>No surprise here:</p>
 <ul>
-<li>before the store both <strong>g</strong> and <strong>lib_g()</strong> return <strong>42</strong></li>
-<li>after the store both <strong>g</strong> and <strong>lib_g()</strong> return <strong>12345678</strong></li>
+<li>before the store both <code>g</code> and <code>lib_g()</code> return <code>42</code></li>
+<li>after the store both <code>g</code> and <code>lib_g()</code> return <code>12345678</code></li>
 </ul>
 <p>It’s trivial. What could possible go wrong here?</p>
 <p>Now let’s try to build the same source as a pair of executable
@@ -212,11 +212,11 @@ after:  main.g=12345678; lib_g()=12345678</code></pre>
 <p>To be even clearer the data flow is the following:</p>
 <p><img src="../posts.data/250-sh-copy-reloc/fig-1.svg" /></p>
 <p>Here green arrows denote data reads, light green boxes
-denote intructions that perform reads. Cyan shade shows the
+denote instructions that perform reads. Cyan shade shows the
 writes and write instructions.</p>
-<p>All the paths directly or indirectly read and write the same <strong>g</strong> location.
+<p>All the paths directly or indirectly read and write the same <code>g</code> location.
 Seems like no place to go wrong, right?</p>
-<p>Now let’s add a <strong>-Wl,-Bsymbolic</strong> linker option used by <strong>GHC</strong>. <strong>man ld</strong>
+<p>Now let’s add a <code>-Wl,-Bsymbolic</code> linker option used by <code>GHC</code>. <code>man ld</code>
 says:</p>
 <pre><code>   -Bsymbolic
        When creating a shared library, bind references to global symbols to the
@@ -225,7 +225,7 @@ says:</p>
        the shared library.  This option is only meaningful on ELF platforms which
        support shared libraries.</code></pre>
 <p>Overrides usually happen when we define a symbol in multiple places: one in shared
-library and another in executable program. One of them has to win. <strong>LD_PRELOAD</strong>
+library and another in executable program. One of them has to win. <code>LD_PRELOAD</code>
 frequently relies on symbol override semantics.</p>
 <p>But does our program override any definitions? If feels like we don’t do
 anything special: we define all the things once and use them the simplest
@@ -236,9 +236,9 @@ $ gcc -O1 -fno-PIC -fno-PIE -no-pie prog.c -o symbolic-shared -L. -lbug '-Wl,-rp
 $ ./symbolic-shared
 before: main.g=42; lib_g()=42
 after:  main.g=12345678; lib_g()=42</code></pre>
-<p>Whoops. What happens here? Why do <strong>g</strong> and <strong>lib_g()</strong> see different values?</p>
+<p>Whoops. What happens here? Why do <code>g</code> and <code>lib_g()</code> see different values?</p>
 <p>Let’s look at final generated code. I’ll start from simplest case without an
-external library where things stil worked. Building:</p>
+external library where things still worked. Building:</p>
 <pre><code>$ gcc -O1 lib.c prog.c -o good
 $ objdump -DR good</code></pre>
 <p>Peeking inside:</p>
@@ -273,26 +273,26 @@ Disassembly of section .data:
 0000000000404030 &lt;g&gt;:
   404030:       2a 00                   sub    (%rax),%al
         ...</code></pre>
-<p>Here our global variable <strong>g</strong> is located in <strong>.data</strong> section at <strong>0x404030</strong> address.
-<strong>gcc</strong> used most efficient code to access it by using <strong>RIP</strong>-relative addressing:</p>
+<p>Here our global variable <code>g</code> is located in <code>.data</code> section at <code>0x404030</code> address.
+<code>gcc</code> used most efficient code to access it by using <code>RIP</code>-relative addressing:</p>
 <ul>
-<li>read via: <strong>mov 0x2ef2(%rip),%esi # 404030 &lt;g&gt;</strong>.</li>
-<li>write via: <strong>movl $0xbc614e,0x2ed9(%rip) # 404030 &lt;g&gt;</strong></li>
+<li>read via: <code>mov 0x2ef2(%rip),%esi # 404030 &lt;g&gt;</code>.</li>
+<li>write via: <code>movl $0xbc614e,0x2ed9(%rip) # 404030 &lt;g&gt;</code></li>
 </ul>
-<p>Note that <strong>0x2ef2(%rip)</strong> is a fixed offset from the current instruction. In this case
-it always refers to <strong>0x404030</strong> address of <strong>g</strong> and does not depend on any other
+<p>Note that <code>0x2ef2(%rip)</code> is a fixed offset from the current instruction. In this case
+it always refers to <code>0x404030</code> address of <code>g</code> and does not depend on any other
 library that could be loaded into address space along the program.</p>
 <p>There is the picture form of the above (same legend as in previous picture):</p>
 <p><img src="../posts.data/250-sh-copy-reloc/fig-2.svg" /></p>
-<p>It should be obvious from the picture that all the reads and writes to <strong>g</strong> happen at
-the same <strong>0x404030</strong> location.</p>
+<p>It should be obvious from the picture that all the reads and writes to <code>g</code> happen at
+the same <code>0x404030</code> location.</p>
 <p>Now let’s have a look at our broken example. Building:</p>
 <pre><code>$ gcc -O1 -shared -fPIC lib.c -o libbug.so -Wl,-Bsymbolic
 $ gcc -O1 -fno-PIC -fno-PIE -no-pie prog.c -o symbolic-shared -L. -lbug '-Wl,-rpath=$ORIGIN'
 $ objdump -DR libbug.so
 $ objdump -DR symbolic-shared</code></pre>
 <p>Peeking inside.</p>
-<p>Let’s first look at <strong>libbug.so</strong>:</p>
+<p>Let’s first look at <code>libbug.so</code>:</p>
 <pre><code>Disassembly of section .text:
 00000000000010f9 &lt;lib_g&gt;:
     10f9:       48 8d 05 20 2f 00 00    lea    0x2f20(%rip),%rax        # 4020 &lt;g&gt;
@@ -304,16 +304,16 @@ Disassembly of section .data:
 0000000000004020 &lt;g&gt;:
     4020:       2a 00                   sub    (%rax),%al
         ...</code></pre>
-<p>The code (<strong>.text</strong>) part is almost identical to our <strong>prog</strong> case. Except that instead of
-direct <strong>mov 0x2f04(%rip),%eax</strong> instruction it uses a pair of instructions:
-<strong>lea 0x2f20(%rip),%rax</strong> / <strong>mov (%rax),%eax</strong>. Both forms are semantically
+<p>The code (<code>.text</code>) part is almost identical to our <code>prog</code> case. Except that instead of
+direct <code>mov 0x2f04(%rip),%eax</code> instruction it uses a pair of instructions:
+<code>lea 0x2f20(%rip),%rax</code> / <code>mov (%rax),%eax</code>. Both forms are semantically
 equivalent.</p>
-<p>Homework question: why does <strong>libbug.so</strong> use less efficient encoding?</p>
-<p>The data (<strong>.data</strong>) part hosts <strong>g</strong> global variable at <strong>0x4020</strong> address. It’s not a real address
+<p>Homework question: why does <code>libbug.so</code> use less efficient encoding?</p>
+<p>The data (<code>.data</code>) part hosts <code>g</code> global variable at <code>0x4020</code> address. It’s not a real address
 as shared libraries could normally be loaded at any address. We would need to add a
 base address to every address we see. But we can pretend for now the library will be
-loaded at address <strong>0</strong> and all the addresses we see are real and valid.</p>
-<p><strong>symbolic-shared</strong> has a few new things:</p>
+loaded at address <code>0</code> and all the addresses we see are real and valid.</p>
+<p><code>symbolic-shared</code> has a few new things:</p>
 <pre><code>Disassembly of section .text:
         ...
 0000000000401136 &lt;main&gt;:
@@ -342,40 +342,41 @@ Disassembly of section .bss:
   404038:       00 00                   add    %al,(%rax)
                         404038: R_X86_64_COPY   g@@Base
         ...</code></pre>
-<p>On the surface <strong>main()</strong> has identical code to our <strong>prog</strong> case as well:
-same <strong>RIP-relative</strong> addressing to reach local <strong>g</strong>. Except that <strong>g</strong> is
+<p>On the surface <code>main()</code> has identical code to our <code>prog</code> case as well:
+same <code>RIP-relative</code> addressing to reach local <code>g</code>. Except that <code>g</code> is
 not supposed to be local! It’s loaded from unknown address in external shared
 library! How did it get into our binary?</p>
-<p><strong>gcc</strong> code generator assumes it’s local and relies on so called <strong>COPY</strong>
-relocation (<strong>R_X86_64_COPY</strong> in our case) to copy data from external library
+<p><code>gcc</code> code generator assumes it’s local and relies on so called <code>COPY</code>
+relocation (<code>R_X86_64_COPY</code> in our case) to copy data from external library
 into the executable binary.</p>
-<p>Effectively that means that at load time we will have two independen copies of <strong>g</strong>:</p>
+<p>Effectively that means that at load time we will have two independent
+copies of <code>g</code>:</p>
 <ul>
-<li>one in <strong>libbug.so</strong> at address <strong>0x4020</strong> used by <strong>lib_g()</strong> function</li>
-<li>and another in <strong>symbolic-shared</strong> binary at address <strong>0x404038</strong> used
-by <strong>main()</strong> direct references.</li>
+<li>one in <code>libbug.so</code> at address <code>0x4020</code> used by <code>lib_g()</code> function</li>
+<li>and another in <code>symbolic-shared</code> binary at address <code>0x404038</code> used
+by <code>main()</code> direct references.</li>
 </ul>
 <p>Or the same in pictures:</p>
 <p><img src="../posts.data/250-sh-copy-reloc/fig-3.svg" /></p>
 <p>Compared to previous pictures blue arrows show load-time data copy from
 library data into binary data. And red arrow shows reads from stale source
 location.</p>
-<p>Note that <strong>main()</strong> always reads and write only local copy of <strong>g</strong>.
-It never looks at <strong>libbug.so</strong>’s original. While <strong>lib_g()</strong> only
-ever uses <strong>libbug.so</strong>’s original.</p>
-<p>That is the negative effect of <strong>-Wl,-Bsymbolic</strong>: we effectively got
-two independent <strong>g</strong> global variables that only happen to share initial
+<p>Note that <code>main()</code> always reads and write only local copy of <code>g</code>.
+It never looks at <code>libbug.so</code>’s original. While <code>lib_g()</code> only
+ever uses <code>libbug.so</code>’s original.</p>
+<p>That is the negative effect of <code>-Wl,-Bsymbolic</code>: we effectively got
+two independent <code>g</code> global variables that only happen to share initial
 value at startup time.</p>
-<p>So how does it work at all without <strong>-Wl,-Bsymbolic</strong>? We did not pass that
+<p>So how does it work at all without <code>-Wl,-Bsymbolic</code>? We did not pass that
 linker flag to the final binary. Only shared library was “corrupted” by it.</p>
-<p>Quick quiz: what is you guess? Would the <strong>COPY</strong> relocation disappear magically?
+<p>Quick quiz: what is you guess? Would the <code>COPY</code> relocation disappear magically?
 Or library code would transform into something else?</p>
 <p>Let’s have a look at a working shared library example now. Building:</p>
 <pre><code>$ gcc -O1 -shared -fPIC lib.c -o libbug.so
 $ gcc -O1 -fno-PIC -fno-PIE -no-pie prog.c -o good-shared -L. -lbug '-Wl,-rpath=$ORIGIN'
 $ objdump -DR libbug.so
 $ objdump -DR good-shared</code></pre>
-<p>Peeking inside. <strong>libbug.so</strong>:</p>
+<p>Peeking inside. <code>libbug.so</code>:</p>
 <pre><code>Disassembly of section .text:
         ...
 00000000000010f9 &lt;lib_g&gt;:
@@ -393,11 +394,11 @@ Disassembly of section .data:
 0000000000004020 &lt;g&gt;:
     4020:       2a 00                   sub    (%rax),%al
         ...</code></pre>
-<p>This time the code is a bit different from <strong>prog</strong> and <strong>-Bsymbolic</strong> case.</p>
-<p><strong>g</strong> is read not by one <strong>mov</strong> instruction as before, but by two. Now we have
-an indirection (via <strong>.got</strong>, Global Offset Table) where real address of <strong>g</strong>
+<p>This time the code is a bit different from <code>prog</code> and <code>-Bsymbolic</code> case.</p>
+<p><code>g</code> is read not by one <code>mov</code> instruction as before, but by two. Now we have
+an indirection (via <code>.got</code>, Global Offset Table) where real address of <code>g</code>
 is stored. And library does not know it’s own global variable address!</p>
-<p>And <strong>good-shared</strong> executable is exactly the same as <strong>symbolic-shared</strong>:</p>
+<p>And <code>good-shared</code> executable is exactly the same as <code>symbolic-shared</code>:</p>
 <pre><code>Disassembly of section .text:
 0000000000401136 &lt;main&gt;:
   401136:       48 83 ec 08             sub    $0x8,%rsp
@@ -425,16 +426,16 @@ Disassembly of section .bss:
   404038:       00 00                   add    %al,(%rax)
                         404038: R_X86_64_COPY   g@@Base
         ...</code></pre>
-<p>Here we see the same pattern: again <strong>g</strong> is copied out of it’s real
-location (<strong>libbug.so</strong> provides symbol contents) and the rest of
+<p>Here we see the same pattern: again <code>g</code> is copied out of it’s real
+location (<code>libbug.so</code> provides symbol contents) and the rest of
 program uses this copy.</p>
 <p>The same in pictures:</p>
 <p><img src="../posts.data/250-sh-copy-reloc/fig-4.svg" /></p>
-<p>Magenta arrows shows the code that reads final address of <strong>g</strong> global
-variable. Note that now nothing (aside from <strong>COPY</strong> relocation) reads
-original <strong>g</strong> global variable at <strong>0x4020</strong> address: everything including
-<strong>libbug.so</strong> uses executable’s copy of <strong>g</strong> at address <strong>0x404038</strong>.</p>
-<p>Now we can make <strong>-Wl,-Bsymbolic</strong> work for us by enabling <strong>-fPIC</strong>
+<p>Magenta arrows shows the code that reads final address of <code>g</code> global
+variable. Note that now nothing (aside from <code>COPY</code> relocation) reads
+original <code>g</code> global variable at <code>0x4020</code> address: everything including
+<code>libbug.so</code> uses executable’s copy of <code>g</code> at address <code>0x404038</code>.</p>
+<p>Now we can make <code>-Wl,-Bsymbolic</code> work for us by enabling <code>-fPIC</code>
 code on final executable:</p>
 <pre><code>$ gcc -O1 -shared -fPIC lib.c -o libbug.so -Wl,-Bsymbolic
 $ gcc -O1 -fno-PIC -fno-PIE -no-pie prog.c -o symbolic-shared -L. -lbug '-Wl,-rpath=$ORIGIN' -fPIC
@@ -443,24 +444,24 @@ before: main.g=42; lib_g()=42
 after:  main.g=12345678; lib_g()=12345678</code></pre>
 <p>Works as expected! Homework quiz: why does it work?</p>
 <h2 id="parting-words">Parting words</h2>
-<p>Note that with <strong>-fPIC</strong> <strong>gcc</strong> generates the code to always go through
-<strong>.got</strong> indirection to both allow for easy override (interposition) and
+<p>Note that with <code>-fPIC</code> <code>gcc</code> generates the code to always go through
+<code>.got</code> indirection to both allow for easy override (interposition) and
 to allow final executables to have more efficient access to globals without
-<strong>.got</strong> indirection.</p>
-<p>This effectively penaizes library code in favour of speeding up binary code.
+<code>.got</code> indirection.</p>
+<p>This effectively penalizes library code in favor of speeding up binary code.
 This tradeoff implies that most of the time library globals will be accessed
 from outside the library (rather than inside the library). To get these
-limitations around performance critical libraries (like <strong>glibc</strong>) go to the
+limitations around performance critical libraries (like <code>glibc</code>) go to the
 great lengths to avoid use of externally visible global symbols and use
-sorts of <strong><strong>attribute</strong>((visibility(“hidden”)))</strong> / <strong>-fvisibility=hidden</strong>
+sorts of <code>__attribute__((visibility("hidden")))</code> / <code>-fvisibility=hidden</code>
 to get performance back.</p>
-<p><strong>GHC</strong>’s strategy is to use <strong>-Bsymbolic</strong> to prioritize library code access
-and be careful about using <strong>-fPIC</strong> style code on executables.</p>
-<p><strong>COPY</strong> relocations have all sorts of unusual side-effects. They actually copy
+<p><code>GHC</code>’s strategy is to use <code>-Bsymbolic</code> to prioritize library code access
+and be careful about using <code>-fPIC</code> style code on executables.</p>
+<p><code>COPY</code> relocations have all sorts of unusual side-effects. They actually copy
 data (which might take a considerable startup time for large programs), they
 leak object sizes across binaries (as one needs to know how much to copy).
-<a href="../posts/195-dynamic-linking-ABI-is-hard.html">Nettle bug</a> is an interesting case
-of <strong>ABI</strong> breakage of the past.</p>
+<a href="../posts/195-dynamic-linking-ABI-is-hard.html"><code>nettle</code> bug</a> is an interesting case
+of <code>ABI</code> breakage of the past.</p>
 <p>Have fun!</p>
         </div>
     </body>

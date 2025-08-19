@@ -31,9 +31,9 @@
 
             <p>Today I found another source of non-determinism in <code>nix expression language</code>.
 This time it’s a
-<a href="https://github.com/NixOS/nix/issues/12106"><code>builtins.sort</code></a> primitive!</p>
-<p>How do you break <code>sort</code>?</p>
-<p>Compared to the
+<a href="https://github.com/NixOS/nix/issues/12106"><code>builtins.sort</code></a> primitive!
+How do you break <code>sort</code>?
+Compared to the
 <a href="../posts/292-nix-language-nondeterminism-example.html">previous non-determinism instance</a>
 this case of non-determinism breaking <code>sort</code> is not as arcane.</p>
 <h2 id="a-working-sort-example">a working <code>sort</code> example</h2>
@@ -56,8 +56,8 @@ nix-repl&gt; builtins.sort (a: b: a &lt; b) [ 4 3 2 1 ]
 ]</code></pre>
 <p>All nice and good: we pass the comparison predicate and get some result
 back. In the first case we are passing a builtin comparator. In the
-second case we write a lambda that implements <code>&lt;</code>. Nothing fancy.</p>
-<p>Normally <code>sort</code> function expects a bunch of properties from the passed
+second case we write a lambda that implements <code>&lt;</code>. Nothing fancy.
+Normally <code>sort</code> function expects a bunch of properties from the passed
 predicate, like
 <a href="https://en.wikipedia.org/wiki/Weak_ordering#Strict_weak_orderings">“strict weak ordering”</a>
 to return something that looks sorted.</p>
@@ -71,11 +71,12 @@ property? On vanilla <code>nix</code> that would be:</p>
 on different platforms?</p>
 <h2 id="triggering-the-non-determinism">triggering the non-determinism</h2>
 <p>Today I tried to build <code>nix</code> package with <code>gcc</code> <code>STL</code>
-<a href="https://gcc.gnu.org/onlinedocs/libstdc++/manual/debug_mode_using.html#debug_mode.using.mode">debugging enabled</a>. In theory it’s simple: you pass <code>-D_GLIBCXX_DEBUG</code> via
-<code>CXXFLAGS</code> and you get your debugging for free.</p>
-<p>I was chasing an unrelated <code>nix</code> memory corruption bug and did just that.
-I hoped for a simple case like the past <a href="https://github.com/NixOS/nix/pull/8825">PR#8825</a>.</p>
-<p>To my surprise <code>nixpkgs</code> evaluation started triggering <code>libstdc++</code>
+<a href="https://gcc.gnu.org/onlinedocs/libstdc++/manual/debug_mode_using.html#debug_mode.using.mode">debugging enabled</a>.
+In theory it’s simple: you pass <code>-D_GLIBCXX_DEBUG</code> via
+<code>CXXFLAGS</code> and you get your debugging for free.
+I was chasing an unrelated <code>nix</code> memory corruption bug and did just that.
+I hoped for a simple case like the past <a href="https://github.com/NixOS/nix/pull/8825"><code>PR#8825</code></a>.
+To my surprise <code>nixpkgs</code> evaluation started triggering <code>libstdc++</code>
 assertions. For the above “suspicious sort” example the execution was:</p>
 <pre><code>$ nix eval --expr 'builtins.sort (a: b: true) [ 4 3 2 1 ]
 
@@ -142,12 +143,12 @@ that our comparator is not expected to return <code>true</code> for <code>a &lt;
 <p>Here <code>comparator()</code> calls user-supplied function written in
 <code>nix expression language</code> directly (if we ignore a performance special
 case) into <code>std::stable_sort()</code>. The comment suggests that <code>std::sort()</code>
-was already crashing here.</p>
-<p>This means that today <code>builtins.sort</code> semantics are following <code>c++</code>’s
-<code>std::stable_sort()</code> along with it’s undefined behaviours and
+was already crashing here.
+This means that today <code>builtins.sort</code> semantics are following <code>c++</code>
+<code>std::stable_sort()</code> along with it’s undefined behaviors and
 instability for non-conformant <code>comparator()</code> predicate.</p>
 <h2 id="tracking-down-bad-predicates">tracking down bad predicates</h2>
-<p><code>nixpkgs</code> is a vast code base. It’s quite hard to figure out which part
+<p><code>nixpkgs</code> is a vast codebase. It’s quite hard to figure out which part
 of <code>nix expression language</code> code triggers this condition from a <code>C++</code>
 stack trace. I added the following hack into local <code>nix</code> to convert
 those violations into nix-level exceptions:</p>
@@ -180,8 +181,8 @@ those violations into nix-level exceptions:</p>
 <span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>         state.callFunction(*args[0], vs, vBool, noPos);</span></code></pre></div>
 <p>Here before calling the <code>compare(a,b)</code> against two different list
 elements we are making sure that <code>compare(a,a)</code> and <code>compare(b,b)</code> does
-not return <code>true</code>.</p>
-<p>And now the error is a bit less intimidating:</p>
+not return <code>true</code>.
+And now the error is a bit less intimidating:</p>
 <pre><code>nix-repl&gt; builtins.sort (a: b: true) [ 4 3 2 1 ]
 error:
        … while calling the 'sort' builtin
@@ -213,8 +214,8 @@ error:
 <span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="co"># ...</span></span>
 <span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  newest = <span class="bu">builtins</span><span class="op">.</span>head <span class="op">(</span><span class="bu">builtins</span><span class="op">.</span>sort preferable allReleases<span class="op">)</span>;</span></code></pre></div>
-<p>Can you quickly say if <code>preferable</code> satisfies <code>lessThan</code> requirements?</p>
-<p><code>left &gt;= right</code> is generally problematic for sorts:</p>
+<p>Can you quickly say if <code>preferable</code> satisfies <code>lessThan</code> requirements?
+<code>left &gt;= right</code> is generally problematic for sorts:</p>
 <pre><code>nix-repl&gt; builtins.sort (a: b: a &gt;= b) [ 4 3 3 1 ]
 error:
        … while calling the 'sort' builtin
@@ -240,7 +241,7 @@ nix-repl&gt; builtins.sort (a: b: !(b &gt;= a)) [ 4 3 3 1 ]
   3
   1
 ]</code></pre>
-<p>I proposed a seemingly trivial change as <a href="https://github.com/NixOS/nixpkgs/pull/368366">PR#368366</a>:</p>
+<p>I proposed a seemingly trivial change as <a href="https://github.com/NixOS/nixpkgs/pull/368366"><code>PR#368366</code></a>:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/cuda-modules/generic-builders/multiplex.nix</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/cuda-modules/generic-builders/multiplex.nix</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -81,7 +81,7 @@ let</span></span>
@@ -266,8 +267,8 @@ failure is a <code>stan</code> package:</p>
 
        error: !(a &lt; a) assert failed</code></pre>
 <p>Here you can already see that the pattern is suspiciously similar:
-<code>sort versionAtLeast</code> probably does not do what it’s expected to do.</p>
-<p>Proposed a similar fix as <a href="https://github.com/NixOS/nixpkgs/pull/368429">PR#368429</a>.</p>
+<code>sort versionAtLeast</code> probably does not do what it’s expected to do.
+Proposed a similar fix as <a href="https://github.com/NixOS/nixpkgs/pull/368429"><code>PR#368429</code></a>.</p>
 <p>Other packages affected:</p>
 <ul>
 <li><code>mathematica</code>: <a href="https://github.com/NixOS/nixpkgs/pull/368433">PR#368433</a></li>

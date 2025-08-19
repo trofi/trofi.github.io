@@ -47,11 +47,11 @@ about 15 instances of various systems:</p>
 systems. The typical source of duplicates would be a
 <code>/usr/lib/locale/locale-archive</code> file. Today it contains <code>~200MB</code> worth
 of locales on systems with complete set of locales. Another source is
-huge dumps of translation files in <code>/usr/share/locale</code>.</p>
-<p>As I used <code>btrfs</code> I ran <code>duperemove</code> time to time on a <code>/chroot</code>
+huge dumps of translation files in <code>/usr/share/locale</code>.
+As I used <code>btrfs</code> I ran <code>duperemove</code> time to time on a <code>/chroot</code>
 directory to claw back a bit of storage eaten by these duplicates. I had
 a spinning disk at the time and I was amazed by the speed that
-<code>duperemove</code> took to do it’s magic.</p>
+<code>duperemove</code> took to do its magic.</p>
 <h2 id="more-recent-usage-attempt">more recent usage attempt</h2>
 <p>A few years later I got an <code>NVMe</code> <code>SSD</code> storage and started using <code>nix</code>
 extensively to build a lot of packages. <code>nix</code> can produce quite a bit of
@@ -92,8 +92,8 @@ Comparison of extent info shows a net change in shared extents of: 2183168
 Total files scanned:  10636</code></pre>
 <p>Here <code>duperemove</code> managed to deduplicate <code>70%</code> (<code>253MB</code> out of <code>357MB</code>
 considered) in the extent pass comparison. And the extracted extra <code>2MB</code>
-of duplicates when considered <code>4KB</code> blocks within different extents.</p>
-<p>I decided to try <code>duperemove</code> on the whole of my <code>/nix/store</code> directory.
+of duplicates when considered <code>4KB</code> blocks within different extents.
+I decided to try <code>duperemove</code> on the whole of my <code>/nix/store</code> directory.
 I ran <code>duperemove-0.11</code> and got failures related to exhausted file
 descriptors: <code>duperemove</code> ran with <code>32x</code> parallelism and was able to hit
 <code>4096</code> open files. That was easy to fix by
@@ -101,30 +101,30 @@ descriptors: <code>duperemove</code> ran with <code>32x</code> parallelism and w
 I think it worked as fast as before.</p>
 <p>But a while after I ran <code>duperemove-0.13</code> against <code>/nix/store</code>. 2 hours
 later I found that it did not finish and ate <code>100%</code> of the CPU. That was
-unexpected.</p>
-<p>I was not sure if it was a particular file that was causing trouble or
+unexpected.
+I was not sure if it was a particular file that was causing trouble or
 the sheer load on <code>duperemove</code> that made it degrade so much under the
-load.</p>
-<p>I attempted to run <code>duperemove</code> in incremental mode and found out that
-it rescans all the files on the database on each run effectively making
+load.
+I attempted to run <code>duperemove</code> in incremental mode and found out that
+it re-scans all the files on the database on each run effectively making
 the incremental mode quadratic. I filed <a href="https://github.com/markfasheh/duperemove/issues/303">a bug</a>
-to see if it could be fixed.</p>
-<p>Jack implemented incremental mode the same day! I tried it and saw an
+to see if it could be fixed.
+Jack implemented incremental mode the same day! I tried it and saw an
 improvement. But the result was still too slow to run on the whole of
 <code>/nix/store</code> within a day. I could not easily pinpoint the problem of
 <code>100%</code> CPU usage on my workloads.</p>
 <h2 id="duperemove-complexity-intuition"><code>duperemove</code> complexity intuition</h2>
-<p>What are the <code>duperemove</code>’s scaling limits? I had about <code>4 million</code>
+<p>What are the <code>duperemove</code> scaling limits? I had about <code>4 million</code>
 files taking <code>300GB</code> of storage in <code>/nix/store</code> on <code>NVMe</code> device.</p>
-<p>Quick quiz: How long should it take to dedupe that data you would say? A
+<p><strong>Quick quiz</strong>: How long should it take to dedupe that data you would say? A
 minute, an hour, a day?</p>
 <p>In theory all it takes to do is to read all the data out, checksum it
 and attempt the deduplication on identified candidates. Should be an
-IO-bound problem without too many random reads.</p>
-<p>Given that <code>duperemove</code> has an optional <code>sqlite</code> database to persist
+<code>I/O</code>-bound problem without too many random reads.
+Given that <code>duperemove</code> has an optional <code>sqlite</code> database to persist
 details about previous runs it even skips data read of the files it
-already processed.</p>
-<p>If we have a reasonable fast IO storage capable of 1GB/s of sequential
+already processed.
+If we have a reasonable fast <code>I/O</code> storage capable of <code>1GB/s</code> of sequential
 read throughput then it should ideally take about <code>300GB / 1GB/s = ~5 minutes</code>. And on top of that there should be some minor overhead to
 calculate checksums and store some state in <code>sqlite</code> database. That was
 my naive reasoning :)</p>
@@ -134,10 +134,10 @@ hours on my machine.</p>
 <p>I ran <code>perf top</code> and noticed that <code>duperemove</code> showed unusual reading on
 various stages of a run: at one point most of the time was spent in
 <code>sqlite</code> internals, at another one some <code>rb_next()</code> function took most
-of the time. I did not expect such things in an IO-mostly workload.</p>
-<p>As it was not very convenient to experiment with <code>duperemove</code>’s
-behaviour on real data I tried to throw synthetic workloads at it.</p>
-<p>I started simple: created <code>100 thousands</code> files of <code>1KB</code> size and ran
+of the time. I did not expect such things in an <code>I/O</code>-mostly workload.
+As it was not very convenient to experiment with <code>duperemove</code>
+behavior on real data I tried to throw synthetic workloads at it.</p>
+<p>I started simple: created <code>100K</code> files of <code>1KB</code> size and ran
 <code>duperemove</code> at it:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;Creating directory structure, will take a minute&quot;</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> dd</span>
@@ -158,8 +158,8 @@ real    0m39,835s
 user    1m54,903s
 sys     0m8,922s</code></pre>
 <p>Almost <code>40 seconds</code> of real time and almost <code>2 minutes</code> of user time
-(<code>duperemove</code> runs some actions in parallel) to process <code>100MB</code> of data.</p>
-<p>But what did <code>duperemove</code> do all that time? Let’s ask <code>perf</code>:</p>
+(<code>duperemove</code> runs some actions in parallel) to process <code>100MB</code> of data.
+But what did <code>duperemove</code> do all that time? Let’s ask <code>perf</code>:</p>
 <pre><code>$ perf record ./duperemove -q -rd dd/
 $ perf report
 
@@ -212,9 +212,9 @@ $ perf report
 <p>That was a lot better: almost <code>3x</code> speed up just for removing a single
 redundant <code>memset()</code>. It’s a safe change as <code>duperemove</code> guarantees that
 it initializes the area with data from the file before calculating the
-hash.</p>
-<p>Now <code>sqlite</code> is at the top of our profile. Looks like the rest of <code>80%</code>
-samples goes to IO wait time.</p>
+hash.
+Now <code>sqlite</code> is at the top of our profile. Looks like the rest of <code>80%</code>
+samples goes to <code>I/O</code> wait time.</p>
 <h2 id="needless-work-on-small-files">needless work on small files</h2>
 <p>While the test seemed to run quickly I noticed that it complains about
 dedupe attempts all the time:</p>
@@ -229,8 +229,8 @@ Dedupe for file &quot;dd/20/378&quot; had status (1) &quot;data changed&quot;.
 Dedupe for file &quot;dd/20/452&quot; had status (1) &quot;data changed&quot;.
 Dedupe for file &quot;dd/20/453&quot; had status (1) &quot;data changed&quot;.</code></pre>
 <p>Why does <code>duperemove</code> think data has changed? Those are static files
-I just created for test.</p>
-<p>The answer was surprising:</p>
+I just created for test.
+The answer was surprising:</p>
 <ul>
 <li>[good] <code>duperemove</code> skips inline extents in files as file systems can’t
 deduplicate data embedded in metadata blocks</li>
@@ -268,8 +268,8 @@ as well:</p>
 <span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>        ret = dbfile_commit_trans(db);</span></code></pre></div>
 <p>A few lines above <code>duperemove</code> calculates count of non-inline extents
-with data in <code>nb_hash</code> variable. If it’s zero then checksum is zero.</p>
-<p>The fix as is speeds the scan quite a bit:</p>
+with data in <code>nb_hash</code> variable. If it’s zero then checksum is zero.
+The fix as is speeds the scan quite a bit:</p>
 <pre><code>$ time ./duperemove -q -rd dd/
 ...
 Simple read and compare of file data found 0 instances of files that might benefit from deduplication.
@@ -312,8 +312,8 @@ to finish in 2 minutes!</p>
 <h2 id="dedupe-optionspartial-mode"><code>--dedupe-options=partial</code> mode</h2>
 <p>When I skimmed through existing bugs on <code>duperemove</code> bug tracker I
 noticed that <code>duperemove</code> only deduplicates extents of identical size
-and does not try to look into individual blocks for performance reason.</p>
-<p>That sounded a bit strange to me as break up of a file on extents is
+and does not try to look into individual blocks for performance reason.
+That sounded a bit strange to me as break up of a file on extents is
 quite arbitrary at least on <code>btrfs</code>. You can easily have one extent for
 a huge file or a ton of really small ones.</p>
 <p>I threw <code>--dedupe-options=partial</code> at <code>300GB</code> and got a CPU-bound hangup
@@ -391,16 +391,16 @@ QUERY PLAN
 |--SEARCH extents USING INDEX idx_extents_inosub (ino=? AND subvol=?)
 `--CORRELATED SCALAR SUBQUERY 1
    `--SEARCH e USING COVERING INDEX idx_extent_digest (digest=?)</code></pre>
-<p>The first plan is more complicated. One of it’s problems is the use of
+<p>The first plan is more complicated. One of its problems is the use of
 <code>SCAN</code> (full table scan) in <code>CO-ROUTINE nondupe_extents</code>. As I understand
 the output here full <code>extents</code> table scan is performed at least once for
-this whole query.</p>
-<p>Reading the second plan is easy: all searches use existing indexes in
+this whole query.
+Reading the second plan is easy: all searches use existing indexes in
 the tables. We fetch all extents for the <code>inode</code> and then leave only
 those that match a subquery. Subquery also uses only index lookup.</p>
 <p>Now the whole non-incremental <code>duperemove</code> run on my <code>300GB</code> dataset
-takes 9 minutes. And in incremental mode it takes about 4 minutes.</p>
-<p>Yay!</p>
+takes 9 minutes. And in incremental mode it takes about 4 minutes.
+Yay!</p>
 <h2 id="parting-words">Parting words</h2>
 <p>It took me a few steps to get <code>duperemove</code> to work on my machines:</p>
 <ul>

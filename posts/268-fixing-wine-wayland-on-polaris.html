@@ -29,7 +29,7 @@
                 <div class="info">November 28, 2022</div>
             
 
-            <p>After <a href="../posts/261-trying-out-wayland.html">switching to wayland</a> I got
+            <p>After <a href="../posts/261-trying-out-wayland.html">switching to <code>wayland</code></a> I got
 most GUI programs to use <code>wayland</code> backend render. The two main
 exceptions are <code>pidgin</code> (used <code>gtk-2</code>) and <code>wine</code> (uses low level <code>x11</code>
 primitives for many things). <code>pidgin</code> worked fine in <code>Xwayland</code>, but
@@ -57,10 +57,10 @@ mildly curious about the following messages <code>wine</code> was dumping to
 011c:err:waylanddrv:wayland_gl_drawable_update Failed to create EGL surface</code></pre>
 <p>I wanted to find out why <code>wine</code> was failing to create these things.</p>
 <p><code>GBM</code> and <code>EGL</code> acronyms sounded vaguely graphics-related. Creating the
-rendering surface sounded like a simple procedure. Everything neededs a
+rendering surface sounded like a simple procedure. Everything needs a
 surface to draw anything. Maybe that error message is an actual bug?</p>
 <p><code>wine</code> has a great <code>WINEDEBUG=</code> mechanism to enable subsystem-specific
-debug prints at runtime (<code>man wine</code> has detailed synatax description).
+debug prints at runtime (<code>man wine</code> has detailed syntax description).
 To get <code>wayland</code>-related debugging I used <code>WINEDEBUG=waylanddrv,opengl</code>:</p>
 <pre><code>$ WINEDEBUG=waylanddrv,opengl wine foo.exe
 ...
@@ -77,7 +77,7 @@ surface with <code>AR24</code> format (8 bits for each of Red, Blue, Green, Alph
 should not be a problem and the call should succeed. Why does it fail here?</p>
 <p>To ease exploration I started patching <code>mesa</code> and <code>wine-wayland</code> locally
 with <code>fprintf(stderr, ...);</code> calls to see what gets passed around.</p>
-<p><code>nixpkgs</code>’s <code>mesa</code> clients use <code>/run/opengl-driver-32</code> paths to load
+<p><code>nixpkgs</code> <code>mesa</code> clients use <code>/run/opengl-driver-32</code> paths to load
 <code>opengl</code> <code>mesa</code> drivers. That means just rebuilding an application
 against patched <code>mesa</code> locally in <code>nixpkgs</code> checkout is not enough to
 get it used: applications will still load <code>/run/opengl-driver-32</code>
@@ -92,12 +92,12 @@ $ GBM_BACKENDS_PATH=/not-really-used \
       wine foo.exe</code></pre>
 <p>This allowed me to put patches to <code>~/nm</code> checkout of <code>nixpkgs</code> and
 immediately observe their effect on <code>wine-wayland</code>.</p>
-<p>I found that <code>wine</code>’s code at
-<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L373-L440">winewayland.drv</a>.
+<p>I found that <code>wine</code> code at
+<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L373-L440"><code>winewayland.drv</code></a>
 calls <code>wayland_gbm_create_surface()</code> -&gt;
-<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L310-L371">wayland_gl_create_gbm_surface()</a>
--&gt; <a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/gbm.c#L267-L299">wayland_gbm_create_surface()</a>.
-All of the calls are shallow wrappers of one another. They just pass
+<a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/opengl.c#L310-L371"><code>wayland_gl_create_gbm_surface()</code></a>
+-&gt; <a href="https://gitlab.collabora.com/alf/wine/-/blob/wayland/dlls/winewayland.drv/gbm.c#L267-L299"><code>wayland_gbm_create_surface()</code></a>.
+All the calls are shallow wrappers of one another. They just pass
 through the request to create surface. I’ll paste the latter in full
 here:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> gbm_surface <span class="op">*</span>wayland_gbm_create_surface<span class="op">(</span><span class="dt">uint32_t</span> drm_format<span class="op">,</span> <span class="dt">int</span> width<span class="op">,</span> <span class="dt">int</span> height<span class="op">,</span></span>
@@ -148,7 +148,7 @@ not correctness). An example modifier would be to enable tiled pixel
 layout instead of default linear.</p>
 <p>The fun thing is that <code>mesa</code> rejects
 <code>gbm_surface_create_with_modifiers2()</code> call for me with <code>errno = ENOSYS</code>
-at <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gbm/backends/dri/gbm_dri.c#L1343-L1404">src/gbm/backends/dri/gbm_dri.c</a>:</p>
+at <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gbm/backends/dri/gbm_dri.c#L1343-L1404"><code>src/gbm/backends/dri/gbm_dri.c</code></a>:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> gbm_surface <span class="op">*</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>gbm_dri_surface_create<span class="op">(</span><span class="kw">struct</span> gbm_device <span class="op">*</span>gbm<span class="op">,</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>                       <span class="dt">uint32_t</span> width<span class="op">,</span> <span class="dt">uint32_t</span> height<span class="op">,</span></span>
@@ -169,7 +169,7 @@ at <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gbm/backend
 should be present in the backend driver. But in my case of
 <code>GFX8 / POLARIS12</code> modifier support for image creation seems to be
 disabled by <code>mesa</code> at
-<a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/radeonsi/si_texture.c#L2378-L2401">src/gallium/drivers/radeonsi/si_texture.c</a>.
+<a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/radeonsi/si_texture.c#L2378-L2401"><code>src/gallium/drivers/radeonsi/si_texture.c</code></a>.
 Don’t know why.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> si_init_screen_texture_functions<span class="op">(</span><span class="kw">struct</span> si_screen <span class="op">*</span>sscreen<span class="op">)</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -196,7 +196,7 @@ Don’t know why.</p>
 <span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>   <span class="op">}</span></span>
 <span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>Here <code>GFX8</code> does not get a hint of <code>resource_create_with_modifiers</code> and
-as a result <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/frontends/dri/dri2.c#L2196-L2264">src/gallium/frontends/dri/dri2.c</a>
+as a result <a href="https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/frontends/dri/dri2.c#L2196-L2264"><code>src/gallium/frontends/dri/dri2.c</code></a>
 does not set <code>createImageWithModifiers</code>:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>dri2_init_screen_extensions<span class="op">(</span><span class="kw">struct</span> dri_screen <span class="op">*</span>screen<span class="op">,</span></span>
@@ -252,9 +252,9 @@ trick by pretending there are no modifiers (assume <code>LINEAR</code>?):</p>
 <span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>     }</span>
 <span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>     return gbm_surface_create(process_gbm_device, width, height, drm_format, gbm_bo_flags);</span></code></pre></div>
-<p>The idea is to just ignore <code>gbm_surface_create_with_modifiers2()</code>’s
+<p>The idea is to just ignore <code>gbm_surface_create_with_modifiers2()</code>
 result if it fails with <code>ENOSYS</code> and switch over to
-<code>gbm_surface_create()</code> assuming it can handle the the call without
+<code>gbm_surface_create()</code> assuming it can handle the call without
 modifier presence.</p>
 <p>I’m not sure what such a fallback means for other video card types. Will
 it break some tiled workloads? Or at this point surface creation is
@@ -270,19 +270,19 @@ decent job at providing something that works (modulo cards like mine).
 After I applied the fallback hack I was able to run all the games that
 used to work on <code>wine-x11</code>.</p>
 <p><code>wine</code>’s <code>WINEDEBUG=</code> debugging facility is great at tracing both
-application behaviour and <code>wine</code>’s driver behaviour. I had to add
+application behavior and <code>wine</code>’s driver behavior. I had to add
 surprisingly little extra debugging to what is already available in
 <code>wine</code> in form of <code>TRACE(...);</code> calls.</p>
-<p><code>wine</code>’s error message was clear enough to understand why video
+<p><code>wine</code> error message was clear enough to understand why video
 rendering did not produce anything.</p>
-<p><code>nix</code>’s ability to build patched <code>wine</code> against patched <code>mesa</code> without
+<p><code>nix</code> ability to build patched <code>wine</code> against patched <code>mesa</code> without
 destroying existing installation was critical for me to be able to do
 side-by-side comparisons.</p>
 <p><code>mesa</code>’s <code>LIBGL_DRIVERS_PATH=</code> and <code>libglvnd</code>’s
 <code>__EGL_VENDOR_LIBRARY_DIRS=</code> variables are ideal at fiddling with
-patched opengl stack while keeping the main system running.</p>
+patched <code>opengl</code> stack while keeping the main system running.</p>
 <p><code>wine</code>’s and <code>wayland</code>’s way of handling <code>linux</code> <code>DRM</code> subsystem is very
-lightweiht: they effectively pass available configuration around without
+lightweight: they effectively pass available configuration around without
 much of application-specific mangling. At least around surface creation
 logic. That was very easy to get through.</p>
 <p>Have fun!</p>

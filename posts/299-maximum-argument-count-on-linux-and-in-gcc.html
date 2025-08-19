@@ -30,12 +30,12 @@
             
 
             <h2 id="tldr">Tl;DR</h2>
-<p>By default on <code>linux</code> argument list (and environment) is limited by
+<p>By default on <code>linux</code> argument list (and environment size) is limited by
 less than <code>2MB</code> all bytes calculated across all arguments and environment
-(including <code>argv/envp</code> array overheads and null terminators).</p>
-<p><code>ulimit -s</code> can increase this limit to <code>6MB</code>. Individual command line
-and environment <code>K=V</code> pairs are limited to <code>128KB</code>.</p>
-<p>And due to internal implementation deficiencies of <code>gcc</code> argument list
+(including <code>argv/envp</code> array overheads and null terminators).
+<code>ulimit -s</code> can increase this limit to <code>6MB</code>. Individual command line
+and environment <code>K=V</code> pairs are limited to <code>128KB</code>.
+And due to internal implementation deficiencies of <code>gcc</code> argument list
 for <code>gcc</code> happens to be limited by the same <code>128KB</code> limit.</p>
 <h2 id="story-mode">Story mode</h2>
 <p>My <a href="../posts/298-unexpected-runtime-dependencies-in-nixpkgs.html">previous attempt</a>
@@ -52,7 +52,7 @@ limit. In case of <code>qemu</code> we pass around a few thousands of
 <code>-fmacro-prefix-map=</code> options (<code>qemu</code> is a big package and has many
 build inputs).</p>
 <p>Ideally I would like to be able to pass a lot more options without
-hitting the arguments limit (10x? 100x?). Luckily <code>gcc</code> and other tools
+hitting the arguments limit (10x more? 100x more?). Luckily <code>gcc</code> and other tools
 like <code>ld</code> do support a way to pass many options indirectly via response
 files:</p>
 <pre><code>$ gcc -g -O2 -c a.c</code></pre>
@@ -61,13 +61,13 @@ files:</p>
 $ echo &quot;-O2&quot; &gt;&gt; a.rsp
 $ gcc @a.rsp -c a.c</code></pre>
 <p>But I’ll leave response files to another post as it ended up being
-it’s own rabbit hole.</p>
-<p>Instead let’s explore how many arguments you can pass to a single
+it’s own rabbit hole.
+Instead, let’s explore how many arguments you can pass to a single
 command in <code>linux</code>.</p>
 <h2 id="exploring-the-argument-count-limits">Exploring the argument count limits</h2>
 <p>So what are the actual limits we are hitting against here? How many
-arguments can we pass to <code>gcc</code> without any problems?</p>
-<p>Let’s explore it! I’ll start by adding more and more <code>-g</code> options to
+arguments can we pass to <code>gcc</code> without any problems?
+Let’s explore it! I’ll start by adding more and more <code>-g</code> options to
 <code>gcc</code> call until it starts failing for a command line limit:</p>
 <pre><code>$ nix shell nixpkgs#gcc
 $$ set -x; touch a.c; args=(-g); while gcc ${args[@]} -c a.c; do args+=(&quot;${args[@]}&quot;); done; echo ${#args[@]}
@@ -87,11 +87,11 @@ gcc: fatal error: cannot execute 'cc1': execv: Argument list too long
 compilation terminated.
 + echo 32768
 32768</code></pre>
-<p>Our limit is somewhere below 32K (this is a lot lower than I expected).</p>
-<p>In the above snippet we double the length of argument list to speed the
+<p>Our limit is somewhere below <code>32K</code> (this is a lot lower than I expected).
+In the above snippet we double the length of argument list to speed the
 search up a bit, thus it’s not an exact value and some closest
-power-of-2 ceiling.</p>
-<p>Let’s extend this snippet a bit and build more flexible argument count
+power-of-2 ceiling.
+Let’s extend this snippet a bit and build more flexible argument count
 probe that returns us precise value. I called it <code>probe-argsize.bash</code>:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -128,33 +128,33 @@ exact value.</p>
 <pre><code>$$ touch a.c; ./probe-argsize.bash -g gcc -c a.c
 
 26118</code></pre>
-<p>~26K parameters. Seems to work!</p>
-<p>What if we make our argument a bit larger? Say, pass <code>-ggdb3</code> instead of
+<p><code>~26K</code> parameters. Seems to work!
+What if we make our argument a bit larger? Say, pass <code>-ggdb3</code> instead of
 <code>-g</code>?</p>
 <pre><code>$ touch a.c; ./probe-argsize.bash -ggdb3 gcc -c a.c
 14510</code></pre>
-<p>Just ~14K. That degrades very quickly. The available length is decreased
-by half! (or something like that)</p>
-<p>How about longer option? I’ll try ~100 bytes long one:</p>
+<p>Just <code>~14K</code>. That degrades very quickly. The available length is decreased
+by half! (or something like that)
+How about longer option? I’ll try <code>~100</code> bytes long one:</p>
 <pre><code>$ touch a.c; ./probe-argsize.bash -I0123456789-90123456789-0123456789-0123456789-0123456789-0123456789-01234567889-0123456789-0123456789 \
   gcc -c a.c
 1209</code></pre>
 <p>1209 is extremely low. That is on par with what <code>qemu</code> exercises in
 <code>nixpkgs</code>. Looks like our limit here is about <code>~120K</code> bytes if we sum up
-all our argument lengths to <code>gcc</code>.</p>
-<p>What if the problem is in some internal <code>gcc</code> limit and not the OS
+all our argument lengths to <code>gcc</code>.
+What if the problem is in some internal <code>gcc</code> limit and not the <code>OS</code>
 itself? Let’s <code>strace</code> <code>gcc</code> call just to make sure:</p>
 <pre><code>$$ strace -f gcc ${args[@]} -c a.c
 ...
 [pid 1360260] execve(&quot;cc1&quot;, [&quot;cc1&quot;, &quot;-quiet&quot;, &quot;-idirafter&quot;, ..., &quot;-g&quot;, ...], \
     0x1474b80 /* 103 vars */) = -1 E2BIG (Argument list too long)</code></pre>
 <p>Here we see that <code>E2BIG</code> comes right from an <code>execve()</code> system call.
-Thus it’s kernel’s limitation of some sort.</p>
+Thus, it’s kernel’s limitation of some sort.</p>
 <h2 id="getting-the-formula">Getting the formula</h2>
 <p>Can we easily increase the limit? Let’s find out how <code>linux</code> implements
-limits in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L1888C1-L1894C13">fs/exec.c</a>.
-Maybe there is a <code>linux</code>-specific hack somewhere we could pull out.</p>
-<p>There are a few places where <code>-E2BIG</code> is returned. This code looks most
+limits in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L1888C1-L1894C13"><code>fs/exec.c</code></a>.
+Maybe there is a <code>linux</code>-specific hack somewhere we could pull out.
+There are a few places where <code>-E2BIG</code> is returned. This code looks most
 relevant:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> do_execveat_common<span class="op">(</span><span class="dt">int</span> fd<span class="op">,</span> <span class="kw">struct</span> filename <span class="op">*</span>filename<span class="op">,</span></span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>			      <span class="kw">struct</span> user_arg_ptr argv<span class="op">,</span></span>
@@ -195,7 +195,7 @@ relevant:</p>
 <span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>I wondered if <code>MAX_ARG_STRINGS</code> could be one of our limits once
 we solve the smaller limit we are bumping into now, but nope it’s defined
-in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/include/uapi/linux/binfmts.h#L9">include/uapi/linux/binfmts.h</a>
+in <a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/include/uapi/linux/binfmts.h#L9"><code>include/uapi/linux/binfmts.h</code></a>
 as:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * These are the maximum length and maximum number of strings passed to the</span></span>
@@ -263,23 +263,23 @@ compress it as:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> <span class="dv">6</span><span class="er">MB</span><span class="op">;</span> <span class="co">// 8MB / 4 * 3</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> min<span class="op">(</span>limit<span class="op">,</span> CURRENT_STACK_LIMIT <span class="op">/</span> <span class="dv">4</span><span class="op">);</span></span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>limit <span class="op">=</span> max<span class="op">(</span>limit<span class="op">,</span> <span class="dv">128</span><span class="er">K</span><span class="op">);</span></span></code></pre></div>
-<p>The above in plain words: argument limits (in bytes) are at least 128K
-and at most are 6MB. And by default it’s <code>CURRENT_STACK_LIMIT / 4</code>.</p>
-<p><code>CURRENT_STACK_LIMIT</code> default is set to <code>_STK_LIM</code> as well:</p>
+<p>The above in plain words: argument limits (in bytes) are at least <code>128K</code>
+and at most are <code>6MB</code>. And by default it’s <code>CURRENT_STACK_LIMIT / 4</code>.
+<code>CURRENT_STACK_LIMIT</code> default is set to <code>_STK_LIM</code> as well:</p>
 <pre><code>$ ulimit -s
 8192</code></pre>
-<p>Thus the argument length limit by default is <code>2MB</code>. And wee can raise up
-to 6MB (3x) maximum if we set <code>ulimit -s</code> up to <code>24MB</code>. Setting stack
-to anything higher would not affect argument limit.</p>
-<p>That is the theory. Does it match the practice?</p>
-<p>What did I miss? Why do we get only ~128K or argument limit for <code>gcc</code>
-and not ~2MB?</p>
+<p>Thus, the argument length limit by default is <code>2MB</code>. And wee can raise up
+to <code>6MB</code> (3x) maximum if we set <code>ulimit -s</code> up to <code>24MB</code>. Setting stack
+to anything higher would not affect argument limit.
+That is the theory. Does it match the practice?
+What did I miss? Why do we get only <code>~128K</code> or argument limit for <code>gcc</code>
+and not <code>~2MB</code>?</p>
 <p>There is a small catch: I kept exploring limits of <code>gcc</code> executable. In
 <code>nixpkgs</code> it’s a big shell wrapper. Part of wrapper’s work is to set
 various environment variables. Not just pass through the arguments.
 And each environment variable is treated roughly like a command line
-parameter.</p>
-<p>Let’s use known simple <code>printf</code> binary instead (it should not set any
+parameter.
+Let’s use known simple <code>printf</code> binary instead (it should not set any
 environment variables internally) and see what are it’s limits:</p>
 <pre><code>$ ./probe-argsize.bash -g $(which printf) &quot;%s&quot; --
 189929</code></pre>
@@ -329,34 +329,34 @@ pointer array and not on the arguments themselves.</p>
 close:</p>
 <pre><code>$ ./probe-argsize.bash &quot;&quot; env -i $(which printf) &quot;%s&quot; --
 232134</code></pre>
-<p>An exercise for the reader: why is it 822 arguments shorter that our
+<p>An exercise for the reader: why is it 822 arguments shorter than our
 maximum theoretical value? A word of warning: it’s not a very simple
 question.</p>
 <p>Given that <code>2MB</code> is derived from <code>1/4 * CURRENT_STACK_LIMIT</code> we can
-increase that as well using <code>ulimit -s</code>. Let’s add 100x:</p>
+increase that as well using <code>ulimit -s</code>. Let’s add <code>100x</code>:</p>
 <pre><code>$ ulimit -s
 8192
 $ ulimit -s 819200
 
 $ ./probe-argsize.bash &quot;&quot; env -i $(which printf) &quot;%s&quot; --
 698168</code></pre>
-<p>Note that it’s only a 3x improvement (and not a 100x improvement).</p>
-<p>This is exactly our <code>limit = 6MB;</code> absolute limit above. Once again: i
+<p>Note that it’s only a 3x improvement (and not a 100x improvement).
+This is exactly our <code>limit = 6MB;</code> absolute limit above. Once again: if
 you need to get maximum out of your argument limits on today’s <code>linux</code>
-it’s enough to set <code>ulimit -s</code> from <code>8MB</code> to <code>24MB</code>.</p>
-<p>Which gives us final formula of <code>6MB / 9 = 699050</code> argument count on
-64-bit systems.</p>
-<p>Fun fact: on 32-bit host kernel the limit should probably be slightly higher
+it’s enough to set <code>ulimit -s</code> from <code>8MB</code> to <code>24MB</code>.
+Which gives us final formula of <code>6MB / 9 = 699050</code> argument count on
+64-bit systems.
+Fun fact: on 32-bit host kernel the limit should probably be slightly higher
 due to shorter pointer size:</p>
 <ul>
 <li><code>2MB / 5 = 419430</code> arguments (compared to <code>233016</code> on <code>64-bit</code>)</li>
 <li><code>6MB / 5 = 1258291</code> arguments (compared to <code>699050</code> on <code>64-bit</code>)</li>
 </ul>
-<p>That is 1.8x larger than 64-bit systems!</p>
+<p>That is <code>1.8x</code> larger than 64-bit systems!</p>
 <p>Once again: it’s a pretty silly benchmark as it’s not very useful to
 pass a million empty strings to the program. But it’s a good model to
-understand the absolute limits.</p>
-<p>We can do more realistic estimates if we know average argument length
+understand the absolute limits.
+We can do more realistic estimates if we know average argument length
 in our use case. Say, if the bulk of our parameters are paths to the
 <code>/nix/store</code> we can safely say those are at least 50 bytes long.</p>
 <p>For 100-bytes long use case we would get:</p>
@@ -367,10 +367,10 @@ in our use case. Say, if the bulk of our parameters are paths to the
 <p>Thus for simple case we should be able to pull out almost <code>~20K</code> by
 default and almost <code>~60K</code> with larger stack size.</p>
 <h2 id="nixpkgs-gcc-wrapper-mystery"><code>nixpkgs</code> <code>gcc</code> wrapper mystery</h2>
-<p>So why does <code>gcc</code> have so much overhead of <code>-g</code> options? We get about
-<code>190K</code> options for for <code>printf -g</code> and only 20K for <code>gcc -g</code> above.
+<p>So why does <code>gcc</code> have so much overhead for <code>-g</code> options? We get about
+<code>190K</code> options for <code>printf -g</code> and only 20K for <code>gcc -g</code> above.
 That is almost 10x reduction.</p>
-<p>Could <code>nixpkgs</code>’s <code>gcc</code> wrapper artificially inflate it’s arguments
+<p>Could <code>nixpkgs</code> <code>gcc</code> wrapper artificially inflate its arguments
 somehow? <code>strace</code> should help us verify that:</p>
 <pre><code>$ nix shell nixpkgs#gcc
 $$ touch a.c &amp;&amp; strace -etrace=execve -s 10000 -f -v -olog gcc -Ihow-many-duplcates -c a.c
@@ -388,8 +388,8 @@ $$ grep cc1 log
 translated by package setup hooks not visible in <code>nix shell</code>. Let’s
 check their full effect.</p>
 <p>I’ll write a complete small derivation to demonstrate the explosion
-closer to <code>qemu</code> failure mode.</p>
-<p>Here is a <code>default.nix</code> derivation that should demonstrate the point:</p>
+closer to <code>qemu</code> failure mode.
+Here is a <code>default.nix</code> derivation that should demonstrate the point:</p>
 <div class="sourceCode" id="cb25"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">pkgs</span> <span class="op">?</span> <span class="bu">import</span> &lt;nixpkgs&gt; <span class="op">{</span> <span class="op">}</span> <span class="op">}</span>:</span>
 <span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>pkgs<span class="op">.</span>stdenv<span class="op">.</span>mkDerivation <span class="op">{</span></span>
 <span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;probe-wrapper&quot;</span><span class="op">;</span></span>
@@ -403,7 +403,7 @@ closer to <code>qemu</code> failure mode.</p>
 <span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a><span class="st">    strace -etrace=execve -s 10000 -f -v -o$out -- $CC -c a.c -o a.o</span></span>
 <span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a><span class="st">  ''</span><span class="op">;</span></span>
 <span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Now we can quickly build it and explore it’s contents:</p>
+<p>Now we can quickly build it and explore its contents:</p>
 <pre><code>$ nix-build
 $ grep cc1 result
 
@@ -450,7 +450,7 @@ $ grep cc1 result
 <li>[new] <code>NIX_CFLAGS_COMPILE_FOR_TARGET</code> variable, we set ourselves</li>
 </ul>
 <p>None of these variables looks redundant: they serve the purpose to
-propagate flags across shell wrappers. Thus we’ll have to keep in mind
+propagate flags across shell wrappers. Thus, we’ll have to keep in mind
 this 6x explosion.</p>
 <p>And yet. 6x explosion does not explain why mere <code>-g</code> option can be
 present only 20K times instead of 200K times.</p>
@@ -471,7 +471,7 @@ $ $(which printf) &quot;%s&quot; $(printf &quot;%0*d&quot; $((2 ** 17 - 1)) ) &g
 $ echo $((2 ** 17))
 131072</code></pre>
 <p>It comes from <code>copy_string()</code> from the same
-<a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L523">fs/exec.c</a>:</p>
+<a href="https://github.com/torvalds/linux/blob/2cf0f715623872823a72e451243bbf555d10d032/fs/exec.c#L523"><code>fs/exec.c</code></a>:</p>
 <div class="sourceCode" id="cb31"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> copy_strings<span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="kw">struct</span> user_arg_ptr argv<span class="op">,</span></span>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>			<span class="kw">struct</span> linux_binprm <span class="op">*</span>bprm<span class="op">)</span></span>
 <span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
@@ -518,8 +518,8 @@ $ E=$(printf &quot;%0*d&quot; $((2 ** 17 - 2)) ) $(which printf) &quot;1&quot; &
 -bash: /run/current-system/sw/bin/printf: Argument list too long
 126</code></pre>
 <p>Here we run <code>printf 1</code> with a large <code>E=000000...000</code> variable and expose
-the same <code>128K</code> limit.</p>
-<p>This is bad news. As we saw above <code>gcc</code> uses single <code>COLLECT_GCC_OPTIONS</code>
+the same <code>128K</code> limit.
+This is bad news. As we saw above <code>gcc</code> uses single <code>COLLECT_GCC_OPTIONS</code>
 variable to pass all options around. And on top of that it quotes each
 argument.</p>
 <p>As a result <code>gcc -g -g ...</code> turns into
@@ -559,13 +559,13 @@ becomes even more pessimistic:</p>
 <li>for no overhead: <code>128 * 1024 / (220 + 9) / 4 = 143</code> variables!</li>
 </ul>
 <p>It might sound like a lot but it’s not that much of a budget: some
-packaging systems (like <code>haskell</code>’s <code>hackage</code>) do like small
+packaging systems (like <code>haskell</code> <code>hackage</code>) do like small
 fine-grained packages and occasionally do install <code>C</code> header files.
-<code>nix</code> itself favours smaller packages to speed up rebuilds and shrink
+<code>nix</code> itself favors smaller packages to speed up rebuilds and shrink
 runtime closure. <code>pkg-config</code> is geared towards installing packages
 into individual directories.</p>
 <p>And what is worse: <code>NIX_CFLAGS_COMPILE</code> is not the only option
-that exhibits this behaviour. Here is the longer list following
+that exhibits this behavior. Here is the longer list following
 <code>mangleVarList</code> used in <code>nixpkgs</code>:</p>
 <pre><code># from pkgs/build-support/cc-wrapper/add-flags.sh
 NIX_CFLAGS_COMPILE
@@ -594,7 +594,7 @@ variables.</p>
 <h2 id="parting-words">Parting words</h2>
 <p>Even on <code>linux</code> command line argument limits are hard. If you can try to
 use files to pass inputs of unbounded sizes.</p>
-<p><code>linux</code> has unreachable <code>0-x7fffFFFF</code> argument count limit when executing
+<p><code>linux</code> has unreachable <code>0x7fffFFFF</code> argument count limit when executing
 the commands. It does have an overall limit <code>2MB</code> limit that one can
 increase to <code>6MB</code>. And on top of that individual arguments are limited
 by <code>128K</code> limit that you can’t raise.</p>
@@ -607,15 +607,15 @@ to <code>1258291</code> empty string arguments on 32-bits and <code>699050</code
 of thousands to tens of thousands.</p>
 <p><code>gcc</code> is a special <code>COLLECT_GCC_OPTIONS</code> case and it has a limit of
 <code>128KB</code> making argument limits onto hundreds.</p>
-<p>Initially I planned to workaround <code>qemu</code> failure by using <code>gcc</code>’s
+<p>Initially I planned to work around <code>qemu</code> failure by using <code>gcc</code>
 response files. I thought it would save the problem completely.
 Unfortunately <code>COLLECT_GCC_OPTIONS</code> contains already expanded response
 file contents and thus response files will only remove multiplication
-factor but will not sidestep 128KB limit.</p>
+factor but will not sidestep <code>128KB</code> limit.</p>
 <p>On the bright side <code>COLLECT_GCC_OPTIONS</code> is an internal <code>gcc</code>
 implementation detail that should be fixable without much external
 impact. Even if we move it to proper argument list it should already
-unlock <code>2MB</code> limit. And if we could pass response files through we cloud
+unlock <code>2MB</code> limit. And if we could pass response files through we could
 sidestep the limit entirely. Filed <a href="https://gcc.gnu.org/PR111527" class="uri">https://gcc.gnu.org/PR111527</a> to
 <code>gcc</code> upstream.</p>
 <p>On top of that as a medium-term workaround I proposed the change to

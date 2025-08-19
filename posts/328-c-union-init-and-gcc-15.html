@@ -83,7 +83,7 @@ zero initialization of <code>sizeof(v)</code> via
 <pre><code>$ gcc a.c -o a -O2 &amp;&amp; ./a
 v.s:
   .fs[3] = 0x000043</code></pre>
-<p>Whoops. That that is clearly uninitialized value left after <code>use_stack()</code>
+<p>Whoops. That is clearly uninitialized value left after <code>use_stack()</code>
 execution. <code>valigrind</code> is also not happy about it:</p>
 <pre><code>$ valgrind --quiet --track-origins=yes ./a
 v.s:
@@ -113,12 +113,12 @@ Use of uninitialised value of size 8
 <p><code>gcc-15</code> implements <code>v = { 0 }</code> as a single 32-bit store as if it was
 <code>v.dummy = 0;</code> and leaves the rest of the union intact.</p>
 <p>Is it a bug?</p>
-<p><code>gcc-15</code> intentionally changed the zeroing behaviour to do less in
+<p><code>gcc-15</code> intentionally changed the zeroing behavior to do less in
 <a href="https://gcc.gnu.org/PR116416"><code>PR116416</code></a> with
 <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=0547dbb725b6d8e878a79e28a2e171eafcfbc1aa">this commit</a>
 to generate more optimal code.</p>
 <p>Fun fact: the patch also adds a <code>-fzero-init-padding-bits=unions</code>
-option to enable the old behaviour.</p>
+option to enable the old behavior.</p>
 <h2 id="the-real-bug">the real bug</h2>
 <p>The above example might sound theoretical, but I extracted it from an
 <code>mbedtls</code> test suite failure. After a recent <code>gcc-15</code> update the tests
@@ -126,7 +126,7 @@ are now failing as:</p>
 <pre><code>The following tests FAILED:
         91 - psa_crypto-suite (Failed)
        113 - psa_crypto_storage_format.v0-suite (Failed)</code></pre>
-<p>I initially thought it’s a compiler bug related to arithmetics. But
+<p>I initially thought it’s a compiler bug related to arithmetic. But
 exploring the failing test I found the following pattern:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">// at tests/src/psa_exercise_key.c:</span></span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  psa_mac_operation_t operation <span class="op">=</span> PSA_MAC_OPERATION_INIT<span class="op">;</span></span>
@@ -243,9 +243,9 @@ like that:</p>
 ==2758824==    at 0x40822C: test_mac_key_policy (test_suite_psa_crypto.function:2167)</code></pre>
 <p>Unfortunately I don’t think there is a simple fix for that (apart from
 enabling new <code>-fzero-init-padding-bits=unions</code> compiler flag if it’s
-supported.</p>
-<p>I filed the issue upstream as
-<a href="https://github.com/Mbed-TLS/mbedtls/issues/9814">Issue #9814</a> hoping to
+supported.
+I filed the issue upstream as
+<a href="https://github.com/Mbed-TLS/mbedtls/issues/9814"><code>Issue #9814</code></a> hoping to
 get some guidance.</p>
 <h2 id="parting-words">parting words</h2>
 <p><code>gcc-15</code> will be more efficient at handling partial union initialization.</p>
@@ -255,7 +255,7 @@ users. It’s a bit scary to discover it in security library first.</p>
 <p>At least <code>valgrind</code> is able to detect trivial cases of uninitialized
 use of partially initialized unions.</p>
 <p><code>gcc-15</code> also provides <code>-fzero-init-padding-bits=unions</code> to flip the old
-behaviour back on. This will allow nailing down bugs using a single
+behavior back on. This will allow nailing down bugs using a single
 compiler version instead of comparing to <code>gcc-14</code>.</p>
 <p>I suspect <code>gcc</code> historically zero-initialized the whole enums to be
 closer to incomplete <code>struct</code> initialization

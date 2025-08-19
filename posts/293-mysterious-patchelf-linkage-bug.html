@@ -30,8 +30,8 @@
             
 
             <p>Today’s mystery started from <a href="https://hydra.nixos.org/build/229663092">this build failure</a>
-noticed by Vladimir on <code>staging-next</code> branch of <code>nixpkgs</code>.</p>
-<p>There <code>aarch64-linux</code> build
+noticed by Vladimir on <code>staging-next</code> branch of <code>nixpkgs</code>.
+There <code>aarch64-linux</code> build
 <a href="https://hydra.nixos.org/log/k9mdaj5a9rbpkc8x9hj9mw3papraamcn-patchelf-0.15.0.drv">failed</a>
 to compile <code>patchelf</code> as part of <code>stdenv</code> with this mysterious error:</p>
 <pre><code>Making all in src
@@ -53,7 +53,7 @@ ld: patchelf.o: in function `__gnu_cxx::__atomic_add(int volatile*, int)':
 ld: patchelf.o:...-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:71:
   more undefined references to `__aarch64_ldadd4_acq_rel' follow
 collect2: error: ld returned 1 exit status</code></pre>
-<p>It is the <code>build.log</code> in almost all of it’s entirety. I had a small
+<p>It is the <code>build.log</code> in almost all of its entirety. I had a small
 change in <code>staging-next</code> branch which should absolutely not cause that
 failure. But I was not sure (one can never be sure when it comes to the
 toolchain bugs).</p>
@@ -62,48 +62,47 @@ library lookup paths in <code>cc-wrapper</code> or <code>ld-wrapper</code>? Or a
 <h2 id="first-hypothesis">First hypothesis</h2>
 <p>I had some past experience with errors like that in recent the past
 <a href="https://github.com/NixOS/nixpkgs/pull/158047">here</a> and
-<a href="https://github.com/NixOS/nixpkgs/issues/201254">here</a>.</p>
-<p>In both cases it was a <code>nixpkgs</code>-specific problem of mixing multiple
+<a href="https://github.com/NixOS/nixpkgs/issues/201254">here</a>.
+In both cases it was a <code>nixpkgs</code>-specific problem of mixing multiple
 toolchain versions in a single <code>stdenv</code>. I expect this kind of problem
 to come back from time to time until bootstrap process is changed to
-avoid any mixing of toolchain versions. Thus I was looking forward to
-debug yet another one of those.</p>
-<p>I ran the bisect and got the
+avoid any mixing of toolchain versions.</p>
+<p>Thus, I was looking forward to debug yet another one of those. I ran the
+bisect and got the
 <a href="https://github.com/NixOS/nixpkgs/commit/8470989a96eb1c0e0c12c30c1b7bd7174ed9349b">Merge pull request #245550 from trofi/gcc-restore-sys-include</a>.
-as the culprit.</p>
-<p>My own commit! Uh-on. One of the problems is that it’s a merge commit of
+as the culprit.
+My own commit! Uh-on. One of the problems is that it’s a merge commit of
 the change, not the change itself. Why did bisect skip the change
-itself? Why did the PR cause this failure at all? It did not make sense.
+itself? Why did the <code>PR</code> cause this failure at all? It did not make sense.
 Reverting the commit on top of <code>staging-next</code> did fix the <code>patchelf</code>
 linkage. Should it be the culprit then? I was about to submit the revert
-and move on to less cryptic things.</p>
-<p>But for some reason just before giving up I tried to run <code>--rebuild</code> on
+and move on to less cryptic things.
+But for some reason just before giving up I tried to run <code>--rebuild</code> on
 a random “good” commit and got the <code>patchelf</code> linkage failure! That
-meant the error was non-deterministic. It did not make sense.</p>
-<p>On one hand <code>sys-include</code> commit above is quite relevant to the way
-<code>gcc</code> bootstraps. On the other hand it is not supposed to lead to
+meant the error was non-deterministic. It did not make sense.
+On one hand <code>sys-include</code> commit above is quite relevant to the way
+<code>gcc</code> bootstraps. On the other hand, it is not supposed to lead to
 non-deterministic failures.</p>
 <p>I had to start from the first principles to see where and how linkage
 process breaks.</p>
 <h2 id="what-is-this-error-about">What is this error about?</h2>
-<p>Let’s look at the specifics of code using atomics in <code>gcc</code>.</p>
-<p><code>libstdc++</code> (<code>gcc</code>s <code>c++</code> template library) uses atomic operations in
-various containers. For example <code>&lt;string&gt;</code> uses atomics to implement
+<p>Let’s look at the specifics of code using <code>atomics</code> in <code>gcc</code>.
+<code>libstdc++</code> (<code>gcc</code> <code>c++</code> template library) uses atomic operations in
+various containers. For example, <code>&lt;string&gt;</code> uses <code>atomics</code> to implement
 copy-on-write semantics. Naturally <code>patchelf</code> uses a bit of
-<code>std::string</code> as well. Thus it’s expected to use a bit of atomics like
+<code>std::string</code> as well. Thus, it’s expected to use a bit of <code>atomics</code> like
 <code>__atomic_fetch_add()</code> builtin.</p>
-<p>Each architecture implements atomics in a slightly different way: some
-get away with a single instruction, some require quite a bit of code.
-Let’s have a look at <code>x86_64</code> and <code>aarch64</code> to see how close they are.</p>
-<p>I’ll use the very <code>/nix/store/c7qmp1dgqf3hh4fjw74y2k662nmaslcy-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66</code>
+<p>Each architecture implements <code>atomics</code> in a slightly different way: some
+do get away with a single instruction, some require quite a bit of code.
+Let’s look at <code>x86_64</code> and <code>aarch64</code> to see how close they are.
+I’ll use the very <code>/nix/store/c7qmp1dgqf3hh4fjw74y2k662nmaslcy-xgcc-12.3.0/include/c++/12.3.0/ext/atomicity.h:66</code>
 source code bit from the error we saw above.</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// atomic.c</span></span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f<span class="op">(</span><span class="dt">int</span> <span class="op">*</span> p<span class="op">,</span> <span class="dt">int</span> v<span class="op">)</span> <span class="op">{</span></span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> __atomic_fetch_add<span class="op">(</span>p<span class="op">,</span> v<span class="op">,</span> __ATOMIC_ACQ_REL<span class="op">);</span></span>
 <span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>The function <code>f()</code> here atomically adds a <code>v</code> value stored at <code>p</code> and
-returns some result.</p>
-<p><code>x86_64</code> generates the following code:</p>
+returns some result. <code>x86_64</code> generates the following code:</p>
 <pre><code>$ gcc -O2 -S a.c -o -
     f:
         movl         %esi, %eax
@@ -123,7 +122,7 @@ as simple?</p>
         ldp     x29, x30, [sp], 16
         ret</code></pre>
 <p>We see a big difference here: <code>gcc</code> emits call into outside
-<code>__aarch64_ldadd4_acq_rel</code> function. It’s code hides in <code>libgcc.a</code>:</p>
+<code>__aarch64_ldadd4_acq_rel</code> function. Its code hides in <code>libgcc.a</code>:</p>
 <pre><code>__aarch64_ldadd4_acq_rel:
    0:           bti     c
    4:           adrp    x16, 0 &lt;__aarch64_have_lse_atomics&gt;
@@ -140,7 +139,7 @@ as simple?</p>
   28:           cbnz    w15, 1c &lt;__aarch64_ldadd4_acq_rel+0x1c&gt;
   2c:           ret</code></pre>
 <p>Quite a bit of code here as well: if CPU supports <code>ldaddal</code> then
-<code>libgcc.a</code> uses that. Otherwise it falls back to
+<code>libgcc.a</code> uses that. Otherwise, it falls back to
 <code>ldaxr; add; stlxr; cbnz</code>.</p>
 <p>This amount of code is probably the reason why the code is not inlined
 by <code>gcc</code>. For comparison <code>clang</code> does something a bit different:</p>
@@ -164,23 +163,22 @@ by <code>gcc</code>. For comparison <code>clang</code> does something a bit diff
     f:
         ldaddal w1, w0, [x0]
         ret</code></pre>
-<p>All of the above tells us that sometimes <code>gcc</code> generates calls into
+<p>This tells us that sometimes <code>gcc</code> generates calls into
 “external” libraries like <code>libgcc.a</code> (or <code>libgcc_s.so</code>) to implement
 larger primitives. And this decision might depend on the backend
 architecture and compiler flags.</p>
 <h2 id="looking-at-the-linkage-command">Looking at the linkage command</h2>
 <p>I filed <a href="https://github.com/NixOS/nixpkgs/issues/246147">the bug</a> to
-start capturing important details of the bug to see how far into it I
-can get.</p>
-<p>First I needed to extract exact attribute failing to build on <code>aarch64</code>.</p>
-<p>I added <code>boot.binfmt.emulatedSystems = [ "aarch64-linux" ];</code> to
+start capturing important details of the bug.
+First I needed to extract exact attribute failing to build on <code>aarch64</code>.
+I added <code>boot.binfmt.emulatedSystems = [ "aarch64-linux" ];</code> to
 <code>/etc/nixos/configuration.nix</code> to get <code>binfmt-misc</code> wrapper and ran a
 few build commands like:</p>
 <pre><code>$ nix build --no-link -f. --argstr system aarch64-linux patchelf -L</code></pre>
 <p>to point at the exact failing attribute. It ended up being
 <code>stdenv.__bootPackages.stdenv.__bootPackages.stdenv.__bootPackages.patchelf</code>.
-The attribute points right in the middle of <code>stdenv</code> bootstrap.</p>
-<p>I dropped into interactive shell to poke at the exact details of build
+The attribute points right in the middle of <code>stdenv</code> bootstrap.
+I dropped into interactive shell to poke at the exact details of build
 failure against <code>good</code> and <code>bad</code> states with <code>nix develop</code>:</p>
 <pre><code>$ nix develop -f. --argstr system aarch64-linux patchelf
 error (ignored): error: '--arg' and '--argstr' are incompatible with flakes
@@ -254,18 +252,18 @@ lib/gcc/aarch64-unknown-linux-gnu/12.3.0/libgcc_eh.a
 lrwxrwxrwx 1419 root root 3 Jan  1  1970 ...-xgcc-12.3.0/lib64 -&gt; lib</code></pre>
 <h2 id="race-condition">Race condition</h2>
 <p>So even if the file was stripped twice, why would it be a problem? Isn’t
-<code>strip</code> idempotent in this regard?</p>
-<p>It would as long as <code>strip</code> is ran sequentially. And it used to be the
+<code>strip</code> idempotent in this regard?
+It would as long as <code>strip</code> is ran sequentially. And it used to be the
 case for a while. But a few weeks ago the <code>strip</code> hook was made parallel
-in <a href="https://github.com/NixOS/nixpkgs/pull/207101">PR #207101</a>!</p>
+in <a href="https://github.com/NixOS/nixpkgs/pull/207101"><code>PR#207101</code></a>!</p>
 <p>As a result two <code>strip</code> commands had a chance to open <code>libgcc.a</code>, strip
 it and write the result back. Sometimes you are lucky and you get
 something that works. But sometimes you are not so lucky and one of the
 <code>stip</code> commands reads incompletely written <code>libgcc.a</code> by the previous
 <code>strip</code>.</p>
 <h2 id="the-fix">The fix</h2>
-<p>The fix (or the workaround) is not to attemt to process the same file
-twice. <a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a>
+<p>The fix (or the workaround) is not to attempt to process the same file
+twice. <a href="https://github.com/NixOS/nixpkgs/pull/246164"><code>PR#246164</code></a>
 implements naive form of the symlink resolution via <code>realpath</code> and
 double-strip avoidance via <code>sort -u</code>:</p>
 <div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/build-support/setup-hooks/strip.sh</span></span>
@@ -288,9 +286,9 @@ skipping identical files.</p>
 <p>My initial guess of wrong library lookup paths was completely off. It
 was another case of non-deterministic build causing major toolchain
 breakage. I’m glad it was discovered so quickly after introduction.
-<a href="https://github.com/NixOS/nixpkgs/pull/246164">PR #246164</a> should fix it
+<a href="https://github.com/NixOS/nixpkgs/pull/246164"><code>PR#246164</code></a> should fix it
 for good.</p>
-<p>Turns out <code>clang</code> and <code>gcc</code> generate a bit different code around atomics.</p>
+<p>Turns out <code>clang</code> and <code>gcc</code> generate a bit different code around <code>atomics</code>.</p>
 <p>Have fun!</p>
         </div>
     </body>

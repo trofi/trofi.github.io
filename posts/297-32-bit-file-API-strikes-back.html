@@ -39,12 +39,12 @@
        For full logs, run 'nix log /nix/store/v3cr2nghg1s4bmm30r1vnq1124qqvv9m-xgcc-14.0.0.drv'.</code></pre>
 <h2 id="debugging-the-failure">Debugging the failure</h2>
 <p>The actual error here is <code>stat: Value too large for defined data type</code>.
-While <code>type: install_name_tool: not found</code> is an unrelated distraction.</p>
-<p>Note that this failure happens a bit earlier than <code>pkgsi686Linux.stdenv</code>
+While <code>type: install_name_tool: not found</code> is an unrelated distraction.
+Note that this failure happens a bit earlier than <code>pkgsi686Linux.stdenv</code>
 build itself. If we poke a bit around the action build failure happens
-in <code>pkgsi686Linux.stdenv.__bootPackages.stdenv.__bootPackages.stdenv.__bootPackages.stdenv.cc.cc</code> package in early bootstrap phases.</p>
-<p>From the error message failure happens in <code>preFixupLibGccPhase</code> phase.
-Let’s have a look at its definition:</p>
+in <code>pkgsi686Linux.stdenv.__bootPackages.stdenv.__bootPackages.stdenv.__bootPackages.stdenv.cc.cc</code> package in early bootstrap phases.
+From the error message failure happens in <code>preFixupLibGccPhase</code> phase.
+Let’s look at its definition:</p>
 <pre><code>$ nix repl '&lt;nixpkgs&gt;'
 ...
 nix-repl&gt; builtins.trace pkgsi686Linux.stdenv.__bootPackages.stdenv.__bootPackages.stdenv.__bootPackages.stdenv.cc.cc.preFixupLibGccPhase &quot;&quot;
@@ -79,8 +79,8 @@ $ nm -DC /nix/store/i9v173g8a5wwi8i8fd2wmdyr8ix6mla1-bootstrap-tools/bin/patchel
          U __xstat@GLIBC_2.0</code></pre>
 <p>Note that this <code>patchelf</code> comes from <code>bootstrapTools</code>.
 <code>pkgs/stdenv/linux/bootstrap-files/i686.nix</code> says it was updated last
-time in <code>2019</code> (4 years ago).</p>
-<p>For comparison currently built <code>patchelf</code> built on <code>i686</code> system does
+time in <code>2019</code> (4 years ago).
+For comparison currently built <code>patchelf</code> built on <code>i686</code> system does
 use <code>stat64</code> call:</p>
 <pre><code>$ nm -DC $(nix-build --no-link '&lt;nixpkgs&gt;' -A patchelf --argstr system i686-linux )/bin/patchelf |&amp; fgrep stat
          U stat64@GLIBC_2.33</code></pre>
@@ -91,8 +91,8 @@ use <code>stat64</code> call:</p>
 <pre><code>$ nix-build '&lt;nixpkgs/pkgs/stdenv/linux/make-bootstrap-tools.nix&gt;' -A bootstrapFiles      --arg pkgs 'import &lt;nixpkgs&gt; { system = &quot;i686-linux&quot;; }'
 /nix/store/713cyy66gkxqmi1wpdswd4llq1qzikr5-bootstrap-tools.tar.xz
 /nix/store/cvdfhnwjbbfjbv6ibgcl8rz47giy771v-busybox</code></pre>
-<p>I did not have to build anything. Hydra has it cached today.</p>
-<p>We can point our seed binaries to freshly built version of those:</p>
+<p>I did not have to build anything. Hydra has it cached today.
+We can point our seed binaries to freshly built version of those:</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/stdenv/linux/bootstrap-files/i686.nix</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/stdenv/linux/bootstrap-files/i686.nix</span></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,12 +1,4 @@</span></span>
@@ -134,11 +134,11 @@ bootstrap tarballs which adds another dimension of bugs.</p>
 <p>We just happened to pull in a fix for it along with <code>glibc</code> that
 supports <code>stat64</code>.</p>
 <h2 id="how-should-fix-usually-looks-like">How should fix usually looks like?</h2>
-<p>Setting <code>-D_FILE_OFFSET_BITS=64</code> explicitly should be a safe workaround.</p>
-<p><code>autoconf</code>-based systems usually use
-<a href="https://www.gnu.org/software/autoconf/manual/autoconf-2.67/html_node/System-Services.html">AC_SYS_LARGEFILE</a>.
+<p>Setting <code>-D_FILE_OFFSET_BITS=64</code> explicitly should be a safe workaround.
+<code>autoconf</code>-based systems usually use
+<a href="https://www.gnu.org/software/autoconf/manual/autoconf-2.67/html_node/System-Services.html"><code>AC_SYS_LARGEFILE</code></a>.
 It should set both <code>_FILE_OFFSET_BITS</code> and <code>_LARGE_FILES</code> where needed
-and also provides a nice <code>--disable-largefile</code> knob. Other build systems
+and provides a nice <code>--disable-largefile</code> knob. Other build systems
 have the equivalent or always enable it by default.</p>
 <p><code>glibc</code> implements <code>stat</code> switch in <code>io/sys/stat.h</code> as:</p>
 <div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifndef __USE_FILE_OFFSET64</span></span>
@@ -155,15 +155,15 @@ have the equivalent or always enable it by default.</p>
 <span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="dt">int</span> stat64 <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>__restrict __file<span class="op">,</span></span>
 <span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>                   <span class="kw">struct</span> stat64 <span class="op">*</span>__restrict __buf<span class="op">)</span> __THROW __nonnull <span class="op">((</span><span class="dv">1</span><span class="op">,</span> <span class="dv">2</span><span class="op">));</span></span>
 <span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
-<p>(I skipped a bit of <code>#define</code>ery where <code>stat</code> gets redirected to
-<code>__xstat</code>.)</p>
-<p>The above hints that we will soon have a similar problem of switching
+<p>(I skipped a bit of <code>#define</code> boilerplate where <code>stat</code> gets redirected to
+<code>__xstat</code>.)
+The above hints that we will soon have a similar problem of switching
 to 64-bit <code>time_t</code> on 32-bit systems.</p>
 <h2 id="why-did-patchelf-fail-at-all">Why did <code>patchelf</code> fail at all?</h2>
 <p>I hear you ask: “why did <code>patchelf</code> fail at all”? Is <code>libgcc.so</code> such a
-large file by any definition? It’s size is unlikely to overflow 32 bits
-(4GB). Why does <code>stat()</code> implementation matter here?</p>
-<p>And you are right: <code>libgcc_s.so.1</code> is only 139KB large.</p>
+large file by any definition? Its size is unlikely to overflow 32 bits
+(4GB). Why does <code>stat()</code> implementation matter here?
+And you are right: <code>libgcc_s.so.1</code> is only <code>139KB</code> large.</p>
 <p>Here is the full structure <code>man 2 stat</code> knows about:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> stat <span class="op">{</span></span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    dev_t     st_dev<span class="op">;</span>         <span class="co">/* ID of device containing file */</span></span>
@@ -189,8 +189,8 @@ large file by any definition? It’s size is unlikely to overflow 32 bits
 <span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a><span class="pp">#define st_mtime st_mtim</span><span class="op">.</span><span class="pp">tv_sec</span></span>
 <span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="pp">#define st_ctime st_ctim</span><span class="op">.</span><span class="pp">tv_sec</span></span>
 <span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
-<p><code>stat()</code> has to fill all the fields. It does not known which ones
-userspace is going to need. The man page also tells us the overflowing
+<p><code>stat()</code> has to fill all the fields. It does not known which fields
+user space is going to need. The man page also tells us the overflowing
 condition:</p>
 <pre><code>ERRORS
 ...
@@ -202,10 +202,10 @@ condition:</p>
           platform without -D_FILE_OFFSET_BITS=64 calls stat() on a
           file whose size exceeds (1&lt;&lt;31)-1 bytes.</code></pre>
 <p>Note that it’s 2GB limit and not a 4GB limit. And it is not just about
-the file size. In my case it’s the inode number <code>ino_t st_ino;</code> field:</p>
+the file size. In my case it’s the <code>inode</code> number <code>ino_t st_ino;</code> field:</p>
 <pre><code>$ ls -li foo
 4404087433 -rw-r--r-- 1 slyfox users 0 Sep  7 09:25 foo</code></pre>
-<p>Here inode number overflows our 2GB limit. Let’s use this trivial
+<p>Here <code>inode</code> number overflows our 2GB limit. Let’s use this trivial
 program to make sure it fails to <code>stat()</code>:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;errno.h&gt;</span></span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
@@ -234,16 +234,16 @@ stat() = -1: error: Value too large for defined data type
 $$ gcc a.c -o a -D_FILE_OFFSET_BITS=64 &amp;&amp; ./a
 stat() succeeded</code></pre>
 <p>Yep! This is it.</p>
-<h2 id="why-are-my-inode-numbers-so-big">Why are my inode numbers so big?</h2>
-<p>4 billion inodes is a lot. Why such a big number? Do I have so many
-files on disk? No, <code>find /</code> tells me I have around 25 million files
-(~100 times smaller than 2 billion mark).</p>
-<p>It comes down to the fact how exactly <code>btrfs</code> filesystem allocates inode
-numbers.</p>
-<p>Compared to <code>ext4</code> (which uses first available inode number in inode
-table of fixed size) <code>btrfs</code> does not use a single inode table but uses
-B-tree of “objects”.</p>
-<p><code>btrfs</code> strategy to allocate inodes is to increment the global number
+<h2 id="why-are-my-inode-numbers-so-big">Why are my <code>inode</code> numbers so big?</h2>
+<p>4 billion <code>inodes</code> is a lot. Why such a big number? Do I have so many
+files on disk? No, <code>find /</code> tells me that I have around 25 million files
+(~100 times smaller than 2 billion mark).
+It comes down to the fact how exactly <code>btrfs</code> filesystem allocates <code>inode</code>
+numbers.
+Compared to <code>ext4</code> (which uses first available <code>inode</code> number in <code>inode</code>
+table of fixed size) <code>btrfs</code> does not use a single <code>inode</code> table but uses
+B-tree of “objects”.
+<code>btrfs</code> strategy to allocate <code>inodes</code> is to increment the global counter
 (per filesystem, number is populated in <code>btrfs_create_new_inode()</code>):</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> btrfs_create_new_inode<span class="op">(</span><span class="kw">struct</span> btrfs_trans_handle <span class="op">*</span>trans<span class="op">,</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>                           <span class="kw">struct</span> btrfs_new_inode_args <span class="op">*</span>args<span class="op">)</span></span>
@@ -291,11 +291,11 @@ B-tree of “objects”.</p>
 <span id="cb18-44"><a href="#cb18-44" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ret<span class="op">;</span></span>
 <span id="cb18-45"><a href="#cb18-45" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p>In the code above <code>btrfs</code> literally increments <code>root-&gt;free_objectid</code> as
-a way to generate new inode number. On fresh filesystems inode numbers
+a way to generate new <code>inode</code> number. On fresh filesystems <code>inode</code> numbers
 for files and directories start from <code>256</code> (<code>BTRFS_FIRST_FREE_OBJECTID</code>).
 On used filesystem they start from the next after largest already
-allocated inode.</p>
-<p>Note that file removal does not normally reclaim the inode numbers.
+allocated <code>inode</code>.</p>
+<p>Note that file removal does not normally reclaim the <code>inode</code> numbers.
 Let’s poke a bit at it in action:</p>
 <pre><code># create empty btrfs filesystem:
 $ fallocate -l 10G fs.raw
@@ -305,16 +305,18 @@ $ mount fs.raw m
 $ cd m
 
 # first file on disk:
+$ touch first
 $ ls -li first
 257 -rw-r--r-- 1 root root 0 Sep  7 15:10 first
 
 # second file on disk:
+$ rm first &amp;&amp; touch first
 $ ls -li first
 258 -rw-r--r-- 1 root root 0 Sep  7 15:10 first</code></pre>
-<p>Despite the same file name being deleted and recreated in place it’s
-inode number increases.</p>
+<p>Despite the same filename being deleted and recreated in place it’s
+<code>inode</code> number increases.</p>
 <p>There is one exception to “always increasing” rule: if we delete files
-with highest inode numbers and unmount/remount the filesystem we will be
+with highest <code>inode</code> numbers and unmount/remount the filesystem we will be
 able to unwind <code>free_objectid</code> back a bit:</p>
 <pre><code># remount empty and try again:
 $ rm first
@@ -327,16 +329,16 @@ $ cd m
 $ touch first
 $ ls -li first
 257 -rw-r--r-- 1 root root 0 Sep  7 15:11 first</code></pre>
-<p>Note: after the remount the inode number is back to <code>257</code> (and not <code>259</code>).
-<code>256</code> inode is taken by <code>/</code> root directory.</p>
-<p>Back to the question why my filesystem has inode numbers above 4
+<p>Note: after the remount the <code>inode</code> number is back to <code>257</code> (and not <code>259</code>).
+<code>256</code> <code>inode</code> is taken by <code>/</code> root directory.</p>
+<p>Back to the question why my filesystem has <code>inode</code> numbers above 4
 billion: apparently I managed to create that many files throughout the
 lifetime of this filesystem. It’s a 2 years old <code>btrfs</code>. This means
 filesystem sees about 70 files per second being created and deleted.</p>
 <h2 id="more-failures">More failures</h2>
 <p>After fixing <code>patchelf</code> locally I tried to build more <code>i686</code> packages
-(mainly <code>wine</code> dependencies) and discovered a few more similar failures.</p>
-<p>One of them was in <code>which</code> command:</p>
+(mainly <code>wine</code> dependencies) and discovered a few more similar failures.
+One of them was in <code>which</code> command:</p>
 <pre><code>$ bison
 bison: missing operand
 Try 'bison --help' for more information.
@@ -352,9 +354,9 @@ which: no bison in (... long list of PATHs here, one of them with `bison`)</code
 <p><code>which</code> fix allowed <code>i686</code> to progress a bit more and now it stumbled on
 <code>fontconfig</code> and <code>tpm2-tss</code>. To be debugged.</p>
 <h2 id="parting-words">Parting words</h2>
-<p>32-bit file APIs are not just about handling of files larger that 4GB
+<p>32-bit file APIs are not just about handling of files larger than 4GB
 in size. Nowadays’ filesystems can easily have other fields that don’t
-fit into 32-bit counters. One of them is inode number. Next in the queue
+fit into 32-bit counters. One of them is <code>inode</code> number. Next in the queue
 will probably be 64-bit <code>time_t</code>.</p>
 <p>The 64-bit interfaces are opt-in for many 32-bit targets and will remain
 such for the foreseeable future. Each individual project will have to
@@ -363,11 +365,11 @@ adapt to it by adding <code>-D_FILE_OFFSET_BITS=64</code> (and soon
 <p>While projects gradually migrate to new APIs <code>bootstrapTools</code> should be
 rebuilt to get the updates. I hope some form of
 <a href="https://github.com/NixOS/nixpkgs/issues/253713" class="uri">https://github.com/NixOS/nixpkgs/issues/253713</a> process will be in
-place to make it smoother. Otherwise one-off
+place to make it smoother. Otherwise, one-off
 <a href="https://github.com/NixOS/nixpkgs/issues/253274" class="uri">https://github.com/NixOS/nixpkgs/issues/253274</a> update will have to do.</p>
 <p>If you see a project that still uses 32-bit APIs please send a patch
 upstream to use 64-bit API if possible. Chances are it will fix real
-breakage on filesystems with 64-bit inodes.</p>
+breakage on filesystems with 64-bit <code>inodes</code>.</p>
 <p>Have fun!</p>
         </div>
     </body>

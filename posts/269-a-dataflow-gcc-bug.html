@@ -30,8 +30,8 @@
             
 
             <p>Let’s look at a simpler <code>gcc</code> bug today:
-<a href="https://gcc.gnu.org/PR107879">PR107879</a>. There <code>ffmpeg-4</code> started
-failing it’s testsuite on <code>gcc-13</code> from this week’s master:</p>
+<a href="https://gcc.gnu.org/PR107879"><code>PR107879</code></a>. There <code>ffmpeg-4</code> started
+failing it’s test suite on <code>gcc-13</code> from this week’s master:</p>
 <pre><code>$ ./tests/fate-run.sh fate-swr-resample-s16p-2626-8000 &quot;&quot; &quot;&quot; \
   &quot;ffmpeg&quot; 'ffmpeg -i tests/data/asynth-2626-1.wav \
   -af atrim=end_sample=10240,\
@@ -41,7 +41,7 @@ aresample=2626:internal_sample_fmt=s16p:exact_rational=0:linear_interp=0 \
   -f wav -c:a pcm_s16le -' 'stddev' 'tests/data/asynth-2626-1.wav' '0.1' '1' '' '' '' '1393.36' '31512 - 20482' 's16' '' '' '' ''
 ...
 FAIL fate-swr-resample-s16p-2626-8000</code></pre>
-<h2 id="on-ffmpeg-structure">On ffmpeg structure</h2>
+<h2 id="on-ffmpeg-structure">On <code>ffmpeg</code> structure</h2>
 <p>While the prospect of debugging multimedia package might sound scary
 <code>ffmpeg</code> is a lot simpler to explore than other complex projects like
 <code>llvm</code> or <code>gcc</code>.</p>
@@ -52,18 +52,18 @@ algorithm. But debugging already written one is usually straightforward.</p>
 is or get slightly transformed without too much state to be collected
 along the way. The code is written to be not too slow which means there
 are not many high level abstractions or deep memory indirections.</p>
-<p>Then if it’s all so somple what could possible go wrong there then? Is
+<p>Then if it’s all so simple what could possible go wrong there then? Is
 there even a place for <code>gcc</code> to find a crack to fall in? Let’s find out.</p>
 <p>The only caveat is that for most algorithms use floating points all over
 the place. That might make computations not bit-for-bit reproducible
 even on different optimization levels.</p>
-<p>The change in behaviour we see might not be the bug at all.</p>
+<p>The change in behavior we see might not be the bug at all.</p>
 <h2 id="extracting-minimized-example">Extracting minimized example</h2>
 <p>The above <code>$ ./tests/fate-run.sh fate-swr-resample-s16p-2626-8000 ...</code>
 command was failing consistently when built with <code>gcc-master</code> and was
 succeeding when built with <code>gcc-12</code>. With help of
-<code>#pragma GCC optimize(0)</code> I nailed the misclmpilation down to
-<a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c">libswresample/resample.c</a>
+<code>#pragma GCC optimize(0)</code> I nailed the wrong code generation down to
+<a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c"><code>libswresample/resample.c</code></a>
 file. <code>build_filter()</code> function produced different filters for good and
 bad cases.</p>
 <p>Once I extracted test inputs for <code>build_filter()</code> I managed to craft the
@@ -129,8 +129,8 @@ f = 0.00000000000000000000; y = 1.00000000000000000000
 BUG</code></pre>
 <p>Note how <code>-O0</code> case computes correct <code>f = 1.0</code> and <code>-O1</code> computes
 incorrect <code>f = 0.0</code>. There are no denormalized values. Just <code>0.0</code>,
-<code>1.0</code> and <code>2.0</code>. All of them are representable perfectly in 32-bit
-<code>float</code> or 64 <code>double</code> types. Thus the result should not be affected
+<code>1.0</code> and <code>2.0</code>. All of them can be encoded without an error in 32-bit
+<code>float</code> or 64 <code>double</code> types. Thus, the result should not be affected
 by finer optimizations like fused-multiply-add which might observably
 increase precision.</p>
 <p>Let’s strip all the <code>printf()</code> calls off <code>build_filter()</code> to ease
@@ -177,15 +177,15 @@ OK
 $ gcc-HEAD/bin/gcc -O1 -lm b.c -o b &amp;&amp; ./b
 f = 0.0; y = 1.0
 BUG</code></pre>
-<p>I had to use a bit fo <code>volatile</code> to prevent <code>gcc</code> from folding constants
-early and eliminate the the bug condition.</p>
+<p>I had to use a bit of <code>volatile</code> to prevent <code>gcc</code> from folding constants
+early and eliminate the bug condition.</p>
 <p>Fun fact: this test case still fails on <code>gcc-master</code> while original
 <code>ffmpef-4</code> test suite does not. Looks like some unrelated detail of
 <code>gcc</code> changed to partially mask the bug. If I was not quick enough
 to extract the reproducer it might take a bit more time to restore
-the envieonment and get it.</p>
-<h2 id="diving-into-iptimization-process">Diving into iptimization process</h2>
-<p>As usual <code>-fdump-tree-all</code> is our friend to find out when suspicios
+the environment and get it.</p>
+<h2 id="diving-into-optimization-process">Diving into optimization process</h2>
+<p>As usual <code>-fdump-tree-all</code> is our friend to find out when suspicious
 pass broke our program.</p>
 <p><code>gcc-HEAD/bin/gcc -O1 -lm b.c -o b -fdump-tree-optimized-slim</code> shows the
 following final state in <code>b.c.254t.optimized</code>:</p>
@@ -264,7 +264,7 @@ the following picture:</p>
 seemingly problematic graph.</p>
 <p>Here is our <code>b.c.015t.cfg.dot</code> original unoptimized graph as a reference:</p>
 <p><img src="../posts.data/269-a-dataflow-gcc-bug/b.c.015t.cfg.svg" /></p>
-<p>Let’s trace it through to make sure it’s correct. It wil also help
+<p>Let’s trace it through to make sure it’s correct. It will also help
 getting used to variable names and expected basic block effects:</p>
 <ul>
 <li>in <code>bb2</code> (entrance):
@@ -310,12 +310,12 @@ getting used to variable names and expected basic block effects:</p>
 <p><img src="../posts.data/269-a-dataflow-gcc-bug/b.c.128t.sra.svg" /></p>
 <p>And <code>b.c.130t.dom2</code> is first problematic step:</p>
 <p><img src="../posts.data/269-a-dataflow-gcc-bug/b.c.130t.dom2.svg" /></p>
-<p>Note how <code>omww_22 = 1.0 - w_21;</code> in <code>bb6</code> is never read. Instead our
+<p>Note how <code>omww_22 = 1.0 - w_21;</code> in <code>bb6</code> is never read. Instead, our
 <code>PHI</code> node <code># iftmp.5_6 = PHI &lt;omww_17(3), 0.0(4), 0.0(6)&gt;</code> claims
 that <code>bb6</code> always brings in <code>0.0</code> value in <code>0.0(6)</code> alternative.</p>
 <p>Why does it happen? At this point I gave up and filed
 <a href="https://gcc.gnu.org/PR107879" class="uri">https://gcc.gnu.org/PR107879</a> bug.</p>
-<p>Then I bisected <code>gcc</code> down to <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=d4c2f1d376da6f">commit d4c2f1d3</a>:</p>
+<p>Then I bisected <code>gcc</code> down to <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=d4c2f1d376da6f"><code>commit d4c2f1d3</code></a>:</p>
 <pre><code>commit d4c2f1d376da6fc3f3c30a9d3160e43c95399343
 Date:   Sat Nov 12 09:39:00 2022 +0100
 
@@ -334,11 +334,11 @@ in detail.</p>
 <li><code>ffmpeg</code> uses
 <a href="https://github.com/FFmpeg/FFmpeg/blob/master/libswresample/resample.c#L182-L183">cubic formula</a>
 to upsample inputs.</li>
-<li><code>-0.0</code> is equal to <code>0.0</code> according to IEEE754 even if binary encodings
+<li><code>-0.0</code> is equal to <code>0.0</code> according to IEEE-754 even if binary encodings
 differ.</li>
-<li><code>gcc</code>’s dataflow related to value ranges is a bit hard to follow even in
+<li><code>gcc</code> data flow related to value ranges is a bit hard to follow even in
 <code>-fdump-*</code> outputs.</li>
-<li><code>gcc</code>’s <code>-fdump-*-graph</code> set of options dump nice <code>.dot</code>-style outputs
+<li><code>gcc</code> <code>-fdump-*-graph</code> set of options dump nice <code>.dot</code>-style outputs
 for visual debugging.</li>
 <li><code>volatile</code> is great at inhibiting complex constant propagation
 optimizations.</li>

@@ -30,29 +30,29 @@
             
 
             <p>Most of the time <code>make --shuffle</code> finds somewhat trivial bugs of missing
-dependencies. I have collected a few examples <a href="../posts/249-an-update-on-make-shuffle.html">here</a>.</p>
-<p>It is sometimes hard, but still feasible to trigger these bugs without a
+dependencies. I have collected a few examples <a href="../posts/249-an-update-on-make-shuffle.html">here</a>.
+It is sometimes hard, but still feasible to trigger these bugs without a
 shuffle by carefully placing a few <code>sleep 10</code> calls here and there to
 reorder rule execution.</p>
 <p>But today I’ll talk about the bugs that could not be easily triggered by
-just waiting more. Should these bugs be treats as bugs in <code>Makefile</code>s?
+just waiting more. Should these bugs be treats as bugs in <code>Makefile</code>?
 Or are they bugs in the <code>make --shuffle</code> permutation algorithm? You be
 the judge!</p>
-<h2 id="a-gist-of-the-makefile-language">A gist of the Makefile language</h2>
+<h2 id="a-gist-of-the-makefile-language">A gist of the <code>Makefile</code> language</h2>
 <p><code>Makefile</code> language is an interesting one: it has a strong spirit of a
 declarative family: it should not be very important in which order you
 define rules and variables in the file, the rule execution order should
 not matter much either. That property makes the input very friendly to
 parallelism: you can consider a <code>Makefile</code> as a form of a serialized
-build graph.</p>
-<p>The graph analogy holds surprisingly well for most of the build systems
+build graph.
+The graph analogy holds surprisingly well for most of the build systems
 out there. But sometimes you get the rare ones that are clearly
 not designed to be executed in parallel. Those are also fine. We can
 add <code>.NOTPARALLEL:</code> to them and be done with it.</p>
 <p>If we ignore clearly unclean build systems there are a few GNU
 extensions that break the graph model a bit. Things like immediate
-variable assignments <code>A := B</code> are one of them.</p>
-<p>For example the following <code>Makefile</code> illustrates the subtlety of
+variable assignments <code>A := B</code> are one of them.
+For example, the following <code>Makefile</code> illustrates the subtlety of
 immediate and deferred assignments:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> a b</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
@@ -60,13 +60,13 @@ immediate and deferred assignments:</p>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="dt">AI</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="dt">AD</span> <span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dv">a:</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo a: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> AI=</span><span class="ch">$(</span><span class="dt">AI</span><span class="ch">)</span><span class="fu"> AD=</span><span class="ch">$(</span><span class="dt">AD</span><span class="ch">)</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo a: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> AI=</span><span class="ch">$(</span><span class="dt">AI</span><span class="ch">)</span><span class="fu"> AD=</span><span class="ch">$(</span><span class="dt">AD</span><span class="ch">)</span></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">V</span> <span class="ch">:=</span><span class="st"> 2</span></span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="dt">BI</span> <span class="ch">:=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="dt">BD</span> <span class="ch">=</span><span class="st"> </span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span></span>
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="dv">b:</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo b: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> BI=</span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span><span class="fu"> BD=</span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span></span></code></pre></div>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo b: V=</span><span class="ch">$(</span><span class="dt">V</span><span class="ch">)</span><span class="fu"> BI=</span><span class="ch">$(</span><span class="dt">BI</span><span class="ch">)</span><span class="fu"> BD=</span><span class="ch">$(</span><span class="dt">BD</span><span class="ch">)</span></span></code></pre></div>
 <p>Take some time time and try to predict the output here.</p>
 <p>Ready now? Here is the correct answer:</p>
 <pre><code>$ make
@@ -74,25 +74,25 @@ a: V=2 AI=1 AD=2
 b: V=2 BI=2 BD=2</code></pre>
 <p>Here both <code>V=</code> and <code>AD=</code> values are deferred until the final assignment.
 This is a well-known gotcha of <code>Makefiles</code>: immediate and deferred
-assignments can influence macro expansion and rule definition.</p>
-<p>Immediate assignment arguably does not break declarative model too much.</p>
-<p>Don’t worry just yet: <code>make --shuffle</code> does not change output of this
+assignments can influence macro expansion and rule definition.
+Immediate assignment arguably does not break declarative model too much.
+Don’t worry just yet: <code>make --shuffle</code> does not change output of this
 example.</p>
 <h2 id="target-specific-variables">Target-specific variables</h2>
 <p>Another <code>GNU make</code> extension is
-<a href="https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html">Target-specific Variable Values</a>.</p>
-<p>The typical use looks benign:</p>
+<a href="https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html">Target-specific Variable Values</a>.
+The typical use looks benign:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-g</span></span></code></pre></div>
 <p>Here we define 2 targets: <code>foo</code> and <code>bar</code>. But for <code>foo</code> (and it’s
@@ -110,23 +110,23 @@ all</code></pre>
 <p>No surprises here either: all object files needed for <code>foo</code> use
 <code>CFLAGS=-g</code> override. None of the object files used by <code>bar</code> use <code>-g</code>:</p>
 <p><img src="../posts.data/294-an-obscure-make-shuffle-bug/1-mf-expanded.svg" /></p>
-<p>So far so good. No ambiguities here.</p>
-<p><code>make --shuffle</code> does not change this output either.</p>
+<p>So far so good. No ambiguities here.
+<code>make --shuffle</code> does not change this output either.</p>
 <h2 id="todays-problem">Today’s problem</h2>
 <p>Now, what happens if we do share an object file across the targets and
-happen to use different overrides for it?</p>
-<p>Here is our toy example:</p>
+happen to use different overrides for it?
+Here is our toy example:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o shared.o</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o shared.o</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-ffoo</span></span>
 <span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fbar</span></span></code></pre></div>
@@ -174,16 +174,15 @@ from <code>all: foo bar</code> to <code>all: bar foo</code>:</p>
 <span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,4 +1,4 @@</span></span>
 <span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="st">-all: foo bar</span></span>
 <span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="va">+all: bar foo</span></span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>        @echo all</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>	@echo all</span>
 <span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a> foo: a.o b.o shared.o</span></code></pre></div>
 <p><img src="../posts.data/294-an-obscure-make-shuffle-bug/2-mf-expanded-2.svg" /></p>
-<p>This is a problem. And that can be triggered by <code>make --shuffle</code>!</p>
-<p>No shuffle:</p>
+<p>This is a problem. And that can be triggered by <code>make --shuffle</code>!
+No shuffle:</p>
 <pre><code>$ for i in `seq 1 1000`; do make -j | grep -- '-o shared.o'; done | sort | uniq -c
    1000 cc -ffoo -o shared.o</code></pre>
-<p>Ideal consistency. Nothing shows the problem.</p>
-<p>With shuffle:</p>
+<p>Ideal consistency. Nothing shows the problem. With shuffle:</p>
 <pre><code>$ for i in `seq 1 1000`; do make -j --shuffle | grep -- '-o shared.o'; done | sort | uniq -c
     494 cc -fbar -o shared.o
     506 cc -ffoo -o shared.o</code></pre>
@@ -194,19 +193,19 @@ face of target sequence passed to it.</p>
 <p>How would one fix it properly? This default recursive propagation is
 non-intuitive, <code>GNU make</code> provides a few keywords including <code>private</code>.
 <code>private</code> makes the variable override local to specified targets and
-does not recurse.</p>
-<p>I suggest the following fix:</p>
+does not recurse.
+I suggest the following fix:</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o shared.o</span></span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o shared.o</span></span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a><span class="dv">a.o b.o:</span><span class="dt"> </span><span class="kw">private</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-ffoo</span></span>
 <span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="dv">c.o d.o:</span><span class="dt"> </span><span class="kw">private</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fbar</span></span>
@@ -219,21 +218,21 @@ the other two. Running:</p>
 <p>No instability!</p>
 <h2 id="the-need-for-private">The need for private</h2>
 <p>Is <code>private</code> really needed? In this toy example it would work the same
-with and without it.</p>
-<p>The troubles would start if any of <code>.o</code> files would have in
+with and without it.
+The troubles would start if any of <code>.o</code> files would have in
 prerequisites another <code>.o</code> file, say a generator that builds header
 files or some other input:</p>
 <div class="sourceCode" id="cb13"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> foo bar</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo all</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo all</span></span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="dv">foo:</span><span class="dt"> a.o b.o shared.o</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;foo (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="dv">bar:</span><span class="dt"> c.o d.o shared.o</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo </span><span class="st">&quot;bar (</span><span class="ch">$^</span><span class="st">)&quot;</span></span>
 <span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="dv">%.o:</span></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo cc </span><span class="ch">$(</span><span class="dt">CFLAGS</span><span class="ch">)</span><span class="fu"> -o </span><span class="ch">$@</span></span>
 <span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="dv">a.o b.o:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-ffoo</span></span>
 <span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a><span class="dv">c.o d.o:</span><span class="dt"> CFLAGS</span><span class="ch">=</span><span class="st">-fbar</span></span>
@@ -244,41 +243,42 @@ files or some other input:</p>
 <span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> gen</span></span>
 <span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a><span class="dv">gen:</span><span class="dt"> gen.o</span></span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo gen</span></span>
-<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="dv">gen.h:</span><span class="dt"> gen</span></span>
-<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="er">        </span><span class="ch">@</span><span class="fu">echo gen.h</span></span>
-<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> gen.h</span></span></code></pre></div>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo gen</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a><span class="dv">gen.h:</span><span class="dt"> gen</span></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>	<span class="ch">@</span><span class="fu">echo gen.h</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a><span class="dv">shared.o:</span><span class="dt"> gen.h</span></span></code></pre></div>
 <p><img src="../posts.data/294-an-obscure-make-shuffle-bug/3-mf.svg" /></p>
-<p>This time we will check what flags are passed to <code>gen.o</code>.</p>
-<p>Without shuffle:</p>
+<p>This time we will check what flags are passed to <code>gen.o</code>.
+Without shuffle:</p>
 <pre><code>$ for i in `seq 1 1000`; do make -j | grep -- '-o gen.o'; done | sort | uniq -c
    1000 cc -fshared -o gen.o</code></pre>
 <p>Whoops: <code>-fshared</code> got leaked into <code>gen.o</code> build, but at least it’s
-consistent.</p>
-<p>With <code>--shuffle</code>:</p>
+consistent.
+With <code>--shuffle</code>:</p>
 <pre><code>$ for i in `seq 1 1000`; do make -j --shuffle | grep -- '-o gen.o'; done | sort | uniq -c
     697 cc -fshared -o gen.o
     303 cc -o gen.o</code></pre>
 <p>33% instability! Why it’s just 33% (and not, say, 50%) is an exercise
-for the reader.</p>
-<p>Adding <code>private</code> to all of <code>CFLAGS=</code> fixes the issue:</p>
+for the reader.
+Adding <code>private</code> to all of <code>CFLAGS=</code> fixes the issue:</p>
 <div class="sourceCode" id="cb16"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="ch">$ </span>for i in `seq 1 1000`; do make -j --shuffle | grep -- <span class="st">'-o gen.o'</span>; done | sort | uniq -c</span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>   1000 cc -o gen.o</span></code></pre></div>
-<p>It’s not just stable: it also removes unexpected -<code>fshared</code> flag as one
+<p>It’s not just stable: it also removes unexpected <code>-fshared</code> flag as one
 would probably expect.</p>
 <h2 id="the-real-world-example">The real world example</h2>
 <p>The above hypothetical example is almost 1-to-1 example of what happened
-to <code>efivar</code> in <a href="https://github.com/rhboot/efivar/pull/245">PR #245</a>.</p>
-<p>There <code>make --shuffle</code> build occasionally failed as:</p>
+to <code>efivar</code> in <a href="https://github.com/rhboot/efivar/pull/245"><code>PR#245</code></a>.
+There <code>make --shuffle</code> build occasionally failed as:</p>
 <pre><code>$ gcc -Og  -g3 -Wall -Wextra  -Werror  -std=gnu11 -funsigned-char -fvisibility=hidden -specs=/build/source/src/include/gcc.specs -fno-merge-constants  -L.   -Wl,--build-id -Wl,--no-allow-shlib-undefined -Wl,--no-undefined-version -Wl,-z,now -Wl,-z,muldefs -Wl,-z,relro -Wl,--fatal-warnings     -DLIBEFIVAR_VERSION=38 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I/build/source/src/include/  -shared -Wl,-soname,libefisec.so.1 -Wl,--version-script=libefisec.map  -o libefisec.so sec.o secdb.o esl-iter.o util.o -lefivar -lefisec -ldl
 ld: cannot find -lefivar: No such file or directory
 collect2: error: ld returned 1 exit status
 make[1]: *** [/build/source/src/include/rules.mk:38: libefisec.so] Error 1 shuffle=721268944</code></pre>
 <p>Initially I thought it was just a matter of missing <code>libefivar.so</code>
 dependency on <code>libefisec</code>. But Artem Klimov pointed out that those two
-are not expected to depend on one another.</p>
-<p>And indeed <code>Makefile</code> uses <code>LIBS</code> variable to specify dependencies:</p>
+are not expected to depend on one another.
+And indeed <code>Makefile</code> uses <code>LIBS</code> variable to specify dependencies:</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode makefile"><code class="sourceCode makefile"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dv">all:</span><span class="dt"> libefivar.so libefisec.so efisecdb </span><span class="co"># and more ...</span></span>
 <span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="co"># ...</span></span>
 <span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="dv">libefivar.so :</span><span class="dt"> LIBS</span><span class="ch">=</span><span class="st">dl</span></span>
@@ -293,7 +293,7 @@ external <code>LIBS=</code> dependencies. But <code>LIBS=</code> override gets l
 <code>efisecdb : LIBS=efivar efisec dl</code> and into <code>libefisec.so</code> via
 order-only dependency.</p>
 <p>The fix is to add <code>private</code> keyword to prevent the <code>LIBS=...</code> leakage
-from <code>efisecdb</code> into libraries in it’s prerequisite list:</p>
+from <code>efisecdb</code> into libraries in its prerequisite list:</p>
 <div class="sourceCode" id="cb19"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/Makefile</span></span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/Makefile</span></span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -42,3 +42,3 @@</span></span>
@@ -311,7 +311,7 @@ see the whole <code>Makefile</code> in front of you.</p>
 purposes. Individual global variables are also easier to override from
 the outside.</p>
 <p><code>make --shuffle</code> might be able to expose instability problems in
-<code>Makefile</code>s that use target-specific variables not reproducible by
+<code>Makefile</code> that use target-specific variables not reproducible by
 using <code>make -j</code> alone.</p>
 <p>Have fun!</p>
         </div>

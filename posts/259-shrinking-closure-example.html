@@ -34,7 +34,7 @@ development-only runtime dependencies. I do it mostly to shrink download
 sizes for things I update frequently.</p>
 <p>I developed a few hacks to find things quickly. The primary hack is to
 grep dependency graph of an executable-only package (say, a game) for
-<code>-dev</code> packages in it’s runtime closure. Here is an example for <code>fheroes2</code>
+<code>-dev</code> packages in its runtime closure. Here is an example for <code>fheroes2</code>
 package:</p>
 <pre><code>$ nix-store -q --graph $(nix-build -A fheroes2) | grep -P -- '-dev.*-&gt;' | grep -vP -- '-&gt;.*-dev'
 &quot;4bdanp07rax5mazgjzgdwx61sf6p01qc-SDL2-2.0.22-dev&quot; -&gt; &quot;nj09vl0pzc41sn4wh7q2vlppmkv3dhiy-SDL2_mixer-2.0.4&quot; [color = &quot;burlywood&quot;];
@@ -42,17 +42,17 @@ package:</p>
 <p>Here we see that <code>SDL2.dev</code> package is pulled into <code>SDL2_mixer.out</code>
 runtime closure. It’s a bug.</p>
 <p>More interesting hack is to grep full runtime closure for files that
-are cleary development-only: <code>C</code> ehader files, <code>pkg-config</code> files and so
+are clearly development-only: <code>C</code> header files, <code>pkg-config</code> files and so
 on. Here is a <code>grep</code> example again for <code>fheroes2</code>:</p>
 <pre><code>$ find $(nix path-info -r $(nix-build -A fheroes2)) | grep -P [.]h$ | shuf | unnix | nl | tail -n 2
   1301  /&lt;&lt;NIX&gt;&gt;/libnfnetlink-1.0.2/include/libnfnetlink/libnfnetlink.h
   1302  /&lt;&lt;NIX&gt;&gt;/xorgproto-2021.5/include/X11/extensions/dpmsproto.h</code></pre>
 <p>Here we see that <code>xorgproto</code> (header-only package) and <code>libnfnetlink</code>
 (package without a separate <code>.dev</code> output) pull in development headers
-into our previous game. Both are probably unintended and worth a fix.</p>
+into our precious game. Both are probably unintended and worth a fix.</p>
 <p>To get rid of the dependencies I usually add <code>dev</code> outputs to libraries
 without <code>dev</code> output like a recent
-<a href="https://github.com/NixOS/nixpkgs/pull/191775/commits/d04acb8a96c2ae37dd4ff58db65dedfab8d3d79f">libfido2 example</a>:</p>
+<a href="https://github.com/NixOS/nixpkgs/pull/191775/commits/d04acb8a96c2ae37dd4ff58db65dedfab8d3d79f"><code>libfido2</code> example</a>:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/development/libraries/libfido2/default.nix</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/development/libraries/libfido2/default.nix</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -29,6 +29,8 @@ stdenv.mkDerivation rec {</span></span>
@@ -66,7 +66,7 @@ without <code>dev</code> output like a recent
 <span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>     &quot;-DCMAKE_INSTALL_LIBDIR=lib&quot;</span></code></pre></div>
 <p>Sometime I have to explicitly change the package to not retain
 build-only dependencies. Here is a recent
-<a href="https://github.com/NixOS/nixpkgs/pull/191810/commits/02ba9a3d60c6c45e1df45714a2a3db714eed9c18">freedroidrpg example</a>:</p>
+<a href="https://github.com/NixOS/nixpkgs/pull/191810/commits/02ba9a3d60c6c45e1df45714a2a3db714eed9c18"><code>freedroidrpg</code> example</a>:</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>Do not embed paths to build-only depends (-I...SDL2-dev and friends)</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>into savefile lua comments.</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/savestruct_internal.c</span></span>
@@ -85,11 +85,11 @@ build-only dependencies. Here is a recent
 headers-only <code>dev</code> output self-contained.</p>
 <p>Is it worth the hassle? If feels like development headers don’t take
 that much space anyway. It’s true that some packages have tiny overhead.
-But things add up quickly. For example
-<a href="https://github.com/NixOS/nixpkgs/pull/191810">freedroidrpg PR</a> shrinks
-runtime closure from <code>808MB</code> down to <code>450MB</code> (44% reduction). While
-<a href="https://github.com/NixOS/nixpkgs/issues/191770#issuecomment-1250247308">fheroes2 RPs</a>
-shrunk runtime closure from <code>622MB</code> down to <code>557MB</code> (11% reduction).</p>
+But things add up quickly. For example,
+<a href="https://github.com/NixOS/nixpkgs/pull/191810"><code>freedroidrpg PR</code></a> shrinks
+runtime closure from <code>808MB</code> down to <code>450MB</code> (<code>44%</code> reduction). While
+<a href="https://github.com/NixOS/nixpkgs/issues/191770#issuecomment-1250247308"><code>fheroes2 PRs</code></a>
+shrunk runtime closure from <code>622MB</code> down to <code>557MB</code> (<code>11%</code> reduction).</p>
 <p>These are just two examples I found in 5 minutes. There are many more
 packages you can fix in <code>nixpkgs</code>! Give it a try!</p>
 <p>Have fun!</p>

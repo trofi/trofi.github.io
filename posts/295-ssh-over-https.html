@@ -33,13 +33,14 @@
 sides as the following:</p>
 <p>Example client entry in <code>~/.ssh/config</code>:</p>
 <pre><code># $ cat .ssh/config
+# ...
 Host ssh-via-https
         ProxyCommand ~/.ssh/https-tunnel.bash
         # some firewalls aggressively close idle TCP connections
         ServerAliveInterval 30</code></pre>
 <p>The <code>~/.ssh/https-tunnel.bash</code> helper script we use above:</p>
-<pre><code>#!/usr/bin/env bash
-{ printf &quot;CONNECT ssh-server:22 HTTP/1.0\r\n\r\n&quot;; cat; } | socat - SSL:https-server:443</code></pre>
+<div class="sourceCode" id="cb2"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span> <span class="bu">printf</span> <span class="st">&quot;CONNECT ssh-server:22 HTTP/1.0\r\n\r\n&quot;</span><span class="kw">;</span> <span class="fu">cat</span><span class="kw">;</span> <span class="kw">}</span> <span class="kw">|</span> <span class="ex">socat</span> <span class="at">-</span> SSL:https-server:443</span></code></pre></div>
 <p>Example server entry for <code>apache2</code> <code>HTTPS</code>:</p>
 <pre><code># $ cat /etc/httpd/httpd.conf
 LoadModule proxy_connect_module .../modules/mod_proxy_connect.so
@@ -54,10 +55,10 @@ AllowCONNECT 22
     Allow from all
 &lt;/Proxy&gt;</code></pre>
 <p>Here we allow everyone to use <code>CONNECT</code> <code>HTTP</code> method on the server side
-hosted at <code>https-server</code> just for a single target: the <code>ssh-server</code> host.</p>
-<p>And on the client side we use <code>socat</code> to create <code>TLS</code> connection with a
-sent <code>CONNECT</code> method as a header.</p>
-<p>Now you can use <code>$ ssh ssh-via-https</code> to reach <code>ssh-server</code>.</p>
+hosted at <code>https-server</code> just for a single target: the <code>ssh-server</code> host.
+And on the client side we use <code>socat</code> to create <code>TLS</code> connection with a
+sent <code>CONNECT</code> method as a header.
+Now you can use <code>$ ssh ssh-via-https</code> to reach <code>ssh-server</code>.</p>
 <p>More words below:</p>
 <h2 id="background">Background</h2>
 <p>Why do I need it?</p>
@@ -68,10 +69,10 @@ tinker on small stuff remotely. The hospital has free Wi-fi access.</p>
 only to do <code>HTTP</code> (<code>TCP</code> port <code>80</code>) and <code>HTTPS</code> (<code>TCP</code> port <code>443</code>)
 connections for most hosts. <code>DNS</code> (<code>UDP</code> port <code>53</code>) and <code>DoT</code> (<code>TCP</code>
 port <code>853</code>) seem to work as well at least for well-known <code>DNS</code>
-providers.</p>
-<p>But <code>SSH</code> (<code>TCP</code> port <code>22</code> or most other custom ports) is blocked
-completely.</p>
-<p>I wondered how hard would it be to pass <code>SSH</code> through <code>HTTP</code> or <code>HTTPS</code>.
+providers.
+But <code>SSH</code> (<code>TCP</code> port <code>22</code> or most other custom ports) is blocked
+completely.
+I wondered how hard would it be to pass <code>SSH</code> through <code>HTTP</code> or <code>HTTPS</code>.
 I had a <code>GSM</code> fallback so I could reconfigure remote server and try
 various solutions.</p>
 <h2 id="the-options">The options</h2>
@@ -97,8 +98,7 @@ non-default port.</li>
 source address of the connections for the backend. Not convenient
 for logging (and possibly performance?).</li>
 </ul></li>
-<li><p>Encapsulate one protocol completely into another.</p></li>
-</ol>
+<li><p>Encapsulate one protocol completely into another.</p>
 <p><code>openssh</code> supports <code>ProxyCommand</code> directive effectively allowing user to
 supply any transport that <code>ssh</code> protocol uses:</p>
 <pre><code>Specifies the command to use to connect to the server. The command string extends to the end of the line, and is executed using the user's shell ‘exec’ directive to avoid a lingering shell process.
@@ -117,12 +117,13 @@ harder to block by a Deep Packet Inspection software.</li>
 <ul>
 <li>possible performance decrease due to double-encryption</li>
 <li>requires client configuration to use proxy</li>
-</ul>
+</ul></li>
+</ol>
 <h2 id="ssh-over-http">SSH over HTTP</h2>
 <p>I went with the option <code>[2.]</code>: filly encapsulate <code>SSH</code> protocol into
-<code>TLS</code>.</p>
-<p>Before doing that I tried a simpler <code>SSH</code> over <code>HTTP</code>.</p>
-<p>I configured <code>apache2</code> to allow <code>CONNECT</code> method for a single target
+<code>TLS</code>.
+Before doing that I tried a simpler <code>SSH</code> over <code>HTTP</code>.
+I configured <code>apache2</code> to allow <code>CONNECT</code> method for a single target
 <code>ssh-server:22</code> as:</p>
 <pre><code>$ cat /etc/httpd/httpd.conf
 LoadModule proxy_connect_module .../modules/mod_proxy_connect.so
@@ -155,20 +156,21 @@ signal to close the tunnel.</p>
 <h2 id="ssh-over-https">SSH over HTTPS</h2>
 <p>For some reason <code>socat</code> does not support <code>HTTPS</code> proxy via <code>CONNECT</code>
 method and only supports <code>HTTP</code>. A minor omission? Or I hold <code>socat</code>
-wrong?</p>
-<p>Luckily <code>socat</code> does support <code>TLS</code> encapsulation. <code>CONNECT</code>-based
+wrong?
+Luckily <code>socat</code> does support <code>TLS</code> encapsulation. <code>CONNECT</code>-based
 method is easy to implement manually. I did it via one-line script:</p>
-<pre><code>$ cat ~/.ssh/https-tunnel.bash
-#!/usr/bin/env bash
-{ printf &quot;CONNECT ssh-server:22 HTTP/1.0\r\n\r\n&quot;; cat; } | socat - SSL:https-server:443</code></pre>
+<div class="sourceCode" id="cb7"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cat ~/.ssh/https-tunnel.bash</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span> <span class="bu">printf</span> <span class="st">&quot;CONNECT ssh-server:22 HTTP/1.0\r\n\r\n&quot;</span><span class="kw">;</span> <span class="fu">cat</span><span class="kw">;</span> <span class="kw">}</span> <span class="kw">|</span> <span class="ex">socat</span> <span class="at">-</span> SSL:https-server:443</span></code></pre></div>
 <p>Now we can use this script as is for <code>SSH</code> over <code>HTTPS</code> tunneling:</p>
 <pre><code>$ cat .ssh/config
+# ...
 Host ssh-via-https
         ProxyCommand ~/.ssh/https-tunnel.bash
         # some firewalls aggressively close idle TCP connections
         ServerAliveInterval 30</code></pre>
-<p>And <code>$ ssh ssh-via-https</code> does the expected thing.</p>
-<p>The result allowed me to get to my home machine and write this blog post.</p>
+<p>And <code>$ ssh ssh-via-https</code> does the expected thing.
+The result allowed me to get to my home machine and write this blog post.</p>
 <h2 id="parting-words">Parting words</h2>
 <p>Ubiquitous presence of <code>HTTPS</code> allows you to pass your data through very
 restrictive middle boxes!</p>

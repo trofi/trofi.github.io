@@ -32,9 +32,9 @@
             <h2 id="tldr">Tl;DR</h2>
 <p>As of a few minutes ago <code>nixpkgs</code> does parallel installs for <code>Makefile</code>
 based build systems using <code>make install -j$(nproc)</code>. As long as the
-packages have <code>enableParallelBuilding = true;</code>.</p>
-<p>Sequential packages are unchanged and still do sequential installs.</p>
-<p>You can revert to previous behaviour for your packages by using
+packages have <code>enableParallelBuilding = true;</code>.
+Sequential packages are unchanged and still do sequential installs.
+You can revert to previous behavior for your packages by using
 <code>enableParallelInstalling = false;</code> if needed. But better try to fix the
 issues upstream.</p>
 <h2 id="more-words">More words</h2>
@@ -46,9 +46,9 @@ break and <code>nixpkgs</code> will degrade too much. I agree those problems are
 not trivial to diagnose, debug and fix. We need a better way of weeding
 out the issues.</p>
 <p>But I did not completely give up. I still want my “parallel-by-default”
-dream to come true. I added a new <a href="../posts/238-new-make-shuffle-mode.html">make --shuffle</a>
-to <code>GNU make</code> to ease reporting and validation of parallel build fixes.</p>
-<p>And I’m still occasionally sending fixes for parallel build issues
+dream to come true. I added a new <a href="../posts/238-new-make-shuffle-mode.html"><code>make --shuffle</code></a>
+to <code>GNU make</code> to ease reporting and validation of parallel build fixes.
+And I’m still occasionally sending fixes for parallel build issues
 upstream. I noticed others also do it time to time. That’s so nice to
 see!</p>
 <p>A few weeks ago my main desktop <a href="../posts/280-cooling-failure.html">broke</a>
@@ -66,13 +66,13 @@ installPhase completed in 2 minutes 9 seconds
 fixupPhase completed in 41 seconds</code></pre>
 <p>2 minutes! This time is comparable to the whole build phase that takes
 5 minutes. Is it a lot? It really depends on what <code>installPhase</code> is
-expected to do.</p>
-<p>Some packages just copy one or two files into <code>$DESDIR</code>, some packages
-run registration tools of sorts. It depends.</p>
-<p><code>openssl</code>’s install phase builds and compresses a few hundreds of manual
+expected to do.
+Some packages just copy one or two files into <code>$DESDIR</code>, some packages
+run registration tools of sorts. It depends.
+<code>openssl</code>’s install phase builds and compresses a few hundreds of manual
 pages. The tasks are expressed as <code>Makefile</code> targets and are perfect for
-parallelism.</p>
-<p>One could argue that these heavyweight actions belong to the build (and
+parallelism.
+One could argue that these heavyweight actions belong to the build (and
 not install) phase. But sometimes things are not as straightforward.</p>
 <p>Apparently one of frequent examples of non-trivial install actions is
 <code>libtool</code>. There binary relinking happens on installation when shared
@@ -89,27 +89,27 @@ installPhase completed in 1 minutes 1 seconds</code></pre>
 <p>It takes almost as much time to install (and relink) the binaries as it
 takes to build the package.</p>
 <p>The fun thing is that both <code>openssl</code> and <code>solanum</code> use parallel builds
-(<code>make -j$(pnroc)</code>) but use sequential installs! (<code>make install</code>).</p>
-<p>I was very surprised to see missing parallelism in install phase. It
-looked so simple to fix! If the package is already built in parallel in
+(<code>make -j$(pnroc)</code>) but use sequential installs! (<code>make install</code>).
+I was very surprised to see missing parallelism in install phase. It
+looked so simple to fix! If the package is already built-in parallel in
 <code>nixpkgs</code> then the chances are high that parallel installs would work
 as well.</p>
 <p>To validate the theory I passed <code>make install -j$(nproc)</code> to <code>openssl</code>
 and found that the whole <code>configure / make / make install</code> process
 shrunk from <code>1m54s</code> down to <code>59s</code>. It’s 2x speedup right there. Note
 that <code>installPhase</code> has to have even more dramatic difference as
-unchanged) build time is included into both times.</p>
-<p>I quickly hacked up the <a href="https://github.com/NixOS/nixpkgs/pull/217568">PR</a>
-to enable parallelism and proposed it for review.</p>
-<p>Surprisingly (or not so surprisingly) not everyone was happy to see the
-change. The concerns were: possible install breakages, possible
+unchanged build time is included into both times.</p>
+<p>I quickly hacked up the <a href="https://github.com/NixOS/nixpkgs/pull/217568"><code>PR</code></a>
+to enable parallelism and proposed it for review.
+Surprisingly (or not so surprisingly) not everyone was happy to see the
+change. The concerns were: possible install failures, possible
 corruption on install, possibly added non-determinism, possible masking
 of install-time issues by speeding install phase up.</p>
 <p>To quantify the breakage concern NixOS Infra team set a one-off
-<a href="https://hydra.nixos.org/jobset/nixpkgs/pr-217568-stdenv-parallel-install">pr-217568-stdenv-parallel-install</a>
-hydra jobset for this change before it gets merged to any of the main
-branches.</p>
-<p>It <a href="https://github.com/NixOS/nixpkgs/pull/217568/commits">uncovered</a> 12
+<a href="https://hydra.nixos.org/jobset/nixpkgs/pr-217568-stdenv-parallel-install"><code>pr-217568-stdenv-parallel-install</code></a>
+hydra job set for this change before it gets merged to any of the main
+branches.
+It <a href="https://github.com/NixOS/nixpkgs/pull/217568/commits">uncovered</a> 12
 new build failures:</p>
 <ul>
 <li><code>net-snmp</code></li>
@@ -128,14 +128,14 @@ new build failures:</p>
 <p>The failures are obviously parallel install failures as they failed in
 <code>installPhase</code> with very obscure complains about missing files.</p>
 <p>As an example <code>solanum</code> install failure is being investigated in
-<a href="https://github.com/solanum-ircd/solanum/issues/405">Issue #405</a> upstream.
+<a href="https://github.com/solanum-ircd/solanum/issues/405"><code>Issue #405</code></a> upstream.
 It’s an interesting case of <code>libtool</code>-based build system with a bunch
-of recursive makefiles.</p>
-<p>There are a few triggers there: source file deletion during install and
-something related to unusual dependencies during install.</p>
-<p>Source file deletion causes rebuild and relinking of the project during
+of recursive <code>Makefile</code>s.
+There are a few triggers there: source file deletion during install and
+something related to unusual dependencies during install.
+Source file deletion causes rebuild and relinking of the project during
 install (ugh!).</p>
-<p>Otherwise it was a very small fallout which I plugged by sprinkling
+<p>Otherwise, it was a very small fallout which I plugged by sprinkling
 <code>enableParallelInstalling = false</code>. We might need a few more of those
 workarounds as parallelism bugs sometimes take a while to surface.</p>
 <h2 id="parting-words">Parting words</h2>
@@ -162,7 +162,7 @@ like <code>-j2</code>. That gives more chance to execute only subset of
 prerequisites.</li>
 <li>make sure your <code>/usr/lib</code> (or other system default pah) does not
 contain the libraries you are testing for relinking parallelism.
-Otherwise you would not be able to reproduce the failure as relinking
+Otherwise, you would not be able to reproduce the failure as relinking
 will accidentally happen against the system library.</li>
 </ul>
 <p>It took <code>hydra</code> only 2 weeks of lowest priority to build all ~60000

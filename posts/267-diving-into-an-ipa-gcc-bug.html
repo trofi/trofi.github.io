@@ -37,19 +37,19 @@ builds).</p>
 <p>Naturally occasional bugs creep in every now and then. They are rare
 enough and non-trivial enough that I forget almost everything when
 another one pops up.</p>
-<p>I’ll use <a href="https://gcc.gnu.org/PR107661">PR107661</a> as a running example
+<p>I’ll use <a href="https://gcc.gnu.org/PR107661"><code>PR107661</code></a> as a running example
 to explore some details of <code>ipa-cp</code> pass and write down the process of
 chasing the bug. We’ll have a glance at mechanics of trimming down the
 example, at mechanics of <code>ipa-cp</code> pass run on a simple example and at
 the bug itself.</p>
-<p>I hope this doc will be useful to others and maybe future me.</p>
-<p>It’s a long read. You have been warned.</p>
+<p>I hope this doc will be useful to others and maybe future me.
+It’s a long read. You have been warned.</p>
 <h2 id="the-bug-effect">The bug effect</h2>
 <p>After another weekly <code>gcc</code> update I found that <code>llvm-12</code> (and <code>llvm-11</code>)
 test suites started failing 4 tests. All tests normally pass as <code>llvm</code>
 test suite is quite self-contained: inputs are in <code>llvm</code> assembly and
 outputs are in <code>llvm</code> internal representation. No external tools are
-required. Thus any regressions in <code>llvm</code> tests are either latent <code>llvm</code>
+required. Thus, any regressions in <code>llvm</code> tests are either latent <code>llvm</code>
 bugs (unlikely) or bugs in a host compiler (more likely, <code>gcc-13</code> in my
 case). I usually assume the latter. This time <code>llvm-12</code> failed these 4
 tests as reported by <code>make check</code>:</p>
@@ -71,7 +71,7 @@ somewhere in <code>llvm</code> code. Any attempt to build <code>llvm-12</code> w
 <code>-fsanitize=address</code> or <code>-fsanitize=undefined</code> made the bug to go away
 without any error reports. Not good. Hard to draw any conclusions.</p>
 <h2 id="nailing-down-suspect-source-file">Nailing down suspect source file</h2>
-<p>The next step was to find the file that likely got mis-compiled: I kept
+<p>The next step was to find the file that likely got miscompiled: I kept
 adding <code>#pragma GCC optimize(0)</code> to various <code>AMDGPU</code> files until bug
 disappeared. Then I removed as many added pragmas as I could to find
 minimum amount needed to fix the test. One file was enough:
@@ -98,12 +98,12 @@ a nice property: we can remove various parts of the validator without
 fear of breaking the whole compilation process.</p>
 <h2 id="trimming-down-the-source">Trimming down the source</h2>
 <p>Even with most functions removed <code>GCNHazardRecognizer.cpp</code> still
-contained 24KB of <code>C++</code> with many local and <code>STL</code> includes. It was very
+contained <code>24KB</code> of <code>C++</code> with many local and <code>STL</code> includes. It was very
 hard to explore what <code>gcc</code> was doing wrong to such a large input.</p>
 <p>I started removing unused code by adding <code>__builtin_trap()</code> into
 functions and making sure that code does not get executed (when <code>llc</code>
 ran successfully). This allowed me to shrink <code>GCNHazardRecognizer.cpp</code>
-down to 10KB of <code>C++</code> code.</p>
+down to <code>10KB</code> of <code>C++</code> code.</p>
 <h2 id="trimming-down-optimization-options">Trimming down optimization options</h2>
 <p>After I could remove no other function from <code>GCNHazardRecognizer.cpp</code>
 I reduced optimization level from <code>-O3</code> down to <code>-O1 -fipa-cp -fipa-cp-clone</code>.</p>
@@ -122,22 +122,22 @@ header code.</p>
 <p>The result allowed me to remove vast majority of tiny helper functions
 from
 optimizer’s oversight. Some functions I was able to turn into no-op
-functions just to maintain the callgraph: so that I could keep code
+functions just to maintain the call graph: so that I could keep code
 execution flow roughly the same.</p>
 <h2 id="getting-self-contained-example">Getting self-contained example</h2>
 <p>From that point I could extract the result into a single <code>.cpp</code> file.
-I filed a <a href="https://gcc.gnu.org/PR107661">PR107661</a> form the result
+I filed a <a href="https://gcc.gnu.org/PR107661"><code>PR107661</code></a> form the result
 hoping that the bug would be obvious to an expert.</p>
 <p>The resulting test was still a bit cryptic. I’m not posting it here as
 we can do a bit better before looking at what compiler does with it.</p>
 <h2 id="removing-most-syntactic-sugar">Removing most syntactic sugar</h2>
-<p>Then I expanded high level c++ constructs like lambda functions and
-classes into structs and explicit methond names, inlined methods manually
+<p>Then I expanded high level <code>c++</code> constructs like lambda functions and
+classes into structs and explicit method names, inlined methods manually
 and removed unused parameters. In this case I especially was afraid of
-<code>function_ref</code> class used in original file: it used very unusal way to
+<code>function_ref</code> class used in original file: it used very unusual way to
 capture lambda context. I was not sure it conforms to <code>C++</code> semantics.</p>
 <p>In the example below we just pass a function pointer with seemingly no
-opporutunity of undefined behaviour.</p>
+opportunity of undefined behavior.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// #define DISABLE_HACK 1</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
@@ -179,7 +179,7 @@ opporutunity of undefined behaviour.</p>
 <span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> seemingly_unused_foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> do1<span class="op">(</span>function_ref<span class="op">{</span>callback_fn_L<span class="op">});</span> <span class="op">}</span></span>
 <span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
 <p>This example behaves differently when <code>void seemingly_unused_foo(void)</code>
-is presend and is absent in the code:</p>
+is present and is absent in the code:</p>
 <pre><code>$ ./gcc-13-snap/bin/gcc -O1 -fipa-cp -fipa-cp-clone                a.cc -o a &amp;&amp; ./a
 GOOD
 BAD
@@ -188,7 +188,7 @@ GOOD
 GOOD</code></pre>
 <p>Note how executable output changes from <code>GOOD/BAD</code> to <code>GOOD/GOOD</code>. It’s not
 supposed to and <code>gcc-12</code> never prints <code>BAD</code> text.</p>
-<h2 id="making-sure-not-many-optimization-oportunities-are-left">Making sure not many optimization oportunities are left</h2>
+<h2 id="making-sure-not-many-optimization-opportunities-are-left">Making sure not many optimization opportunities are left</h2>
 <p>Once we have a self-contained example it’s useful to apply (or disable)
 most unrelated optimizations. Once again I usually use <code>-fopt-info</code> for
 that.</p>
@@ -201,7 +201,7 @@ probably done to optimize <code>seemingly_unused_foo()</code> as nothing else is
 expected to call <code>callback_fn_L()</code>.</p>
 <p>While we are at it there are cases when you expect some optimization to
 fire. But for some reason it does not happen.<code>-fopt-info-all</code> might
-sched some light into decisions made by <code>gcc</code>:</p>
+shed some light into decisions made by <code>gcc</code>:</p>
 <pre><code>$ gcc -O1 -fipa-cp -fipa-cp-clone -fopt-info-all -c a.cc -o a.o
 a.cc:47:6: missed: Node void seemingly_unused_foo()/20 has no profile-id (profile feedback missing?)
 a.cc:43:5: missed: Node int main()/19 has no profile-id (profile feedback missing?)
@@ -233,8 +233,8 @@ but not <code>-finline-functions</code> (<code>-O2</code> default). That means <
 keyword (or a single-call <code>static</code> function call) is the usual
 trigger for inlining decision.</p>
 <h2 id="a-simpler-constant-propagation-example">A simpler constant propagation example</h2>
-<p>Before chasing specifics of our breakage let’s have a look at a simpler
-falid case of constant propagation across procedures. Let’s try the
+<p>Before chasing specifics of our breakage let’s look at a simpler
+valid case of constant propagation across procedures. Let’s try the
 following contrived example:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Forbid inlining to see the cloning effect */</span></span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">))</span></span>
@@ -257,12 +257,12 @@ following contrived example:</p>
 ever see <code>b = 10</code> value as their second argument. Will <code>gcc</code> do
 something about that redundancy? We also mark both functions <code>noinline</code>
 to prevent <code>gcc</code> from just inlining everything into <code>main()</code>.</p>
-<p>Bulding and running it:</p>
+<p>Building and running it:</p>
 <pre><code>$ gcc -O3 a.c -o a &amp;&amp; ./a
 $ echo $?
 52</code></pre>
 <p>The program prints <code>42 + 10 = 52</code> as expected. Let’s look at the <code>IPA</code>
-details to trace through it’s workings. I’ll use <code>-fdump-ipa-cp-slim</code>
+details to trace through its workings. I’ll use <code>-fdump-ipa-cp-slim</code>
 to dump pass internal state and decisions:</p>
 <pre><code>$ gcc -O3 -c a.c -fdump-ipa-cp-slim
 $ cat a.c.081i.cp</code></pre>
@@ -350,7 +350,7 @@ Lattices:
 <li>param0 is still unknown (<code>BOTTOM</code>)</li>
 <li>param1 always has value <code>10</code></li>
 </ul></li>
-<li><code>main()</code> has nothing special about it’s parameters</li>
+<li><code>main()</code> has nothing special about its parameters</li>
 </ul>
 <p><code>prop_time: 0, prop_size: 0</code> tell us that possible constant propagation
 does not worsen runtime of the original code.</p>
@@ -472,18 +472,18 @@ down to <code>f.constprop()</code> definition.</p>
 no idea. Generated assembly code did not make sense.</p>
 <p>First I bisected <code>gcc</code> to see if the change was small enough to
 immediately see the bug. Bisect found regression in big
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=e0403e95689af7">ipa-cp: Better representation of aggregate values we clone for</a>
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=e0403e95689af7"><code>ipa-cp</code>: Better representation of aggregate values we clone for</a>
 commit: <code>5 files changed, 733 insertions(+), 666 deletions(-)</code>.
 The commit is not supposed to bring in any visible changes to
-the algorightm used. It should only improve <code>gcc</code> efficiency a bit
+the algorithm used. It should only improve <code>gcc</code> efficiency a bit
 without any change in the output. The diff in commit was too large for
 me to understand. I had no idea what I was looking at.</p>
-<p>I moved to inspect <code>gcc</code>’s transformation stages. Each individual
+<p>I moved to inspect <code>gcc</code> transformation stages. Each individual
 optimization pass is usually simple enough that we can manually
 verify if it’s effect is correct. At least for me that works only
 for small input source files.</p>
-<p><code>gcc</code>’s pass debugging steps hide under <code>-fdump-*</code> flags. Most
-frequentl flags I use are:</p>
+<p><code>gcc</code> pass debugging steps hide under <code>-fdump-*</code> flags. Most
+frequent flags I use are:</p>
 <ul>
 <li><code>-fdump-tree-all</code> (or similar <code>-fdump-tree-all-all</code>, <code>-fdump-tree-all-slim</code> that differ in verbosity)</li>
 <li><code>-fdump-ipa-all</code> (or <code>-fdump-ipa-all-all</code> and <code>-fdump-ipa-all-slim</code>)</li>
@@ -576,13 +576,13 @@ The only difference is verbosity: explicit assignments instead of
 constructors, explicit label jumps and similar.</p>
 <p>Having skimmed through it we can spot a few curious things:</p>
 <ul>
-<li><code>do3()</code> disappered completely. <code>do3.constprop()</code> is the only one left
+<li><code>do3()</code> disappeared completely. <code>do3.constprop()</code> is the only one left
 and it calls only <code>L_run()</code> (from <code>callback_fn_L</code>). There is no
 <code>callback_fn_R</code> call.</li>
 <li><code>seemingly_unused_foo()</code> calls <code>do3.constprop()</code> directly (ok).</li>
 <li><code>main()</code> calls <code>callback_fn_R()</code> directly (ok) and calls <code>do3.constprop()</code>
 (bug!).</li>
-<li><code>do1()</code> was completely optimised away by inlining into
+<li><code>do1()</code> was completely optimized away by inlining into
 <code>main()</code> and <code>seemingly_unused_foo()</code>.</li>
 </ul>
 <p>Let’s look at the output of <code>IPA</code> phases instead. I used
@@ -734,7 +734,7 @@ anywhere.</p>
 <code>do3() -&gt; do3.constprop()</code> edge. How could <code>do3()</code> call
 <code>do3.constprop()</code>? The line
 <code>- adding an extra caller void do3(volatile int*, function_ref)/17 of void do3.constprop(volatile int*, function_ref)/24</code>
-in the log is a good hint where to look at the details in <code>gcc</code>’s source
+in the log is a good hint where to look at the details in <code>gcc</code> source
 code.</p>
 <p>Anyway, the resulting printed code is not directly broken. So far it’s
 “only” edge information that looks incorrect. Maybe I am misinterpreting
@@ -841,12 +841,12 @@ int main ()
 <p>Here we can see how problematic edges discovered in <code>cp</code> phase broke
 <code>inline</code>: <code>main()</code> function now calls <code>do3.constprop ();</code> (after <code>do3()</code>
 inline) and that encodes <code>L_run ();</code> call to print <code>BAD</code>.</p>
-<h2 id="diving-into-ipa-cp">Diving into ipa-cp</h2>
+<h2 id="diving-into-ipa-cp">Diving into <code>ipa-cp</code></h2>
 <p>Now let’s try to figure out why does <code>ipa-cp</code> add a problematic
 <code>do3() -&gt; do3.constprop()</code> edge.</p>
 <p><code>gcc</code> frequently has great comments in the source code on details of
 what a pass is supposed to do. <code>ipa-cp</code> is no exception: it hides
-in <a href="%3Chttps://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d2bcd5e5e691ced8dba4b496b9d044eb2777d2b2;hb=HEAD#l23">gcc/ipa-cp.cc file</a>:</p>
+in <a href="%3Chttps://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d2bcd5e5e691ced8dba4b496b9d044eb2777d2b2;hb=HEAD#l23"><code>gcc/ipa-cp.cc</code> file</a>:</p>
 <pre><code>  23 /* Interprocedural constant propagation (IPA-CP).
   24 
   25    The goal of this transformation is to
@@ -926,7 +926,7 @@ in <a href="%3Chttps://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d2bcd
   99    This stage is currently performed by call graph code (mainly in cgraphunit.cc
  100    and tree-inline.cc) according to instructions inserted to the call graph by
  101    the second stage.  */</code></pre>
-<p>The idea is straighforward:</p>
+<p>The idea is straightforward:</p>
 <ul>
 <li>collect all the call sites with their parameters (constant parameters
 are most interesting to propagate them into callees)</li>
@@ -935,18 +935,18 @@ are most interesting to propagate them into callees)</li>
 <li>clone functions by applying propagated constants where it’s beneficial</li>
 <li>patch call sites to use clones instead of original functions</li>
 </ul>
-<p>While the whole algorithm might be overwhelming each of it’s step is not
+<p>While the whole algorithm might be overwhelming each of its step is not
 too big to trace it through for our concrete example.</p>
 <p>In theory <code>ipa-cp</code> should perform a transformation similar to the following:</p>
 <p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-1.svg" /></p>
-<p>I expected callback <code>cb</code> indirection to be fully specialised and
+<p>I expected callback <code>cb</code> indirection to be fully specialized and
 runtime indirection to completely go away.</p>
 <p>In practice something like the following occurs:</p>
 <p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-2.svg" /></p>
 <p>Note: <code>main()</code> manages to both inline <code>GOOD</code> callback and call
 specialized <code>do1.constprop()</code> <code>BAD</code> branch. The edge marked with <code>Bug!</code>
 is the actual bug here.</p>
-<p>To summarise the <code>ipa-cp</code> pass once again it consists of 3 steps:</p>
+<p>To summarize the <code>ipa-cp</code> pass once again it consists of 3 steps:</p>
 <ul>
 <li>collect information around known call sites of the functions
 (“jump functions”)</li>
@@ -1032,11 +1032,11 @@ ipa-prop: Discovered an indirect call to a known target (void do3.constprop(vola
  - adding an extra caller void do3(volatile int*, function_ref)/17 of void do3.constprop(volatile int*, function_ref)/24</code></pre>
 <p>Here propagation phase correctly sees that <code>do3()</code> sees two constants
 being passed as parameters: <code>callback_fn_L()</code> and <code>callback_fn_R()</code>.</p>
-<p>Thus whatever <code>do3.constprop()</code> is specialized against <code>do3()</code> can’t call
+<p>Thus, whatever <code>do3.constprop()</code> is specialized against <code>do3()</code> can’t call
 into it on it’s own: <code>do3()</code> has to work for <code>callback_fn_L()</code> and <code>callback_fn_R()</code>
 inputs.</p>
-<p>If we look at <code>adding an extra caller</code> string in <code>gcc</code>’s source code we
-will see the conditon on which <code>gcc</code> decided it’s OK
+<p>If we look at <code>adding an extra caller</code> string in <code>gcc</code> source code we
+will see the condition on which <code>gcc</code> decided it’s OK
 <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d5230c7c5e6b150f7ac9e1a1445178239dc67c39;hb=603af25815523ba9e39e9b441cde5308423a9238#l5918">in perhaps_add_new_callers()</a>:</p>
 <div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Given an original NODE and a VAL for which we have already created a</span></span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="co">   specialized clone, look whether there are incoming edges that still lead</span></span>
@@ -1101,17 +1101,17 @@ will see the conditon on which <code>gcc</code> decided it’s OK
 <p>Given that we pass a <code>struct { ... }</code> as a parameter our condition that
 should have failed lives at <code>cgraph_edge_brings_all_agg_vals_for_node (cs, val-&gt;spec_node)</code>
 call. It is supposed to check that all the parameters that our <code>d3.constprop()</code>
-is specialised against is enough to cover all the call sites.</p>
+is specialized against is enough to cover all the call sites.</p>
 <p><code>cgraph_edge_brings_all_agg_vals_for_node()</code> just implements that:
 <code>avl</code> contains all values from seen edges while <code>existing</code> contains
-values <code>node</code> is specialised against. Adding simple
+values <code>node</code> is specialized against. Adding simple
 <code>avl.dump (stderr); existing.dump (stderr);</code> shows the discrepancy.</p>
 <p>A bit of extra debugging revealed that <code>push_agg_values_from_edge()</code> is
-slightly broken in the way it handles self-recursive functions like
+slightly broken. It handles self-recursive functions like
 <code>d3()</code>: instead of extending already known values extracted from
-specialised node (passed as <code>&amp;existing</code>) it just reuses <code>&amp;existing</code>
+specialized node (passed as <code>&amp;existing</code>) it just reuses <code>&amp;existing</code>
 value as if no other information is present.</p>
-<p>The workaround to test the theory was simple: just drop this preseed.</p>
+<p>The workaround to test the theory was simple: just drop this pre-seed.</p>
 <div class="sourceCode" id="cb22"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/ipa-cp.cc</span></span>
 <span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/ipa-cp.cc</span></span>
 <span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -5868,35 +5868,35 @@ cgraph_edge_brings_all_scalars_for_node (struct cgraph_edge *cs,</span></span>
@@ -1142,7 +1142,7 @@ suite. The actual fix is slightly less conservative and uses <code>&amp;existing
 values in propagation phase when edge values are not fully discovered
 yet.</p>
 <p>Martin did a proper fix in
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=c4a92a9117a034e7cf291ae51d8b9b844fb5a88b">ipa-cp: Do not be too optimistic about self-recursive edges</a>
+<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=c4a92a9117a034e7cf291ae51d8b9b844fb5a88b"><code>ipa-cp</code>: Do not be too optimistic about self-recursive edges</a>
 commit.</p>
 <h2 id="optimized-example-after-the-fix">Optimized example after the fix</h2>
 <p>Here is the final state built with <code>gcc -O1 -fipa-cp -fipa-cp-clone a.cc -o a -fdump-tree-all-slim</code>:</p>
@@ -1248,8 +1248,8 @@ void seemingly_unused_foo ()
 }</code></pre>
 <p>We see both <code>do3()</code> used by <code>main()</code> and <code>do3.constprop()</code> used by
 <code>seemingly_unused_foo()</code>. I don’t understand why <code>main()</code> did not
-trigger specialisation of another <code>do3()</code> variant. Let it be another
-exercise for the reader and optimisation opportunity :)</p>
+trigger specialization of another <code>do3()</code> variant. Let it be another
+exercise for the reader and optimization opportunity :)</p>
 <p>The final result in pictures:</p>
 <p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-3.svg" /></p>
 <h2 id="parting-words">Parting words</h2>
