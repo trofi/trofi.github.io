@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>four years on NixOS</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>four years on NixOS</h1>
+            
+                <div class="info">August 20, 2025</div>
+            
+
+            <p>It’s another yearly instance of my <code>NixOS</code> journey
+(<a href="../posts/316-three-years-on-nixos.html">2024 instance</a>). I meant to
+write it around <code>25.05</code> but completely forgot!</p>
+<h2 id="system-maintenance">system maintenance</h2>
+<p>As usual I don’t remember what I did to my system over the past year,
+so I’m at the <code>git log</code> for <code>/etc/nixos</code> as it contains all the changes:</p>
+<ul>
+<li>follow <code>hardware.opengl</code> -&gt; <code>hardware.graphics</code> rename</li>
+<li>follow <code>hardware.opengl.driSupport{,32Bit}</code> removal</li>
+<li>follow rename of <code>gnome.adwaita-icon-theme</code></li>
+<li>follow <code>hardware.pulseaudio</code> -&gt; <code>services.pulseaudio</code> rename</li>
+<li>follow <code>okular</code> -&gt; <code>kdePackages.okular</code> rename</li>
+<li>drop deprecated <code>i18n.supportedLocales</code></li>
+<li>follow <code>networking.wireless.iwd.settings.General</code> -&gt; <code>networking.wireless.iwd.settings.DriverQuirks</code> rename</li>
+<li>follow <code>services.postfix.config</code> -&gt; <code>services.postfix.settings.main</code> rename</li>
+<li>fix <code>services.postfix.settings.main.mynetworks</code> type (changed from <code>string</code> to array)</li>
+</ul>
+<p>It is quite a bit more of renames than last year. I think locale changes
+actually broke my locales at runtime and I had to figure out what to
+change to get them back.</p>
+<p>I did not have major package build failures that required any local
+changes.</p>
+<p>This time I had the following non-trivial problems in upstream packages:</p>
+<ul>
+<li><code>duperemove</code> would hang up on <code>NoCOW</code> files: <a href="https://github.com/markfasheh/duperemove/pull/376" class="uri">https://github.com/markfasheh/duperemove/pull/376</a>.
+I had to bisect the regression and fix it upstream. It was easy as I
+am somewhat familiar with <code>duperemove</code> implementation.</li>
+<li><code>nix</code> started stripping too much in <code>gcc-14</code> warning logs: <a href="https://github.com/NixOS/nix/pull/13109" class="uri">https://github.com/NixOS/nix/pull/13109</a>.
+It came up after <code>nixpkgs</code> switched to <code>gcc-14</code>. Took some time to figure
+out what is so special about <code>gcc</code> warnings. Ended up being quite easy.</li>
+<li><code>perf</code> stated to hang up on my system: <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c21986d33d6beb269a35b38dcb8adaa5bd228527" class="uri">https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c21986d33d6beb269a35b38dcb8adaa5bd228527</a>.
+It came up after I ran system-wide profiler to see what <code>wine</code> does to
+use 100% CPU on an ancient game. THe fix was trivial once looked at.
+I don’t remember what changed to expose the hangups. Maybe I just never
+did it before? Ended up being easy as well.</li>
+<li><code>mpv</code> started failing GPU rendering due to <code>libplacebo</code> / <code>shaderc</code>
+incompatibility: <a href="https://code.videolan.org/videolan/libplacebo/-/issues/335" class="uri">https://code.videolan.org/videolan/libplacebo/-/issues/335</a>.
+Most arcane bug of all: had to bisect the whole system to find the
+package first, then had to bisect down to the commit. Upstream eventually
+fixed it. But if <code>nixpkgs</code> had up-to-date <code>shaderc</code> we would not stumble
+on this bug. The only non-trivial bug from the whole list.</li>
+</ul>
+<h2 id="community-support">Community support</h2>
+<p>I still feel that <code>NixOS</code> community is a welcoming place for newcomers,
+experimenters and people who do grunt maintenance work. <code>NixOS</code> community
+now had elected their first Steering Committee who can help resolving
+high-level conflicts.</p>
+<p>Some of the amusing things I did over the past year:</p>
+<ul>
+<li><a href="../posts/330-another-nix-language-nondeterminism-example.html"><code>nix</code> language non-determinism in <code>sort</code> built-in</a></li>
+<li><code>stdenv</code> fix to handle root directories that start with dash (<code>-</code>): <a href="https://github.com/NixOS/nixpkgs/pull/317106" class="uri">https://github.com/NixOS/nixpkgs/pull/317106</a>.
+<code>diffoscope-269</code> release was a great stress test for <code>nixpkgs</code> <code>bash</code> code :)</li>
+<li>Found and fixed ~50 more eval failures in <code>nixpkgs</code> found by <a href="../posts/309-listing-all-nixpkgs-packages.html">the hack</a>.
+This hack was also the trigger that exposed <code>sort</code> non-determinism above.</li>
+<li>Fixed <code>nixpkgs</code> <code>isMachO</code> helper: <a href="https://github.com/NixOS/nixpkgs/pull/432097" class="uri">https://github.com/NixOS/nixpkgs/pull/432097</a>.
+Reading 4 bytes from the file in pure <code>bash</code>. How hard could it be?</li>
+</ul>
+<p>Just like last year I managed to get about 800 commits into <code>nixpkgs</code>
+this year.</p>
+<p>I stopped reading any Matrix channels completely and only skim through
+<a href="https://discourse.nixos.org/">discourse</a> and read <code>github</code> notifications.</p>
+<h2 id="home-server-experience">Home server experience</h2>
+<p>I did not have to adapt anything for the past year. Things still Just Work.</p>
+<h2 id="local-experiments">Local experiments</h2>
+<p>I switched to <a href="../posts/331-trying-out-helix-editor.html"><code>helix</code> editor</a>
+and to <a href="../posts/333-to-chromium.html"><code>chromium</code> browser</a>. Both were quite
+smooth transitions.</p>
+<p>I continued <code>gcc</code> testing. This year it was <code>gcc-15</code> branch. <code>nixpkgs</code>
+still manages to serve as a reasonable vehicle to
+<a href="../posts/332-gcc-15-bugs-pile-2.html">find bugs</a>. Just like last year I
+found about 50 compiler bugs. Did not manage to fix any myself.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>NixOS</code> still works for me.</p>
+<p>Give <code>NixOS</code> a go if you did not yet :)</p>
+        </div>
+    </body>
+</html>
