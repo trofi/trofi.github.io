@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>gcc-16 devirtualization changes</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>gcc-16 devirtualization changes</h1>
+            
+                <div class="info">September 27, 2025</div>
+            
+
+            <h2 id="a-quiz">A quiz</h2>
+<p>Let’s start from a quiz: is this single file program a valid <code>c++</code>
+program? Will it always build and run?</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> d_impl<span class="op">(</span><span class="dt">void</span><span class="op">);</span> <span class="co">/* has no definition at all! */</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> B <span class="op">{</span> <span class="kw">virtual</span> <span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{}</span> <span class="op">};</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> D <span class="op">:</span> <span class="kw">public</span> B <span class="op">{</span> <span class="kw">virtual</span> <span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> d_impl<span class="op">();</span> <span class="op">}</span> <span class="op">};</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> do_f<span class="op">(</span><span class="kw">struct</span> B<span class="op">*</span> o<span class="op">)</span> <span class="op">{</span> o<span class="op">-&gt;</span>f<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<h2 id="running-gcc">Running <code>gcc</code></h2>
+<p>It feels like this whole program is just an obfuscated version of
+<code>int main(){}</code> and thus should Just Work, right? And <code>gcc-15</code> would agree:</p>
+<pre><code>$ g++-15 a.cc -o a -fopt-info -O2
+$ ./a</code></pre>
+<p>But with <code>gcc-16</code> it fails to link:</p>
+<pre><code>$ g++-16 a.cc -o a -fopt-info -O2
+a.cc:11:30: optimized: speculatively devirtualizing call in void do_f(B*)/3 to virtual void B::f()/1
+a.cc:11:30: optimized: speculatively devirtualizing call in void do_f(B*)/3 to virtual void D::f()/2
+a.cc:11:30: optimized: devirtualized call in void do_f(B*)/3 to 2 targets
+a.cc:11:30: optimized:  Inlined virtual void B::f()/10 into void do_f(B*)/3 which now has time 12.400000 and size 11, net change of -2.
+a.cc:11:30: optimized:  Inlined virtual void D::f()/11 into void do_f(B*)/3 which now has time 12.160000 and size 10, net change of -1.
+
+ld: /tmp/nix-shell.QW52Fh/ccNR2yWI.o: in function `do_f(B*)':
+a.cc:(.text+0x29): undefined reference to `d_impl()'
+ld: /tmp/nix-shell.QW52Fh/ccNR2yWI.o: in function `D::f()':
+a.cc:(.text._ZN1D1fEv[_ZN1D1fEv]+0x1): undefined reference to `d_impl()'
+collect2: error: ld returned 1 exit status</code></pre>
+<p>Note: it fails to find an implementation of <code>void d_impl(void);</code> function.</p>
+<h2 id="devirtualization-mechanics">devirtualization mechanics</h2>
+<p>Why did <code>gcc</code> not notice missing reference before?
+<code>-fopt-info</code> gives us a hint that <code>gcc</code> “devirtualized” virtual call
+of <code>void do_f(struct B* o) { o-&gt;f(); }</code> into non-virtual calls and got
+extra references into the code.
+<code>-fdump-tree-all</code> can show us the result after these transformations:</p>
+<pre><code>$ g++ a.cc -o a -fopt-info -O2 -fdump-tree-all
+...
+
+# I removed a bit of unrelated detail manually
+$ cat a.cc.273t.optimized
+
+void B::f (struct B * const this) { return; }
+
+void D::f (struct D * const this) { d_impl (); }
+
+void do_f (struct B * o)
+{
+  int (*) () * _1;
+  int (*) () _2;
+  void * PROF_6;
+  void * PROF_8;
+
+  _1 = o_4(D)-&gt;_vptr.B;
+  _2 = *_1;
+  PROF_6 = [obj_type_ref] OBJ_TYPE_REF(_2;(struct B)o_4(D)-&gt;0B);
+  if (PROF_6 == D::f) {
+    d_impl (); [tail call]
+    return;
+  }
+
+  PROF_8 = [obj_type_ref] OBJ_TYPE_REF(_2;(struct B)o_4(D)-&gt;0B);
+  if (PROF_8 == B::f)
+    return;
+
+  OBJ_TYPE_REF(_2;(struct B)o_4(D)-&gt;0B) (o_4(D)); [tail call]
+}
+
+int main () { return 0; }</code></pre>
+<p>Here <code>gcc-16</code> expanded <code>void do_f(struct B* o) { o-&gt;f(); }</code> against
+unknown <code>o-&gt;f()</code> call into a few known types: <code>o-&gt;B::f()</code> and
+<code>o-&gt;D::f()</code> calls by checking the function addresses via vtable. This
+allowed <code>gcc</code> to inline <code>B::f()</code> and <code>D::f()</code>. Pseudocode of the result:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// before</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> do_f<span class="op">(</span><span class="kw">struct</span> B<span class="op">*</span> o<span class="op">)</span> <span class="op">{</span> o<span class="op">-&gt;</span>f<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co">// after</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> do_f<span class="op">(</span><span class="kw">struct</span> B<span class="op">*</span> o<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>o<span class="op">-&gt;</span>f <span class="op">==</span> D<span class="op">::</span>f<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// inlined D::f()</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    d_impl<span class="op">();</span> <span class="co">// our new reference!</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>o<span class="op">-&gt;</span>f <span class="op">==</span> B<span class="op">::</span>f<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// inlined B::f()</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>  <span class="co">// other types</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>  o<span class="op">-&gt;</span>f<span class="op">();</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><code>gcc-15</code> did not use to do this kind of transformations. It’s a recent
+change added in the <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=9ee937b2f92a930eb5407260a56e5fe0fa137e85">commit <code>Add --param max-devirt-targets</code></a>.
+This extended existing devirtualization optimization to consider not
+just one possible devirtualization target (before the patch), but at most
+<code>3</code>.</p>
+<h2 id="fixes-and-workarounds">Fixes and workarounds</h2>
+<p>Now we can even work the original example around and build it:</p>
+<pre><code>$ g++ a.cc -o a -fopt-info -O2 --param=max-devirt-targets=1
+$ ./a</code></pre>
+<p>Is the above a completely hypothetical scenario? Why would you have such
+code lying around? Well, I initially noticed it on
+<a href="https://gitlab.kitware.com/cmake/cmake/-/issues/27256"><code>cmake</code> build failure</a>.
+There <code>./bootstrap</code> script failed to build initial <code>cmake</code> on
+<code>gcc-16</code>. <code>./bootstrap</code> code uses only a subset of <code>cmake</code> source code,
+but it had a few <code>#include</code> that do refer to the code that does not
+get compiled/linked in <code>./bootstrap</code>. The devirtualization change exposed
+it. The <a href="https://gitlab.kitware.com/cmake/cmake/-/merge_requests/11243/diffs?commit_id=ea04e19daf7010781d0df980b9683a642093e381">fix</a>
+was to <code>#ifdef</code> out the code that has no chance to execute on <code>./bootstrap</code>.
+To transfer it back to our example the fix is similar to the following:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> d_impl<span class="op">(</span><span class="dt">void</span><span class="op">);</span> <span class="co">/* has no definition at all! */</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> B <span class="op">{</span> <span class="kw">virtual</span> <span class="dt">void</span> f<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{}</span> <span class="op">};</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#if 0</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="co">struct D : public B { virtual void f(void) { d_impl(); } };</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> do_f<span class="op">(</span><span class="kw">struct</span> B<span class="op">*</span> o<span class="op">)</span> <span class="op">{</span> o<span class="op">-&gt;</span>f<span class="op">();</span> <span class="op">}</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<pre><code>$ g++ a.cc -o a -fopt-info -O2
+a.cc:9:30: optimized: speculatively devirtualizing call in void do_f(B*)/2 to virtual void B::f()/1
+a.cc:9:30: optimized:  Inlined virtual void B::f()/6 into void do_f(B*)/2 which now has time 7.200000 and size 9, net change of -2.
+
+$ ./a</code></pre>
+<p>All good now!</p>
+<h2 id="parting-words">Parting words</h2>
+<p>The initial example was not quite correct and caused link failures when
+devirtualization kicked in. Including headers to the unlinked code does
+not always work.</p>
+<p>Devirtualization does sometimes bloat the code a bit with references that
+have no chance to execute in real programs. Profile-guided optimizations
+help a lot to avoid generation of completely dead code by getting better
+estimates of observed behavior.</p>
+<p><code>cmake</code> is <a href="https://gitlab.kitware.com/cmake/cmake/-/merge_requests/11243/diffs?commit_id=ea04e19daf7010781d0df980b9683a642093e381">fixed</a>
+and can now be built with <code>gcc-16</code>!</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
