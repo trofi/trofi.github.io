@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>profiling binutils linkers in nixpkgs</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>profiling binutils linkers in nixpkgs</h1>
+            
+                <div class="info">October  9, 2025</div>
+            
+
+            <h2 id="background">background</h2>
+<p>I’ve been using <code>binutils-2.45</code> against local <code>nixpkgs</code> checkout for a
+while to weed out minor problems in other packages. So far I encountered
+my old friend
+<a href="https://github.com/NixOS/nixpkgs/pull/438714"><code>guile</code> over-stripping issue</a>.</p>
+<p><a href="https://en.wikipedia.org/wiki/Gold_(linker)"><code>GNU gold</code> linker</a> was
+<a href="https://lists.gnu.org/archive/html/info-gnu/2025-02/msg00001.html">deprecated</a>
+in <code>binutils</code> upstream as it does not have developer
+power behind it. While <code>bfd</code> linker (the default) gets maintenance
+attention. <code>binutils-2.45</code> intentionally does not have <code>gold</code> source
+distributed with it to nudge users off <code>gold</code>.</p>
+<p>To fix rare <code>nixpkgs</code> package build failures that rely on <code>ld.gold</code> I
+trivially replaced all the links to <code>ld.bfd</code> locally and built my system.
+No major problems found.</p>
+<h2 id="an-ld.gold-removal-obstacle">an <code>ld.gold</code> removal obstacle</h2>
+<p>In a <a href="https://discourse.nixos.org/t/removing-gold-from-nixpkgs/70496/8">recent discussion thread</a>
+the question was raised if/how <code>nixpkgs</code> could switch to <code>gold</code>-less
+<code>binutils</code>. One of the interesting points of the thread is that <code>ld.bfd</code>
+is occasionally ~<code>3x</code> times <a href="https://github.com/NixOS/nixpkgs/pull/418735#issuecomment-2993624063">slower than <code>ld.gold</code></a>
+on files that already take multiple seconds to link with <code>ld.gold</code>.
+For me it was quite a surprise as <code>ld.bfd</code> does
+<a href="https://www.youtube.com/watch?v=h5pXt_YCwkU">get speedup improvements</a>
+time to time. Thus, I suspected it should be some kind of a serious bug
+on <code>ld.bfd</code> side.
+I wondered if I could reproduce such a big performance
+drop and if I could find a low hanging fix. Or at least report a bug to
+<code>binutils</code> upstream.</p>
+<p>I used the same <code>pandoc</code> <code>nixpkgs</code> package to do the linker testing. It’s
+a nice example as it builds only 4 small <code>haskell</code> source files and
+links in a huge amount of static <code>haskell</code> libraries. A perfect linker
+load test. Preparing the baseline:</p>
+<pre><code># pulling in already built package into cache
+$ nix build --no-link -f. pandoc
+# pulling in all the build dependencies into cache
+$ nix build --no-link -f. pandoc --rebuild
+
+# timing the build:
+$ time nix build --no-link -f. pandoc --rebuild
+error: derivation '/nix/store/az6dbzm341jc7n4sw7w0ifspxgsm4093-pandoc-cli-3.7.0.2.drv' may not be deterministic: output '/nix/store/znmj21k8nrqc3hcax6yfy446g8bgk7z3-pandoc-cli-3.7.0.2' differs
+
+real    0m12,850s
+user    0m0,719s
+sys     0m0,105s</code></pre>
+<p>Do not mind that determinism error. I got about <code>13 seconds</code> of the
+package build time. Seems to match the original timing. Then I tried
+<code>ld.bfd</code> by passing extra <code>--ghc-option=-optl-fuse-ld=bfd</code> option to
+<code>./Setup configure</code>:</p>
+<pre><code>$ time nix build --impure --expr 'with import &lt;nixpkgs&gt; {};
+    pandoc.overrideAttrs (oa: {
+        configureFlags = oa.configureFlags ++ [&quot;--ghc-option=-optl-fuse-ld=bfd&quot;];})'
+...
+real    0m37,391s
+user    0m0,691s
+sys     0m0,120s</code></pre>
+<p>37 seconds! At least <code>3x</code> slowdown. I was glad to see such a simple
+reproducer.</p>
+<h2 id="linker-performance-profiles">linker performance profiles</h2>
+<p>I dropped into a development shell to explore individual <code>ld</code> commands:</p>
+<pre><code>$ nix develop --impure --expr 'with import &lt;nixpkgs&gt; {};
+    pandoc.overrideAttrs (oa: {
+        configureFlags = oa.configureFlags ++ [&quot;--ghc-option=-optl-fuse-ld=bfd&quot; ];})'
+$$ genericBuild
+...
+[4 of 4] Linking dist/build/pandoc/pandoc
+^C
+
+$$ # ready for interactive exploration</code></pre>
+<p>I ran the <code>./Setup build -v</code> to extract exact <code>ghc --make ...</code> invocation:</p>
+<pre><code>$$ ./Setup build -v
+...
+Linking...
+Running: &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make -fbuilding-cabal-package -O -split-sections -static -outputdir dist/build/pandoc/pandoc-tmp -odir dist/build/pandoc/pandoc-tmp ...</code></pre>
+<p>And ran <code>ld.bfd</code> under <code>perf</code>:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... '-optl-fuse-ld=bfd' -fforce-recomp</code></pre>
+<p>Then I built the <a href="https://github.com/brendangregg/FlameGraph"><code>flamegraph</code></a> picture:</p>
+<pre><code>$ perf script &gt; out.perf
+$ perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded
+$ perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; bfd.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/bfd.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/bfd.svg" title="ld.bfd profile on pandoc" alt="bfd.svg" /></a></p>
+<p>You can click on the pictures and explore it interactively.
+Does it look fine to you? Anything odd?
+We already see a tiny hint: <code>_bfd_elf_gc_mark()</code> takes suspiciously large
+amount of space on the picture.
+Let’s build the same picture for <code>gold</code> using <code>-optl-fuse-ld=gold</code> option:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... '-optl-fuse-ld=gold' -fforce-recomp
+$ perf script &gt; out.perf
+$ perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded
+$ perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; gold.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/gold.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/gold.svg" title="ld.gold profile on pandoc" alt="gold.svg" /></a></p>
+<p>The profile looks more balanced. THe staircase around sorting looks
+peculiar. Most of the time is spent
+on section sorting in <code>gold::Output_section::sort_attached_input_sections</code>.
+It’s also a great hint: <strong>how many sections should there be so that sorting
+alone would take <code>25%</code> of the link time</strong>?</p>
+<h2 id="section-count">section count</h2>
+<p>Where do these numerous sections come from?
+<code>nixpkgs</code> enables <a href="https://github.com/NixOS/nixpkgs/blob/54a538734a5e77bca43dcbe4ad20357b5eb1cffd/pkgs/development/haskell-modules/generic-builder.nix#L349C20-L349C45"><code>-split-sections</code></a>
+by default on <code>linux</code> which uses <code>ghc</code> <a href="https://downloads.haskell.org/ghc/9.12.2/docs/users_guide/phases.html#ghc-flag-fsplit-sections"><code>-fsplit-sections</code></a>.
+Those are very close in spirit to <code>gcc</code> <a href="https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-ffunction-sections"><code>-ffunction-sections</code></a>
+feature. Both place each function in a separate <code>ELF</code> section assuming
+that the user will use <code>-Wl,--gc-sections</code> linker option to
+garbage-collect unreferenced sections in the final executable to make
+binaries smaller.</p>
+<p>So how many sections do you normally expect per object file?</p>
+<p>In <code>C</code> (with <code>-ffunction-sections</code>) I would expect section count to
+be close to function count in the source
+file. Some optimization passes duplicate (clone) or inline functions,
+but the expansion should not be too large (famous last words). Hopefully
+not <code>100x</code>, but closer to <code>1.5x</code> maybe? <code>C++</code> might be trickier to
+reason about.</p>
+<p>In <code>haskell</code> it’s a lot more complicated: lazy evaluation model creates
+numerous smaller functions out of one source function, cross-module
+aggressive inlining brings in many expressions.
+Here is an example of a one liner compilation and it’s section count:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- # cat Main.hs</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="fu">print</span> <span class="st">&quot;hello&quot;</span></span></code></pre></div>
+<p><strong>Quiz question: how many sections do you expect to see for this source
+file after <code>ghc -c Main.hs</code>?</strong></p>
+<p>Building and checking unsplit form first:</p>
+<pre><code>$ ghc -c Main.hs -fforce-recomp
+
+$ size Main.o
+   text    data     bss     dec     hex filename
+    378     304       0     682     2aa Main.o
+
+$ readelf -SW Main.o
+There are 13 section headers, starting at offset 0xb50:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000000000 000040 00013a 00  AX  0   0  8
+  [ 2] .rela.text        RELA            0000000000000000 000708 0001c8 18   I 10   1  8
+  [ 3] .data             PROGBITS        0000000000000000 000180 000130 00  WA  0   0  8
+  [ 4] .rela.data        RELA            0000000000000000 0008d0 000210 18   I 10   3  8
+  [ 5] .bss              NOBITS          0000000000000000 0002b0 000000 00  WA  0   0  1
+  [ 6] .rodata.str       PROGBITS        0000000000000000 0002b0 000010 01 AMS  0   0  1
+  [ 7] .note.GNU-stack   PROGBITS        0000000000000000 0002c0 000000 00      0   0  1
+  [ 8] .comment          PROGBITS        0000000000000000 0002c0 00000c 01  MS  0   0  1
+  [ 9] .note.gnu.property NOTE            0000000000000000 0002d0 000030 00   A  0   0  8
+  [10] .symtab           SYMTAB          0000000000000000 000300 000228 18     11   5  8
+  [11] .strtab           STRTAB          0000000000000000 000528 0001dd 00      0   0  1
+  [12] .shstrtab         STRTAB          0000000000000000 000ae0 00006e 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)</code></pre>
+<p>378 bytes of code, 12 sections. 6 of them are relevant: <code>.text</code>, <code>.rela.text</code>,
+<code>.data</code>, <code>.rela.data</code>, <code>.rodata.str</code>. All very close to a typical <code>C</code> program.</p>
+<p>Now let’s throw in <code>-fsplit-sections</code>.</p>
+<p><strong>Quiz question: guess how many more sections there will be? 0? 1? 10? 100? 1000?</strong></p>
+<pre><code>$ ghc -c Main.hs -fforce-recomp -fsplit-sections
+
+$ size Main.o
+   text    data     bss     dec     hex filename
+    365     304       0     669     29d Main.o
+
+$ readelf -SW Main.o
+There are 39 section headers, starting at offset 0xd90:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000000000 000040 000000 00  AX  0   0  1
+  [ 2] .data             PROGBITS        0000000000000000 000040 000000 00  WA  0   0  1
+  [ 3] .bss              NOBITS          0000000000000000 000040 000000 00  WA  0   0  1
+  [ 4] .rodata.str..LrKs_bytes PROGBITS        0000000000000000 000040 000005 01 AMS  0   0  1
+  [ 5] .rodata.str..LrKq_bytes PROGBITS        0000000000000000 000045 000005 01 AMS  0   0  1
+  [ 6] .rodata.str.cKA_str PROGBITS        0000000000000000 00004a 000006 01 AMS  0   0  1
+  [ 7] .data..LsKw_closure PROGBITS        0000000000000000 000050 000028 00  WA  0   0  8
+  [ 8] .rela.data..LsKw_closure RELA            0000000000000000 0007c8 000030 18   I 36   7  8
+  [ 9] .data..LuKL_srt   PROGBITS        0000000000000000 000078 000020 00  WA  0   0  8
+  [10] .rela.data..LuKL_srt RELA            0000000000000000 0007f8 000048 18   I 36   9  8
+  [11] .text..LsKu_info  PROGBITS        0000000000000000 000098 000062 00  AX  0   0  8
+  [12] .rela.text..LsKu_info RELA            0000000000000000 000840 000090 18   I 36  11  8
+  [13] .data..LsKu_closure PROGBITS        0000000000000000 000100 000020 00  WA  0   0  8
+  [14] .rela.data..LsKu_closure RELA            0000000000000000 0008d0 000018 18   I 36  13  8
+  [15] .data..LuL2_srt   PROGBITS        0000000000000000 000120 000028 00  WA  0   0  8
+  [16] .rela.data..LuL2_srt RELA            0000000000000000 0008e8 000060 18   I 36  15  8
+  [17] .text.Main_main_info PROGBITS        0000000000000000 000148 000069 00  AX  0   0  8
+  [18] .rela.text.Main_main_info RELA            0000000000000000 000948 0000a8 18   I 36  17  8
+  [19] .data.Main_main_closure PROGBITS        0000000000000000 0001b8 000020 00  WA  0   0  8
+  [20] .rela.data.Main_main_closure RELA            0000000000000000 0009f0 000018 18   I 36  19  8
+  [21] .data..LuLj_srt   PROGBITS        0000000000000000 0001d8 000020 00  WA  0   0  8
+  [22] .rela.data..LuLj_srt RELA            0000000000000000 000a08 000048 18   I 36  21  8
+  [23] .text.ZCMain_main_info PROGBITS        0000000000000000 0001f8 000062 00  AX  0   0  8
+  [24] .rela.text.ZCMain_main_info RELA            0000000000000000 000a50 000090 18   I 36  23  8
+  [25] .data.ZCMain_main_closure PROGBITS        0000000000000000 000260 000020 00  WA  0   0  8
+  [26] .rela.data.ZCMain_main_closure RELA            0000000000000000 000ae0 000018 18   I 36  25  8
+  [27] .data..LrKr_closure PROGBITS        0000000000000000 000280 000010 00  WA  0   0  8
+  [28] .rela.data..LrKr_closure RELA            0000000000000000 000af8 000030 18   I 36  27  8
+  [29] .data..LrKt_closure PROGBITS        0000000000000000 000290 000010 00  WA  0   0  8
+  [30] .rela.data..LrKt_closure RELA            0000000000000000 000b28 000030 18   I 36  29  8
+  [31] .data.Main_zdtrModule_closure PROGBITS        0000000000000000 0002a0 000020 00  WA  0   0  8
+  [32] .rela.data.Main_zdtrModule_closure RELA            0000000000000000 000b58 000048 18   I 36  31  8
+  [33] .note.GNU-stack   PROGBITS        0000000000000000 0002c0 000000 00      0   0  1
+  [34] .comment          PROGBITS        0000000000000000 0002c0 00000c 01  MS  0   0  1
+  [35] .note.gnu.property NOTE            0000000000000000 0002d0 000030 00   A  0   0  8
+  [36] .symtab           SYMTAB          0000000000000000 000300 0002e8 18     37  13  8
+  [37] .strtab           STRTAB          0000000000000000 0005e8 0001dd 00      0   0  1
+  [38] .shstrtab         STRTAB          0000000000000000 000ba0 0001ea 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)</code></pre>
+<p>38 sections! If we ignore 6 irrelevant sections it’s 32 relevant sections
+compared to 6 relevant sections before.
+Our actual <code>main</code> top-level function itself is hiding in <code>.*Main_main.*</code>
+sections. You will notices a lot of them. And on top of that whatever <code>ghc</code>
+managed to “float-out” outside the function.</p>
+<p>This is unoptimized code. If we throw in <code>-O2</code> we will get this:</p>
+<pre><code>$ ghc -c Main.hs -fforce-recomp -fsplit-sections -O2
+
+$ size Main.o
+   text    data     bss     dec     hex filename
+    306     304       0     610     262 Main.o
+
+$ readelf -SW Main.o
+There are 45 section headers, starting at offset 0x10d0:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000000000 000040 000000 00  AX  0   0  1
+  [ 2] .data             PROGBITS        0000000000000000 000040 000000 00  WA  0   0  1
+  [ 3] .bss              NOBITS          0000000000000000 000040 000000 00  WA  0   0  1
+  [ 4] .rodata.str.Main_zdtrModule2_bytes PROGBITS        0000000000000000 000040 000005 01 AMS  0   0  1
+  [ 5] .rodata.str.Main_zdtrModule4_bytes PROGBITS        0000000000000000 000045 000005 01 AMS  0   0  1
+  [ 6] .rodata.str.Main_main5_bytes PROGBITS        0000000000000000 00004a 000006 01 AMS  0   0  1
+  [ 7] .data.Main_main4_closure PROGBITS        0000000000000000 000050 000028 00  WA  0   0  8
+  [ 8] .rela.data.Main_main4_closure RELA            0000000000000000 000a60 000030 18   I 42   7  8
+  [ 9] .data..Lu1AB_srt  PROGBITS        0000000000000000 000078 000020 00  WA  0   0  8
+  [10] .rela.data..Lu1AB_srt RELA            0000000000000000 000a90 000048 18   I 42   9  8
+  [11] .text.Main_main3_info PROGBITS        0000000000000000 000098 000062 00  AX  0   0  8
+  [12] .rela.text.Main_main3_info RELA            0000000000000000 000ad8 000090 18   I 42  11  8
+  [13] .data.Main_main3_closure PROGBITS        0000000000000000 000100 000020 00  WA  0   0  8
+  [14] .rela.data.Main_main3_closure RELA            0000000000000000 000b68 000018 18   I 42  13  8
+  [15] .data.Main_main2_closure PROGBITS        0000000000000000 000120 000020 00  WA  0   0  8
+  [16] .rela.data.Main_main2_closure RELA            0000000000000000 000b80 000048 18   I 42  15  8
+  [17] .text.Main_main1_info PROGBITS        0000000000000000 000140 000032 00  AX  0   0  8
+  [18] .rela.text.Main_main1_info RELA            0000000000000000 000bc8 000060 18   I 42  17  8
+  [19] .data.Main_main1_closure PROGBITS        0000000000000000 000178 000028 00  WA  0   0  8
+  [20] .rela.data.Main_main1_closure RELA            0000000000000000 000c28 000060 18   I 42  19  8
+  [21] .text.Main_main_info PROGBITS        0000000000000000 0001a0 00001d 00  AX  0   0  8
+  [22] .rela.text.Main_main_info RELA            0000000000000000 000c88 000030 18   I 42  21  8
+  [23] .data.Main_main_closure PROGBITS        0000000000000000 0001c0 000010 00  WA  0   0  8
+  [24] .rela.data.Main_main_closure RELA            0000000000000000 000cb8 000018 18   I 42  23  8
+  [25] .text.Main_main6_info PROGBITS        0000000000000000 0001d0 000024 00  AX  0   0  8
+  [26] .rela.text.Main_main6_info RELA            0000000000000000 000cd0 000030 18   I 42  25  8
+  [27] .data.Main_main6_closure PROGBITS        0000000000000000 0001f8 000020 00  WA  0   0  8
+  [28] .rela.data.Main_main6_closure RELA            0000000000000000 000d00 000048 18   I 42  27  8
+  [29] .text.ZCMain_main_info PROGBITS        0000000000000000 000218 00001d 00  AX  0   0  8
+  [30] .rela.text.ZCMain_main_info RELA            0000000000000000 000d48 000030 18   I 42  29  8
+  [31] .data.ZCMain_main_closure PROGBITS        0000000000000000 000238 000010 00  WA  0   0  8
+  [32] .rela.data.ZCMain_main_closure RELA            0000000000000000 000d78 000018 18   I 42  31  8
+  [33] .data.Main_zdtrModule3_closure PROGBITS        0000000000000000 000248 000010 00  WA  0   0  8
+  [34] .rela.data.Main_zdtrModule3_closure RELA            0000000000000000 000d90 000030 18   I 42  33  8
+  [35] .data.Main_zdtrModule1_closure PROGBITS        0000000000000000 000258 000010 00  WA  0   0  8
+  [36] .rela.data.Main_zdtrModule1_closure RELA            0000000000000000 000dc0 000030 18   I 42  35  8
+  [37] .data.Main_zdtrModule_closure PROGBITS        0000000000000000 000268 000020 00  WA  0   0  8
+  [38] .rela.data.Main_zdtrModule_closure RELA            0000000000000000 000df0 000048 18   I 42  37  8
+  [39] .note.GNU-stack   PROGBITS        0000000000000000 000288 000000 00      0   0  1
+  [40] .comment          PROGBITS        0000000000000000 000288 00000c 01  MS  0   0  1
+  [41] .note.gnu.property NOTE            0000000000000000 000298 000030 00   A  0   0  8
+  [42] .symtab           SYMTAB          0000000000000000 0002c8 000378 18     43   2  8
+  [43] .strtab           STRTAB          0000000000000000 000640 00041a 00      0   0  1
+  [44] .shstrtab         STRTAB          0000000000000000 000e38 000295 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)</code></pre>
+<p>44 sections! A Lot.</p>
+<p>Back to our <code>pandoc</code> binary. It just calls into <code>libHSpandoc.a</code> library
+(<code>nixpkgs</code> uses static linking for <code>haskell</code> bits today). Linker would
+have to wade through all it’s sections to pick only used things.</p>
+<p><strong>Quiz question: guess how many sections does <code>pandoc</code> library have?
+100? 1000? 10000? A million? What is your guess?</strong></p>
+<p>Let’s count! On my system <code>pandoc</code> library happens to hide at
+<code>&lt;&lt;NIX&gt;&gt;-pandoc-3.7.0.2/lib/ghc-9.10.3/lib/x86_64-linux-ghc-9.10.3-2870/pandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs/libHSpandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs.a</code>.
+I’ll just use that ugly path.</p>
+<pre><code># dumping section count per individual object file in the archive:
+$ readelf -h &lt;&lt;NIX&gt;&gt;-pandoc-3.7.0.2/lib/ghc-9.10.3/lib/x86_64-linux-ghc-9.10.3-2870/pandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs/libHSpandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs.a |
+    grep 'Number of section'
+  Number of section headers:         18
+  ...
+  Number of section headers:         26207
+  Number of section headers:         16755
+  ...
+  Number of section headers:         8898
+  ..
+  Number of section headers:         1047
+  Number of section headers:         1324
+  ...
+  Number of section headers:         687
+  Number of section headers:         228
+
+# summing up all section counts:
+$ readelf -h &lt;&lt;NIX&gt;&gt;-pandoc-3.7.0.2/lib/ghc-9.10.3/lib/x86_64-linux-ghc-9.10.3-2870/pandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs/libHSpandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs.a |
+    grep 'Number of section' | awk '{ size += $5 } END { print size }'
+494450</code></pre>
+<p><code>494</code> <code>thousands</code> sections! Almost half a million sections. And it’s just
+one (largest) of many <code>pandoc</code> dependencies. That’s why <code>ld.gold</code> takes
+a considerable amount of time to just sort through all these sections.</p>
+<h2 id="performance-hog-clues">performance hog clues</h2>
+<p><code>ld.bfd</code> has even harder time getting through such a big list of sections.
+But why exactly? The names
+of <code>_bfd_elf_gc_mark / _bfd_elf_gc_mark_reloc</code> functions in the profiles
+hint that they track unreferenced sections.</p>
+<p>To trigger section garbage collection
+<code>ghc</code> <a href="https://github.com/ghc/ghc/blob/f9790ca81deb8b14ff2eabf701aecbcfd6501963/compiler/GHC/Linker/Static.hs#L241">uses <code>-Wl,--gc-sections</code></a>
+linker option.
+Note that <code>ghc</code> only enables garbage collection for <code>GNU ld</code> (I think
+both <code>ld.gold</code> and <code>ld.bfd</code> count as GNU). <code>lld</code> and <code>mold</code>
+both the option as well.</p>
+<p>If we look at the implementation
+of <code>_bfd_elf_gc_mark</code> we see a suspicious
+<a href="https://sourceware.org/git/?p=binutils-gdb.git;a=blob;f=bfd/elflink.c;h=91c77c211ef065a77883004eb696adacd92a00be;hb=815d9a14cbbb3b81843f7566222c87fb22e7255d#l14063">list traversal</a>
+and some recursive descend:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">bool</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>_bfd_elf_gc_mark_reloc <span class="op">(</span><span class="kw">struct</span> bfd_link_info <span class="op">*</span>info<span class="op">,</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>                        asection <span class="op">*</span>sec<span class="op">,</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>                        elf_gc_mark_hook_fn gc_mark_hook<span class="op">,</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>                        <span class="kw">struct</span> elf_reloc_cookie <span class="op">*</span>cookie<span class="op">)</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>  asection <span class="op">*</span>rsec<span class="op">;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">bool</span> start_stop <span class="op">=</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>  rsec <span class="op">=</span> _bfd_elf_gc_mark_rsec <span class="op">(</span>info<span class="op">,</span> sec<span class="op">,</span> gc_mark_hook<span class="op">,</span> cookie<span class="op">,</span> <span class="op">&amp;</span>start_stop<span class="op">);</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>  <span class="cf">while</span> <span class="op">(</span>rsec <span class="op">!=</span> NULL<span class="op">)</span></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(!</span>rsec<span class="op">-&gt;</span>gc_mark<span class="op">)</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>          <span class="cf">if</span> <span class="op">(</span>bfd_get_flavour <span class="op">(</span>rsec<span class="op">-&gt;</span>owner<span class="op">)</span> <span class="op">!=</span> bfd_target_elf_flavour</span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>              <span class="op">||</span> <span class="op">(</span>rsec<span class="op">-&gt;</span>owner<span class="op">-&gt;</span>flags <span class="op">&amp;</span> DYNAMIC<span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>            rsec<span class="op">-&gt;</span>gc_mark <span class="op">=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>          <span class="cf">else</span> <span class="cf">if</span> <span class="op">(!</span>_bfd_elf_gc_mark <span class="op">(</span>info<span class="op">,</span> rsec<span class="op">,</span> gc_mark_hook<span class="op">))</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(!</span>start_stop<span class="op">)</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>      rsec <span class="op">=</span> bfd_get_next_section_by_name <span class="op">(</span>rsec<span class="op">-&gt;</span>owner<span class="op">,</span> rsec<span class="op">);</span></span>
+<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>If we do such marking for each section it probably has quadratic complexity.
+But maybe not. To get something simpler to explore I tried to craft a
+trivial example of <code>1 million</code> sections:</p>
+<pre><code>$ for (( i=0; i&lt;1000000; i++ )); do printf &quot;int var_$i __attribute__ ((section (\&quot;.data.$i\&quot;))) = { $i };\n&quot;; done &gt; main.c; printf &quot;int main() {}&quot; &gt;&gt; main.c; gcc -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold
+bfd:
+
+real    0m6,123s
+user    0m5,384s
+sys     0m0,701s
+gold:
+
+real    0m1,107s
+user    0m0,844s
+sys     0m0,242s</code></pre>
+<p>This test generates the following boilerplate code:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ head -n 5 main.c</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_0 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.0&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">0</span> <span class="op">};</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_1 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.1&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">1</span> <span class="op">};</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_2 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.2&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">2</span> <span class="op">};</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_3 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.3&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">3</span> <span class="op">};</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_4 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.4&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">4</span> <span class="op">};</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="co">// $ tail -n 5 main.c</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_999996 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999996&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">999996</span> <span class="op">};</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_999997 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999997&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">999997</span> <span class="op">};</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_999998 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999998&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">999998</span> <span class="op">};</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_999999 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999999&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">999999</span> <span class="op">};</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{}</span></span></code></pre></div>
+<p>We are seeing <code>6x</code> time difference between linkers. Could it be our case?
+Let’s check with <code>perf</code> if we hit the same hot paths as in <code>pandoc</code> case:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; try1.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/try1.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/try1.svg" title="ld.bfd profile on synthetic 1M independent data sections" alt="try1.svg" /></a></p>
+<p>The profile looks not too bad: no large <code>.*_gc_.*</code> bits seen anywhere.
+Not exactly our problem then. Let’s try to add more references across
+sections to see if we start seeing the symbol traversals:</p>
+<pre><code>$ printf &quot;int var_0 __attribute__ ((section (\&quot;.data.0\&quot;))) = { $i };\n&quot; &gt; main.c; for (( i=1; i&lt;1000000; i++ )); do printf &quot;void * var_$i __attribute__ ((section (\&quot;.data.$i\&quot;))) = { &amp;var_$((i-1)) };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return (long)var_99999; }&quot; &gt;&gt; main.c; gcc -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold -Wl,--gc-sections -Wl,--no-as-needed
+gcc: internal compiler error: Segmentation fault signal terminated program cc1
+Please submit a full bug report, with preprocessed source (by using -freport-bug).
+See &lt;https://gcc.gnu.org/bugs/&gt; for instructions.</code></pre>
+<p>Whoops, crashed <code>gcc</code>. Filed <a href="https://gcc.gnu.org/PR122198"><code>PR122198</code></a>.
+It’s a stack overflow. Throwing more stack at the problem with <code>ulimit -s unlimited</code>:</p>
+<pre><code>$ printf &quot;int var_0 __attribute__ ((section (\&quot;.data.0\&quot;))) = { $i };\n&quot; &gt; main.c; for (( i=1; i&lt;1000000; i++ )); do printf &quot;void * var_$i __attribute__ ((section (\&quot;.data.$i\&quot;))) = { &amp;var_$((i-1)) };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return (long)var_99999; }&quot; &gt;&gt; main.c; gcc -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold -Wl,--gc-sections -Wl,--no-as-needed
+bfd:
+
+real    0m5.296s
+user    0m4.572s
+sys     0m0.714s
+gold:
+
+real    0m1.172s
+user    0m0.874s
+sys     0m0.295s</code></pre>
+<p>This test generates slightly different form:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ head -n 5 main.c</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> var_0 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.0&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="dv">1000000</span> <span class="op">};</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_1 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.1&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_0 <span class="op">};</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_2 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.2&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_1 <span class="op">};</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_3 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.3&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_2 <span class="op">};</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_4 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.4&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_3 <span class="op">};</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="co">// $ tail -n 5 main.c</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_999996 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999996&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_999995 <span class="op">};</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_999997 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999997&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_999996 <span class="op">};</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_999998 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999998&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_999997 <span class="op">};</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> var_999999 __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.data.999999&quot;</span><span class="op">)))</span> <span class="op">=</span> <span class="op">{</span> <span class="op">&amp;</span>var_999998 <span class="op">};</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> <span class="op">(</span><span class="dt">long</span><span class="op">)</span>var_99999<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
+<p>The main difference compared to the previous attempt is that sections are used
+and can’t be removed by section garbage collector. Is this profile closer to
+<code>pandoc</code> case? Looking at the trace:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; try2.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/try2.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/try2.svg" title="ld.bfd profile on 1M interdependent data sections" alt="try2.svg" /></a></p>
+<p>It’s not too close to <code>pandoc</code> case, but the huge vertical thing on the
+left is a good sign that we at least start hitting the <code>gc</code> traversal
+code. Now we need to increase its presence somehow.
+Perhaps it’s more symbols per section? I tried to simulate code
+references instead of data references and see what happens:</p>
+<pre><code>$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;20000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_19999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold -Wl,--gc-sections -Wl,--no-as-needed
+bfd:
+
+real    0m5,627s
+user    0m2,567s
+sys     0m3,047s
+gold:
+
+real    0m0,053s
+user    0m0,041s
+sys     0m0,012s</code></pre>
+<p>How the test generates this file:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ head -n 5 main.c</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_0<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.0&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_0<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span> <span class="op">};</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_1<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.1&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_1<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_0<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_2<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.2&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_2<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_1<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_3<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.3&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_3<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_2<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_4<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.4&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_4<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_3<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a><span class="co">// ..</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="co">// $ tail -n 5 main.c</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_19996<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.19996&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_19996<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_19995<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_19997<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.19997&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_19997<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_19996<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_19998<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.19998&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_19998<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_19997<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> f_19999<span class="op">()</span> __attribute__ <span class="op">((</span>section <span class="op">(</span><span class="st">&quot;.text.19999&quot;</span><span class="op">)));</span> <span class="dt">int</span> f_19999<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_19998<span class="op">();</span> <span class="op">};</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span> <span class="cf">return</span> f_19999<span class="op">();</span> <span class="op">}</span></span></code></pre></div>
+<p>That time difference is more interesting! Note that <code>ld.gold</code> spends just
+<code>50ms</code> on the input while <code>ld.bfd</code> does something for <code>5 seconds</code>!
+Getting the profile:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; try3.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/try3.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/try3.svg" title="ld.bfd trace on 20K dependent text sections" alt="try3.svg" /></a></p>
+<p>At last! We managed to hit exactly the <code>_bfd_elf_gc_mark ()</code>.
+The final input file object file is not too large:</p>
+<pre><code>$ ls -lh main.o
+-rw-r--r-- 1 slyfox users 5.7M Oct  8 20:58 main.o</code></pre>
+<p>I filed <a href="https://sourceware.org/PR33530"><code>PR33530</code></a> upstream bug report
+hoping that fix will not be too complicated and started writing this
+blog post.</p>
+<h2 id="testing-the-patch">testing the patch</h2>
+<p>My plan was to figure out more details about <code>binutils</code> <code>gc</code> in this post
+and try to fix it. Alas even before I got to it H.J. already prepared
+<a href="https://sourceware.org/PR33530#c1">the fix</a>!</p>
+<p>Synthetic test shown great results:</p>
+<pre><code>$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;20000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_19999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+bfd:
+
+real    0m0,119s
+user    0m0,080s
+sys     0m0,038s</code></pre>
+<p><code>120ms</code> compared to the previous <code>5s</code> is a <code>40x</code> speedup. It’s still
+twice as slow as <code>50ms</code> for <code>ld.gold</code>, but the absolute time is way
+harder to notice. I tried to find a new degradation point by adding more
+functions:</p>
+<pre><code># 100K sections:
+$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;100000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_99999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+bfd:
+
+real    0m0.628s
+user    0m0.472s
+sys     0m0.154s
+
+# 1M sections:
+$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;1000000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_999999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+bfd:
+
+real    0m8.697s
+user    0m6.956s
+sys     0m1.726s
+
+$ size main.o
+   text    data     bss     dec     hex filename
+43000115              0       0 43000115        2902133 main.o</code></pre>
+<p><code>8s</code> on a file with <code>1M</code> sections sounds quite fast! Let’s see where
+<code>ld.bfd</code> spends its time now:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; fixed.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed.svg" title="fixed ld.bfd profile on 1M dependent text sections" alt="fixed.svg" /></a></p>
+<p>Once again the profile looks more balanced now. Yay! How about real
+<code>pandoc</code>?</p>
+<pre><code>$ time nix build --no-link -f. pandoc --rebuild
+
+real    0m17,013s
+user    0m0,672s
+sys     0m0,123s</code></pre>
+<p><code>17s</code> is a bit slower than <code>13s</code> of <code>ld.gold</code>, but not as bad as it used
+to be. And it’s profile:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... '-optl-fuse-ld=bfd' -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; fixed-pandoc.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed-pandoc.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed-pandoc.svg" title="fixed ld.bfd profile on 1M dependent text sections" alt="fixed-pandoc.svg" /></a></p>
+<h2 id="bonus-other-linkers">bonus: other linkers</h2>
+<p>Both <code>ld.gold</code> and <code>ld.lld</code> are quite fast at handling synthetic tests now,
+But both still spend a few seconds on <code>pandoc</code>. How about other linkers?
+Let’s add <code>lld</code> and <code>mold</code> to the mix. I’ll measure
+<code>ghc --make '-optl-fuse-ld=$linker' -fforce-recomp</code> execution time:</p>
+<pre><code># without the fix
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=bfd -fforce-recomp
+real    0m30.589s user    0m24.576s sys     0m6.447s
+
+# with the fix
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=bfd -fforce-recomp
+real    0m8.676s user    0m6.484s sys     0m2.584s
+
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=gold -fforce-recomp
+real    0m5.929s user    0m5.543s sys     0m0.829s
+
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=lld -fforce-recomp
+real    0m1.413s user    0m1.754s sys     0m1.509s
+
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=mold -fforce-recomp
+real    0m1.209s user    0m0.424s sys     0m0.215s</code></pre>
+<p>Note: we do measure not just liker time, but also <code>ghc</code> code generation
+time. Actual link time does not take as much. Same values in tables:</p>
+<table>
+<thead>
+<tr>
+<th>linker</th>
+<th><code>real</code> (sec)</th>
+<th><code>user</code> (sec)</th>
+<th><code>sys</code> (sec)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ld.bfd</code> (orig)</td>
+<td>30.6</td>
+<td>24.6</td>
+<td>6.4</td>
+</tr>
+<tr>
+<td><code>ld.bdf</code> (fixed)</td>
+<td>8.7</td>
+<td>6.5</td>
+<td>2.6</td>
+</tr>
+<tr>
+<td><code>ld.gold</code></td>
+<td>5.9</td>
+<td>5.5</td>
+<td>0.8</td>
+</tr>
+<tr>
+<td><code>lld</code></td>
+<td>1.4</td>
+<td>1.8</td>
+<td>1.5</td>
+</tr>
+<tr>
+<td><code>mold</code></td>
+<td>1.2</td>
+<td>0.4</td>
+<td>0.2</td>
+</tr>
+</tbody>
+</table>
+<p><code>lld</code> and <code>mold</code> link times are impressive! They are <code>6x-7x</code> times faster
+than fixed version of <code>ld.bfd</code>. Let’s look at their profiles to see what
+they spend their time on. <code>lld</code> goes first:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=lld -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; lld-pandoc.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/lld-pandoc.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/lld-pandoc.svg" title="lld profile on pandoc" alt="lld-pandoc.svg" /></a></p>
+<p>The only things that stick out in this profile are <code>malloc()</code> (about <code>20%</code>
+of the time?) and <code>memmove()</code> calls (about <code>6%</code> of the time). Otherwise,
+we see about equal time spent on reading (<code>linkerDriver</code> part on the right),
+relocation processing (<code>RelocationScanner</code> in the middle) and writing
+(<code>HashTableSection::writeTo</code> slightly to the left).</p>
+<p>I wonder if memory management were to be optimized for <code>lld</code>, would it be
+as fast as <code>mold</code> on this input? And now <code>mold</code> profile:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=mold -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; mold-pandoc.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc.svg" title="mold profile on pandoc" alt="mold-pandoc.svg" /></a></p>
+<p>The profile is not very readable as we mainly see the <code>tbb</code> threading
+dispatch of chunks of work to do. If I scroll around I see
+things like <code>scan_abs_relocations</code>, <code>apply_reloc_alloc</code>, <code>resolve_symbols</code>,
+<code>split_contents</code>, <code>scan_relocations</code>. It looks like half the time
+is spent on the management of parallelism. Playing a bit with the
+<code>mold</code> parameters I noticed that <code>-Wl,--threads=4</code> is the maximum thread
+count where I get any speed improvements for parallelism. Anything above
+will clutter CPU usage profile with <code>sched_yield</code> “busy” wait threads.</p>
+<p>To get the idea where actual CPU is spent it might be more interesting to
+look at single-threaded profile using <code>-optl-Wl,--no-threads</code>:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=mold -optl-Wl,--no-threads -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; mold-no-threads.svg</code></pre>
+<p><a href="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc-no-threads.svg"><img src="../posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc-no-threads.svg" title="mold profile on pandoc single thread" alt="mold-pandoc-no-threads.svg" /></a></p>
+<p>I’ll leave the interpretation of the picture to the reader.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>ld.gold</code> is about to be removed from <code>binutils</code>.</p>
+<p>In <code>-fsplit-sections</code> mode <code>ghc</code> code generator produces huge amount of
+sections per <code>ELF</code> file which manages to strain both <code>ld.bfd</code> and
+<code>ld.gold</code> linkers. <code>ghc</code> should probably be fixed to produce one section
+per strongly connected component of functions that refer one another.
+<code>libHSpandoc</code> consists of almost half a million <code>ELF</code> sections. Average
+section size for which is about 250 bytes.</p>
+<p><code>ld.bfd</code> while being slower than <code>ld.gold</code> still has simple performance
+bugs in obscure scenarios. Just like today’s
+<a href="https://sourceware.org/PR33530"><code>PR33530</code></a> example.</p>
+<p><code>binutils</code> upstream was very fast to come up with a possible fix to test.</p>
+<p>Even fixed <code>ld.bfd</code> is still quite a bit slower on synthetic test with
+huge sections compared to <code>ld.gold</code>. But at least it’s not exponentially
+worse.</p>
+<p><code>lld</code> and <code>mold</code> are still way faster than either <code>ld.bfd</code> or <code>ld.gold</code>.
+About 6-7 times on <code>pandoc</code> test. <code>ld.bfd</code> still has a lot of room for
+improvement :)</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>

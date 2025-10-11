@@ -7,8 +7,647 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sat, 27 Sep 2025 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Thu, 09 Oct 2025 00:00:00 UT</lastBuildDate>
         <item>
+    <title>profiling binutils linkers in nixpkgs</title>
+    <link>https://trofi.github.io/posts/340-profiling-binutils-linkers-in-nixpkgs.html</link>
+    <description><![CDATA[<h2 id="background">background</h2>
+<p>I’ve been using <code>binutils-2.45</code> against local <code>nixpkgs</code> checkout for a
+while to weed out minor problems in other packages. So far I encountered
+my old friend
+<a href="https://github.com/NixOS/nixpkgs/pull/438714"><code>guile</code> over-stripping issue</a>.</p>
+<p><a href="https://en.wikipedia.org/wiki/Gold_(linker)"><code>GNU gold</code> linker</a> was
+<a href="https://lists.gnu.org/archive/html/info-gnu/2025-02/msg00001.html">deprecated</a>
+in <code>binutils</code> upstream as it does not have developer
+power behind it. While <code>bfd</code> linker (the default) gets maintenance
+attention. <code>binutils-2.45</code> intentionally does not have <code>gold</code> source
+distributed with it to nudge users off <code>gold</code>.</p>
+<p>To fix rare <code>nixpkgs</code> package build failures that rely on <code>ld.gold</code> I
+trivially replaced all the links to <code>ld.bfd</code> locally and built my system.
+No major problems found.</p>
+<h2 id="an-ld.gold-removal-obstacle">an <code>ld.gold</code> removal obstacle</h2>
+<p>In a <a href="https://discourse.nixos.org/t/removing-gold-from-nixpkgs/70496/8">recent discussion thread</a>
+the question was raised if/how <code>nixpkgs</code> could switch to <code>gold</code>-less
+<code>binutils</code>. One of the interesting points of the thread is that <code>ld.bfd</code>
+is occasionally ~<code>3x</code> times <a href="https://github.com/NixOS/nixpkgs/pull/418735#issuecomment-2993624063">slower than <code>ld.gold</code></a>
+on files that already take multiple seconds to link with <code>ld.gold</code>.
+For me it was quite a surprise as <code>ld.bfd</code> does
+<a href="https://www.youtube.com/watch?v=h5pXt_YCwkU">get speedup improvements</a>
+time to time. Thus, I suspected it should be some kind of a serious bug
+on <code>ld.bfd</code> side.
+I wondered if I could reproduce such a big performance
+drop and if I could find a low hanging fix. Or at least report a bug to
+<code>binutils</code> upstream.</p>
+<p>I used the same <code>pandoc</code> <code>nixpkgs</code> package to do the linker testing. It’s
+a nice example as it builds only 4 small <code>haskell</code> source files and
+links in a huge amount of static <code>haskell</code> libraries. A perfect linker
+load test. Preparing the baseline:</p>
+<pre><code># pulling in already built package into cache
+$ nix build --no-link -f. pandoc
+# pulling in all the build dependencies into cache
+$ nix build --no-link -f. pandoc --rebuild
+
+# timing the build:
+$ time nix build --no-link -f. pandoc --rebuild
+error: derivation '/nix/store/az6dbzm341jc7n4sw7w0ifspxgsm4093-pandoc-cli-3.7.0.2.drv' may not be deterministic: output '/nix/store/znmj21k8nrqc3hcax6yfy446g8bgk7z3-pandoc-cli-3.7.0.2' differs
+
+real    0m12,850s
+user    0m0,719s
+sys     0m0,105s</code></pre>
+<p>Do not mind that determinism error. I got about <code>13 seconds</code> of the
+package build time. Seems to match the original timing. Then I tried
+<code>ld.bfd</code> by passing extra <code>--ghc-option=-optl-fuse-ld=bfd</code> option to
+<code>./Setup configure</code>:</p>
+<pre><code>$ time nix build --impure --expr 'with import &lt;nixpkgs&gt; {};
+    pandoc.overrideAttrs (oa: {
+        configureFlags = oa.configureFlags ++ [&quot;--ghc-option=-optl-fuse-ld=bfd&quot;];})'
+...
+real    0m37,391s
+user    0m0,691s
+sys     0m0,120s</code></pre>
+<p>37 seconds! At least <code>3x</code> slowdown. I was glad to see such a simple
+reproducer.</p>
+<h2 id="linker-performance-profiles">linker performance profiles</h2>
+<p>I dropped into a development shell to explore individual <code>ld</code> commands:</p>
+<pre><code>$ nix develop --impure --expr 'with import &lt;nixpkgs&gt; {};
+    pandoc.overrideAttrs (oa: {
+        configureFlags = oa.configureFlags ++ [&quot;--ghc-option=-optl-fuse-ld=bfd&quot; ];})'
+$$ genericBuild
+...
+[4 of 4] Linking dist/build/pandoc/pandoc
+^C
+
+$$ # ready for interactive exploration</code></pre>
+<p>I ran the <code>./Setup build -v</code> to extract exact <code>ghc --make ...</code> invocation:</p>
+<pre><code>$$ ./Setup build -v
+...
+Linking...
+Running: &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make -fbuilding-cabal-package -O -split-sections -static -outputdir dist/build/pandoc/pandoc-tmp -odir dist/build/pandoc/pandoc-tmp ...</code></pre>
+<p>And ran <code>ld.bfd</code> under <code>perf</code>:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... '-optl-fuse-ld=bfd' -fforce-recomp</code></pre>
+<p>Then I built the <a href="https://github.com/brendangregg/FlameGraph"><code>flamegraph</code></a> picture:</p>
+<pre><code>$ perf script &gt; out.perf
+$ perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded
+$ perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; bfd.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/bfd.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/bfd.svg" title="ld.bfd profile on pandoc" alt="bfd.svg" /></a></p>
+<p>You can click on the pictures and explore it interactively.
+Does it look fine to you? Anything odd?
+We already see a tiny hint: <code>_bfd_elf_gc_mark()</code> takes suspiciously large
+amount of space on the picture.
+Let’s build the same picture for <code>gold</code> using <code>-optl-fuse-ld=gold</code> option:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... '-optl-fuse-ld=gold' -fforce-recomp
+$ perf script &gt; out.perf
+$ perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded
+$ perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; gold.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/gold.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/gold.svg" title="ld.gold profile on pandoc" alt="gold.svg" /></a></p>
+<p>The profile looks more balanced. THe staircase around sorting looks
+peculiar. Most of the time is spent
+on section sorting in <code>gold::Output_section::sort_attached_input_sections</code>.
+It’s also a great hint: <strong>how many sections should there be so that sorting
+alone would take <code>25%</code> of the link time</strong>?</p>
+<h2 id="section-count">section count</h2>
+<p>Where do these numerous sections come from?
+<code>nixpkgs</code> enables <a href="https://github.com/NixOS/nixpkgs/blob/54a538734a5e77bca43dcbe4ad20357b5eb1cffd/pkgs/development/haskell-modules/generic-builder.nix#L349C20-L349C45"><code>-split-sections</code></a>
+by default on <code>linux</code> which uses <code>ghc</code> <a href="https://downloads.haskell.org/ghc/9.12.2/docs/users_guide/phases.html#ghc-flag-fsplit-sections"><code>-fsplit-sections</code></a>.
+Those are very close in spirit to <code>gcc</code> <a href="https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-ffunction-sections"><code>-ffunction-sections</code></a>
+feature. Both place each function in a separate <code>ELF</code> section assuming
+that the user will use <code>-Wl,--gc-sections</code> linker option to
+garbage-collect unreferenced sections in the final executable to make
+binaries smaller.</p>
+<p>So how many sections do you normally expect per object file?</p>
+<p>In <code>C</code> (with <code>-ffunction-sections</code>) I would expect section count to
+be close to function count in the source
+file. Some optimization passes duplicate (clone) or inline functions,
+but the expansion should not be too large (famous last words). Hopefully
+not <code>100x</code>, but closer to <code>1.5x</code> maybe? <code>C++</code> might be trickier to
+reason about.</p>
+<p>In <code>haskell</code> it’s a lot more complicated: lazy evaluation model creates
+numerous smaller functions out of one source function, cross-module
+aggressive inlining brings in many expressions.
+Here is an example of a one liner compilation and it’s section count:</p>
+<pre class="haskell"><code>-- # cat Main.hs
+main = print &quot;hello&quot;</code></pre>
+<p><strong>Quiz question: how many sections do you expect to see for this source
+file after <code>ghc -c Main.hs</code>?</strong></p>
+<p>Building and checking unsplit form first:</p>
+<pre><code>$ ghc -c Main.hs -fforce-recomp
+
+$ size Main.o
+   text    data     bss     dec     hex filename
+    378     304       0     682     2aa Main.o
+
+$ readelf -SW Main.o
+There are 13 section headers, starting at offset 0xb50:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000000000 000040 00013a 00  AX  0   0  8
+  [ 2] .rela.text        RELA            0000000000000000 000708 0001c8 18   I 10   1  8
+  [ 3] .data             PROGBITS        0000000000000000 000180 000130 00  WA  0   0  8
+  [ 4] .rela.data        RELA            0000000000000000 0008d0 000210 18   I 10   3  8
+  [ 5] .bss              NOBITS          0000000000000000 0002b0 000000 00  WA  0   0  1
+  [ 6] .rodata.str       PROGBITS        0000000000000000 0002b0 000010 01 AMS  0   0  1
+  [ 7] .note.GNU-stack   PROGBITS        0000000000000000 0002c0 000000 00      0   0  1
+  [ 8] .comment          PROGBITS        0000000000000000 0002c0 00000c 01  MS  0   0  1
+  [ 9] .note.gnu.property NOTE            0000000000000000 0002d0 000030 00   A  0   0  8
+  [10] .symtab           SYMTAB          0000000000000000 000300 000228 18     11   5  8
+  [11] .strtab           STRTAB          0000000000000000 000528 0001dd 00      0   0  1
+  [12] .shstrtab         STRTAB          0000000000000000 000ae0 00006e 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)</code></pre>
+<p>378 bytes of code, 12 sections. 6 of them are relevant: <code>.text</code>, <code>.rela.text</code>,
+<code>.data</code>, <code>.rela.data</code>, <code>.rodata.str</code>. All very close to a typical <code>C</code> program.</p>
+<p>Now let’s throw in <code>-fsplit-sections</code>.</p>
+<p><strong>Quiz question: guess how many more sections there will be? 0? 1? 10? 100? 1000?</strong></p>
+<pre><code>$ ghc -c Main.hs -fforce-recomp -fsplit-sections
+
+$ size Main.o
+   text    data     bss     dec     hex filename
+    365     304       0     669     29d Main.o
+
+$ readelf -SW Main.o
+There are 39 section headers, starting at offset 0xd90:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000000000 000040 000000 00  AX  0   0  1
+  [ 2] .data             PROGBITS        0000000000000000 000040 000000 00  WA  0   0  1
+  [ 3] .bss              NOBITS          0000000000000000 000040 000000 00  WA  0   0  1
+  [ 4] .rodata.str..LrKs_bytes PROGBITS        0000000000000000 000040 000005 01 AMS  0   0  1
+  [ 5] .rodata.str..LrKq_bytes PROGBITS        0000000000000000 000045 000005 01 AMS  0   0  1
+  [ 6] .rodata.str.cKA_str PROGBITS        0000000000000000 00004a 000006 01 AMS  0   0  1
+  [ 7] .data..LsKw_closure PROGBITS        0000000000000000 000050 000028 00  WA  0   0  8
+  [ 8] .rela.data..LsKw_closure RELA            0000000000000000 0007c8 000030 18   I 36   7  8
+  [ 9] .data..LuKL_srt   PROGBITS        0000000000000000 000078 000020 00  WA  0   0  8
+  [10] .rela.data..LuKL_srt RELA            0000000000000000 0007f8 000048 18   I 36   9  8
+  [11] .text..LsKu_info  PROGBITS        0000000000000000 000098 000062 00  AX  0   0  8
+  [12] .rela.text..LsKu_info RELA            0000000000000000 000840 000090 18   I 36  11  8
+  [13] .data..LsKu_closure PROGBITS        0000000000000000 000100 000020 00  WA  0   0  8
+  [14] .rela.data..LsKu_closure RELA            0000000000000000 0008d0 000018 18   I 36  13  8
+  [15] .data..LuL2_srt   PROGBITS        0000000000000000 000120 000028 00  WA  0   0  8
+  [16] .rela.data..LuL2_srt RELA            0000000000000000 0008e8 000060 18   I 36  15  8
+  [17] .text.Main_main_info PROGBITS        0000000000000000 000148 000069 00  AX  0   0  8
+  [18] .rela.text.Main_main_info RELA            0000000000000000 000948 0000a8 18   I 36  17  8
+  [19] .data.Main_main_closure PROGBITS        0000000000000000 0001b8 000020 00  WA  0   0  8
+  [20] .rela.data.Main_main_closure RELA            0000000000000000 0009f0 000018 18   I 36  19  8
+  [21] .data..LuLj_srt   PROGBITS        0000000000000000 0001d8 000020 00  WA  0   0  8
+  [22] .rela.data..LuLj_srt RELA            0000000000000000 000a08 000048 18   I 36  21  8
+  [23] .text.ZCMain_main_info PROGBITS        0000000000000000 0001f8 000062 00  AX  0   0  8
+  [24] .rela.text.ZCMain_main_info RELA            0000000000000000 000a50 000090 18   I 36  23  8
+  [25] .data.ZCMain_main_closure PROGBITS        0000000000000000 000260 000020 00  WA  0   0  8
+  [26] .rela.data.ZCMain_main_closure RELA            0000000000000000 000ae0 000018 18   I 36  25  8
+  [27] .data..LrKr_closure PROGBITS        0000000000000000 000280 000010 00  WA  0   0  8
+  [28] .rela.data..LrKr_closure RELA            0000000000000000 000af8 000030 18   I 36  27  8
+  [29] .data..LrKt_closure PROGBITS        0000000000000000 000290 000010 00  WA  0   0  8
+  [30] .rela.data..LrKt_closure RELA            0000000000000000 000b28 000030 18   I 36  29  8
+  [31] .data.Main_zdtrModule_closure PROGBITS        0000000000000000 0002a0 000020 00  WA  0   0  8
+  [32] .rela.data.Main_zdtrModule_closure RELA            0000000000000000 000b58 000048 18   I 36  31  8
+  [33] .note.GNU-stack   PROGBITS        0000000000000000 0002c0 000000 00      0   0  1
+  [34] .comment          PROGBITS        0000000000000000 0002c0 00000c 01  MS  0   0  1
+  [35] .note.gnu.property NOTE            0000000000000000 0002d0 000030 00   A  0   0  8
+  [36] .symtab           SYMTAB          0000000000000000 000300 0002e8 18     37  13  8
+  [37] .strtab           STRTAB          0000000000000000 0005e8 0001dd 00      0   0  1
+  [38] .shstrtab         STRTAB          0000000000000000 000ba0 0001ea 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)</code></pre>
+<p>38 sections! If we ignore 6 irrelevant sections it’s 32 relevant sections
+compared to 6 relevant sections before.
+Our actual <code>main</code> top-level function itself is hiding in <code>.*Main_main.*</code>
+sections. You will notices a lot of them. And on top of that whatever <code>ghc</code>
+managed to “float-out” outside the function.</p>
+<p>This is unoptimized code. If we throw in <code>-O2</code> we will get this:</p>
+<pre><code>$ ghc -c Main.hs -fforce-recomp -fsplit-sections -O2
+
+$ size Main.o
+   text    data     bss     dec     hex filename
+    306     304       0     610     262 Main.o
+
+$ readelf -SW Main.o
+There are 45 section headers, starting at offset 0x10d0:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        0000000000000000 000040 000000 00  AX  0   0  1
+  [ 2] .data             PROGBITS        0000000000000000 000040 000000 00  WA  0   0  1
+  [ 3] .bss              NOBITS          0000000000000000 000040 000000 00  WA  0   0  1
+  [ 4] .rodata.str.Main_zdtrModule2_bytes PROGBITS        0000000000000000 000040 000005 01 AMS  0   0  1
+  [ 5] .rodata.str.Main_zdtrModule4_bytes PROGBITS        0000000000000000 000045 000005 01 AMS  0   0  1
+  [ 6] .rodata.str.Main_main5_bytes PROGBITS        0000000000000000 00004a 000006 01 AMS  0   0  1
+  [ 7] .data.Main_main4_closure PROGBITS        0000000000000000 000050 000028 00  WA  0   0  8
+  [ 8] .rela.data.Main_main4_closure RELA            0000000000000000 000a60 000030 18   I 42   7  8
+  [ 9] .data..Lu1AB_srt  PROGBITS        0000000000000000 000078 000020 00  WA  0   0  8
+  [10] .rela.data..Lu1AB_srt RELA            0000000000000000 000a90 000048 18   I 42   9  8
+  [11] .text.Main_main3_info PROGBITS        0000000000000000 000098 000062 00  AX  0   0  8
+  [12] .rela.text.Main_main3_info RELA            0000000000000000 000ad8 000090 18   I 42  11  8
+  [13] .data.Main_main3_closure PROGBITS        0000000000000000 000100 000020 00  WA  0   0  8
+  [14] .rela.data.Main_main3_closure RELA            0000000000000000 000b68 000018 18   I 42  13  8
+  [15] .data.Main_main2_closure PROGBITS        0000000000000000 000120 000020 00  WA  0   0  8
+  [16] .rela.data.Main_main2_closure RELA            0000000000000000 000b80 000048 18   I 42  15  8
+  [17] .text.Main_main1_info PROGBITS        0000000000000000 000140 000032 00  AX  0   0  8
+  [18] .rela.text.Main_main1_info RELA            0000000000000000 000bc8 000060 18   I 42  17  8
+  [19] .data.Main_main1_closure PROGBITS        0000000000000000 000178 000028 00  WA  0   0  8
+  [20] .rela.data.Main_main1_closure RELA            0000000000000000 000c28 000060 18   I 42  19  8
+  [21] .text.Main_main_info PROGBITS        0000000000000000 0001a0 00001d 00  AX  0   0  8
+  [22] .rela.text.Main_main_info RELA            0000000000000000 000c88 000030 18   I 42  21  8
+  [23] .data.Main_main_closure PROGBITS        0000000000000000 0001c0 000010 00  WA  0   0  8
+  [24] .rela.data.Main_main_closure RELA            0000000000000000 000cb8 000018 18   I 42  23  8
+  [25] .text.Main_main6_info PROGBITS        0000000000000000 0001d0 000024 00  AX  0   0  8
+  [26] .rela.text.Main_main6_info RELA            0000000000000000 000cd0 000030 18   I 42  25  8
+  [27] .data.Main_main6_closure PROGBITS        0000000000000000 0001f8 000020 00  WA  0   0  8
+  [28] .rela.data.Main_main6_closure RELA            0000000000000000 000d00 000048 18   I 42  27  8
+  [29] .text.ZCMain_main_info PROGBITS        0000000000000000 000218 00001d 00  AX  0   0  8
+  [30] .rela.text.ZCMain_main_info RELA            0000000000000000 000d48 000030 18   I 42  29  8
+  [31] .data.ZCMain_main_closure PROGBITS        0000000000000000 000238 000010 00  WA  0   0  8
+  [32] .rela.data.ZCMain_main_closure RELA            0000000000000000 000d78 000018 18   I 42  31  8
+  [33] .data.Main_zdtrModule3_closure PROGBITS        0000000000000000 000248 000010 00  WA  0   0  8
+  [34] .rela.data.Main_zdtrModule3_closure RELA            0000000000000000 000d90 000030 18   I 42  33  8
+  [35] .data.Main_zdtrModule1_closure PROGBITS        0000000000000000 000258 000010 00  WA  0   0  8
+  [36] .rela.data.Main_zdtrModule1_closure RELA            0000000000000000 000dc0 000030 18   I 42  35  8
+  [37] .data.Main_zdtrModule_closure PROGBITS        0000000000000000 000268 000020 00  WA  0   0  8
+  [38] .rela.data.Main_zdtrModule_closure RELA            0000000000000000 000df0 000048 18   I 42  37  8
+  [39] .note.GNU-stack   PROGBITS        0000000000000000 000288 000000 00      0   0  1
+  [40] .comment          PROGBITS        0000000000000000 000288 00000c 01  MS  0   0  1
+  [41] .note.gnu.property NOTE            0000000000000000 000298 000030 00   A  0   0  8
+  [42] .symtab           SYMTAB          0000000000000000 0002c8 000378 18     43   2  8
+  [43] .strtab           STRTAB          0000000000000000 000640 00041a 00      0   0  1
+  [44] .shstrtab         STRTAB          0000000000000000 000e38 000295 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)</code></pre>
+<p>44 sections! A Lot.</p>
+<p>Back to our <code>pandoc</code> binary. It just calls into <code>libHSpandoc.a</code> library
+(<code>nixpkgs</code> uses static linking for <code>haskell</code> bits today). Linker would
+have to wade through all it’s sections to pick only used things.</p>
+<p><strong>Quiz question: guess how many sections does <code>pandoc</code> library have?
+100? 1000? 10000? A million? What is your guess?</strong></p>
+<p>Let’s count! On my system <code>pandoc</code> library happens to hide at
+<code>&lt;&lt;NIX&gt;&gt;-pandoc-3.7.0.2/lib/ghc-9.10.3/lib/x86_64-linux-ghc-9.10.3-2870/pandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs/libHSpandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs.a</code>.
+I’ll just use that ugly path.</p>
+<pre><code># dumping section count per individual object file in the archive:
+$ readelf -h &lt;&lt;NIX&gt;&gt;-pandoc-3.7.0.2/lib/ghc-9.10.3/lib/x86_64-linux-ghc-9.10.3-2870/pandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs/libHSpandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs.a |
+    grep 'Number of section'
+  Number of section headers:         18
+  ...
+  Number of section headers:         26207
+  Number of section headers:         16755
+  ...
+  Number of section headers:         8898
+  ..
+  Number of section headers:         1047
+  Number of section headers:         1324
+  ...
+  Number of section headers:         687
+  Number of section headers:         228
+
+# summing up all section counts:
+$ readelf -h &lt;&lt;NIX&gt;&gt;-pandoc-3.7.0.2/lib/ghc-9.10.3/lib/x86_64-linux-ghc-9.10.3-2870/pandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs/libHSpandoc-3.7.0.2-Af80LA3Iq30D5LRTMZUszs.a |
+    grep 'Number of section' | awk '{ size += $5 } END { print size }'
+494450</code></pre>
+<p><code>494</code> <code>thousands</code> sections! Almost half a million sections. And it’s just
+one (largest) of many <code>pandoc</code> dependencies. That’s why <code>ld.gold</code> takes
+a considerable amount of time to just sort through all these sections.</p>
+<h2 id="performance-hog-clues">performance hog clues</h2>
+<p><code>ld.bfd</code> has even harder time getting through such a big list of sections.
+But why exactly? The names
+of <code>_bfd_elf_gc_mark / _bfd_elf_gc_mark_reloc</code> functions in the profiles
+hint that they track unreferenced sections.</p>
+<p>To trigger section garbage collection
+<code>ghc</code> <a href="https://github.com/ghc/ghc/blob/f9790ca81deb8b14ff2eabf701aecbcfd6501963/compiler/GHC/Linker/Static.hs#L241">uses <code>-Wl,--gc-sections</code></a>
+linker option.
+Note that <code>ghc</code> only enables garbage collection for <code>GNU ld</code> (I think
+both <code>ld.gold</code> and <code>ld.bfd</code> count as GNU). <code>lld</code> and <code>mold</code>
+both the option as well.</p>
+<p>If we look at the implementation
+of <code>_bfd_elf_gc_mark</code> we see a suspicious
+<a href="https://sourceware.org/git/?p=binutils-gdb.git;a=blob;f=bfd/elflink.c;h=91c77c211ef065a77883004eb696adacd92a00be;hb=815d9a14cbbb3b81843f7566222c87fb22e7255d#l14063">list traversal</a>
+and some recursive descend:</p>
+<pre class="c"><code>bool
+_bfd_elf_gc_mark_reloc (struct bfd_link_info *info,
+                        asection *sec,
+                        elf_gc_mark_hook_fn gc_mark_hook,
+                        struct elf_reloc_cookie *cookie)
+{
+  asection *rsec;
+  bool start_stop = false;
+
+  rsec = _bfd_elf_gc_mark_rsec (info, sec, gc_mark_hook, cookie, &amp;start_stop);
+  while (rsec != NULL)
+    {
+      if (!rsec-&gt;gc_mark)
+        {
+          if (bfd_get_flavour (rsec-&gt;owner) != bfd_target_elf_flavour
+              || (rsec-&gt;owner-&gt;flags &amp; DYNAMIC) != 0)
+            rsec-&gt;gc_mark = 1;
+          else if (!_bfd_elf_gc_mark (info, rsec, gc_mark_hook))
+            return false;
+        }
+      if (!start_stop)
+        break;
+      rsec = bfd_get_next_section_by_name (rsec-&gt;owner, rsec);
+    }
+  return true;
+}</code></pre>
+<p>If we do such marking for each section it probably has quadratic complexity.
+But maybe not. To get something simpler to explore I tried to craft a
+trivial example of <code>1 million</code> sections:</p>
+<pre><code>$ for (( i=0; i&lt;1000000; i++ )); do printf &quot;int var_$i __attribute__ ((section (\&quot;.data.$i\&quot;))) = { $i };\n&quot;; done &gt; main.c; printf &quot;int main() {}&quot; &gt;&gt; main.c; gcc -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold
+bfd:
+
+real    0m6,123s
+user    0m5,384s
+sys     0m0,701s
+gold:
+
+real    0m1,107s
+user    0m0,844s
+sys     0m0,242s</code></pre>
+<p>This test generates the following boilerplate code:</p>
+<pre class="c"><code>// $ head -n 5 main.c
+int var_0 __attribute__ ((section (&quot;.data.0&quot;))) = { 0 };
+int var_1 __attribute__ ((section (&quot;.data.1&quot;))) = { 1 };
+int var_2 __attribute__ ((section (&quot;.data.2&quot;))) = { 2 };
+int var_3 __attribute__ ((section (&quot;.data.3&quot;))) = { 3 };
+int var_4 __attribute__ ((section (&quot;.data.4&quot;))) = { 4 };
+// ...
+// $ tail -n 5 main.c
+int var_999996 __attribute__ ((section (&quot;.data.999996&quot;))) = { 999996 };
+int var_999997 __attribute__ ((section (&quot;.data.999997&quot;))) = { 999997 };
+int var_999998 __attribute__ ((section (&quot;.data.999998&quot;))) = { 999998 };
+int var_999999 __attribute__ ((section (&quot;.data.999999&quot;))) = { 999999 };
+int main() {}</code></pre>
+<p>We are seeing <code>6x</code> time difference between linkers. Could it be our case?
+Let’s check with <code>perf</code> if we hit the same hot paths as in <code>pandoc</code> case:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; try1.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/try1.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/try1.svg" title="ld.bfd profile on synthetic 1M independent data sections" alt="try1.svg" /></a></p>
+<p>The profile looks not too bad: no large <code>.*_gc_.*</code> bits seen anywhere.
+Not exactly our problem then. Let’s try to add more references across
+sections to see if we start seeing the symbol traversals:</p>
+<pre><code>$ printf &quot;int var_0 __attribute__ ((section (\&quot;.data.0\&quot;))) = { $i };\n&quot; &gt; main.c; for (( i=1; i&lt;1000000; i++ )); do printf &quot;void * var_$i __attribute__ ((section (\&quot;.data.$i\&quot;))) = { &amp;var_$((i-1)) };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return (long)var_99999; }&quot; &gt;&gt; main.c; gcc -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold -Wl,--gc-sections -Wl,--no-as-needed
+gcc: internal compiler error: Segmentation fault signal terminated program cc1
+Please submit a full bug report, with preprocessed source (by using -freport-bug).
+See &lt;https://gcc.gnu.org/bugs/&gt; for instructions.</code></pre>
+<p>Whoops, crashed <code>gcc</code>. Filed <a href="https://gcc.gnu.org/PR122198"><code>PR122198</code></a>.
+It’s a stack overflow. Throwing more stack at the problem with <code>ulimit -s unlimited</code>:</p>
+<pre><code>$ printf &quot;int var_0 __attribute__ ((section (\&quot;.data.0\&quot;))) = { $i };\n&quot; &gt; main.c; for (( i=1; i&lt;1000000; i++ )); do printf &quot;void * var_$i __attribute__ ((section (\&quot;.data.$i\&quot;))) = { &amp;var_$((i-1)) };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return (long)var_99999; }&quot; &gt;&gt; main.c; gcc -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold -Wl,--gc-sections -Wl,--no-as-needed
+bfd:
+
+real    0m5.296s
+user    0m4.572s
+sys     0m0.714s
+gold:
+
+real    0m1.172s
+user    0m0.874s
+sys     0m0.295s</code></pre>
+<p>This test generates slightly different form:</p>
+<pre class="c"><code>// $ head -n 5 main.c
+int var_0 __attribute__ ((section (&quot;.data.0&quot;))) = { 1000000 };
+void * var_1 __attribute__ ((section (&quot;.data.1&quot;))) = { &amp;var_0 };
+void * var_2 __attribute__ ((section (&quot;.data.2&quot;))) = { &amp;var_1 };
+void * var_3 __attribute__ ((section (&quot;.data.3&quot;))) = { &amp;var_2 };
+void * var_4 __attribute__ ((section (&quot;.data.4&quot;))) = { &amp;var_3 };
+// ...
+// $ tail -n 5 main.c
+void * var_999996 __attribute__ ((section (&quot;.data.999996&quot;))) = { &amp;var_999995 };
+void * var_999997 __attribute__ ((section (&quot;.data.999997&quot;))) = { &amp;var_999996 };
+void * var_999998 __attribute__ ((section (&quot;.data.999998&quot;))) = { &amp;var_999997 };
+void * var_999999 __attribute__ ((section (&quot;.data.999999&quot;))) = { &amp;var_999998 };
+int main() { return (long)var_99999; }</code></pre>
+<p>The main difference compared to the previous attempt is that sections are used
+and can’t be removed by section garbage collector. Is this profile closer to
+<code>pandoc</code> case? Looking at the trace:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; try2.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/try2.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/try2.svg" title="ld.bfd profile on 1M interdependent data sections" alt="try2.svg" /></a></p>
+<p>It’s not too close to <code>pandoc</code> case, but the huge vertical thing on the
+left is a good sign that we at least start hitting the <code>gc</code> traversal
+code. Now we need to increase its presence somehow.
+Perhaps it’s more symbols per section? I tried to simulate code
+references instead of data references and see what happens:</p>
+<pre><code>$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;20000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_19999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed; echo &quot;gold:&quot;; time gcc main.o -o main -fuse-ld=gold -Wl,--gc-sections -Wl,--no-as-needed
+bfd:
+
+real    0m5,627s
+user    0m2,567s
+sys     0m3,047s
+gold:
+
+real    0m0,053s
+user    0m0,041s
+sys     0m0,012s</code></pre>
+<p>How the test generates this file:</p>
+<pre class="c"><code>// $ head -n 5 main.c
+int f_0() __attribute__ ((section (&quot;.text.0&quot;))); int f_0() { return 0; };
+int f_1() __attribute__ ((section (&quot;.text.1&quot;))); int f_1() { return f_0(); };
+int f_2() __attribute__ ((section (&quot;.text.2&quot;))); int f_2() { return f_1(); };
+int f_3() __attribute__ ((section (&quot;.text.3&quot;))); int f_3() { return f_2(); };
+int f_4() __attribute__ ((section (&quot;.text.4&quot;))); int f_4() { return f_3(); };
+// ..
+// $ tail -n 5 main.c
+int f_19996() __attribute__ ((section (&quot;.text.19996&quot;))); int f_19996() { return f_19995(); };
+int f_19997() __attribute__ ((section (&quot;.text.19997&quot;))); int f_19997() { return f_19996(); };
+int f_19998() __attribute__ ((section (&quot;.text.19998&quot;))); int f_19998() { return f_19997(); };
+int f_19999() __attribute__ ((section (&quot;.text.19999&quot;))); int f_19999() { return f_19998(); };
+int main() { return f_19999(); }</code></pre>
+<p>That time difference is more interesting! Note that <code>ld.gold</code> spends just
+<code>50ms</code> on the input while <code>ld.bfd</code> does something for <code>5 seconds</code>!
+Getting the profile:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections -Wl,--no-as-needed
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; try3.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/try3.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/try3.svg" title="ld.bfd trace on 20K dependent text sections" alt="try3.svg" /></a></p>
+<p>At last! We managed to hit exactly the <code>_bfd_elf_gc_mark ()</code>.
+The final input file object file is not too large:</p>
+<pre><code>$ ls -lh main.o
+-rw-r--r-- 1 slyfox users 5.7M Oct  8 20:58 main.o</code></pre>
+<p>I filed <a href="https://sourceware.org/PR33530"><code>PR33530</code></a> upstream bug report
+hoping that fix will not be too complicated and started writing this
+blog post.</p>
+<h2 id="testing-the-patch">testing the patch</h2>
+<p>My plan was to figure out more details about <code>binutils</code> <code>gc</code> in this post
+and try to fix it. Alas even before I got to it H.J. already prepared
+<a href="https://sourceware.org/PR33530#c1">the fix</a>!</p>
+<p>Synthetic test shown great results:</p>
+<pre><code>$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;20000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_19999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+bfd:
+
+real    0m0,119s
+user    0m0,080s
+sys     0m0,038s</code></pre>
+<p><code>120ms</code> compared to the previous <code>5s</code> is a <code>40x</code> speedup. It’s still
+twice as slow as <code>50ms</code> for <code>ld.gold</code>, but the absolute time is way
+harder to notice. I tried to find a new degradation point by adding more
+functions:</p>
+<pre><code># 100K sections:
+$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;100000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_99999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+bfd:
+
+real    0m0.628s
+user    0m0.472s
+sys     0m0.154s
+
+# 1M sections:
+$ printf &quot;int f_0() __attribute__ ((section (\&quot;.text.0\&quot;))); int f_0() { return 0; };\n&quot; &gt; main.c; for (( i=1; i&lt;1000000; i++ )); do printf &quot;int f_$i() __attribute__ ((section (\&quot;.text.$i\&quot;))); int f_$i() { return f_$((i-1))(); };\n&quot;; done &gt;&gt; main.c; printf &quot;int main() { return f_999999(); }&quot; &gt;&gt; main.c; gcc -O0 -c main.c -o main.o; echo &quot;bfd:&quot;; time gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+bfd:
+
+real    0m8.697s
+user    0m6.956s
+sys     0m1.726s
+
+$ size main.o
+   text    data     bss     dec     hex filename
+43000115              0       0 43000115        2902133 main.o</code></pre>
+<p><code>8s</code> on a file with <code>1M</code> sections sounds quite fast! Let’s see where
+<code>ld.bfd</code> spends its time now:</p>
+<pre><code>$ perf record -g gcc main.o -o main -fuse-ld=bfd -Wl,--gc-sections
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; fixed.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed.svg" title="fixed ld.bfd profile on 1M dependent text sections" alt="fixed.svg" /></a></p>
+<p>Once again the profile looks more balanced now. Yay! How about real
+<code>pandoc</code>?</p>
+<pre><code>$ time nix build --no-link -f. pandoc --rebuild
+
+real    0m17,013s
+user    0m0,672s
+sys     0m0,123s</code></pre>
+<p><code>17s</code> is a bit slower than <code>13s</code> of <code>ld.gold</code>, but not as bad as it used
+to be. And it’s profile:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... '-optl-fuse-ld=bfd' -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; fixed-pandoc.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed-pandoc.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/fixed-pandoc.svg" title="fixed ld.bfd profile on 1M dependent text sections" alt="fixed-pandoc.svg" /></a></p>
+<h2 id="bonus-other-linkers">bonus: other linkers</h2>
+<p>Both <code>ld.gold</code> and <code>ld.lld</code> are quite fast at handling synthetic tests now,
+But both still spend a few seconds on <code>pandoc</code>. How about other linkers?
+Let’s add <code>lld</code> and <code>mold</code> to the mix. I’ll measure
+<code>ghc --make '-optl-fuse-ld=$linker' -fforce-recomp</code> execution time:</p>
+<pre><code># without the fix
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=bfd -fforce-recomp
+real    0m30.589s user    0m24.576s sys     0m6.447s
+
+# with the fix
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=bfd -fforce-recomp
+real    0m8.676s user    0m6.484s sys     0m2.584s
+
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=gold -fforce-recomp
+real    0m5.929s user    0m5.543s sys     0m0.829s
+
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=lld -fforce-recomp
+real    0m1.413s user    0m1.754s sys     0m1.509s
+
+$ time &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=mold -fforce-recomp
+real    0m1.209s user    0m0.424s sys     0m0.215s</code></pre>
+<p>Note: we do measure not just liker time, but also <code>ghc</code> code generation
+time. Actual link time does not take as much. Same values in tables:</p>
+<table>
+<thead>
+<tr>
+<th>linker</th>
+<th><code>real</code> (sec)</th>
+<th><code>user</code> (sec)</th>
+<th><code>sys</code> (sec)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ld.bfd</code> (orig)</td>
+<td>30.6</td>
+<td>24.6</td>
+<td>6.4</td>
+</tr>
+<tr>
+<td><code>ld.bdf</code> (fixed)</td>
+<td>8.7</td>
+<td>6.5</td>
+<td>2.6</td>
+</tr>
+<tr>
+<td><code>ld.gold</code></td>
+<td>5.9</td>
+<td>5.5</td>
+<td>0.8</td>
+</tr>
+<tr>
+<td><code>lld</code></td>
+<td>1.4</td>
+<td>1.8</td>
+<td>1.5</td>
+</tr>
+<tr>
+<td><code>mold</code></td>
+<td>1.2</td>
+<td>0.4</td>
+<td>0.2</td>
+</tr>
+</tbody>
+</table>
+<p><code>lld</code> and <code>mold</code> link times are impressive! They are <code>6x-7x</code> times faster
+than fixed version of <code>ld.bfd</code>. Let’s look at their profiles to see what
+they spend their time on. <code>lld</code> goes first:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=lld -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; lld-pandoc.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/lld-pandoc.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/lld-pandoc.svg" title="lld profile on pandoc" alt="lld-pandoc.svg" /></a></p>
+<p>The only things that stick out in this profile are <code>malloc()</code> (about <code>20%</code>
+of the time?) and <code>memmove()</code> calls (about <code>6%</code> of the time). Otherwise,
+we see about equal time spent on reading (<code>linkerDriver</code> part on the right),
+relocation processing (<code>RelocationScanner</code> in the middle) and writing
+(<code>HashTableSection::writeTo</code> slightly to the left).</p>
+<p>I wonder if memory management were to be optimized for <code>lld</code>, would it be
+as fast as <code>mold</code> on this input? And now <code>mold</code> profile:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=mold -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; mold-pandoc.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc.svg" title="mold profile on pandoc" alt="mold-pandoc.svg" /></a></p>
+<p>The profile is not very readable as we mainly see the <code>tbb</code> threading
+dispatch of chunks of work to do. If I scroll around I see
+things like <code>scan_abs_relocations</code>, <code>apply_reloc_alloc</code>, <code>resolve_symbols</code>,
+<code>split_contents</code>, <code>scan_relocations</code>. It looks like half the time
+is spent on the management of parallelism. Playing a bit with the
+<code>mold</code> parameters I noticed that <code>-Wl,--threads=4</code> is the maximum thread
+count where I get any speed improvements for parallelism. Anything above
+will clutter CPU usage profile with <code>sched_yield</code> “busy” wait threads.</p>
+<p>To get the idea where actual CPU is spent it might be more interesting to
+look at single-threaded profile using <code>-optl-Wl,--no-threads</code>:</p>
+<pre><code>$ perf record -g &lt;&lt;NIX&gt;&gt;-ghc-9.10.3/bin/ghc --make ... pandoc ... -optl-fuse-ld=mold -optl-Wl,--no-threads -fforce-recomp
+
+$ perf script &gt; out.perf &amp;&amp; perl ~/dev/git/FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded &amp;&amp; perl ~/dev/git/FlameGraph/flamegraph.pl out.folded &gt; mold-no-threads.svg</code></pre>
+<p><a href="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc-no-threads.svg"><img src="https://trofi.github.io/posts.data/340-profiling-binutils-linkers-in-nixpkgs/mold-pandoc-no-threads.svg" title="mold profile on pandoc single thread" alt="mold-pandoc-no-threads.svg" /></a></p>
+<p>I’ll leave the interpretation of the picture to the reader.</p>
+<h2 id="parting-words">parting words</h2>
+<p><code>ld.gold</code> is about to be removed from <code>binutils</code>.</p>
+<p>In <code>-fsplit-sections</code> mode <code>ghc</code> code generator produces huge amount of
+sections per <code>ELF</code> file which manages to strain both <code>ld.bfd</code> and
+<code>ld.gold</code> linkers. <code>ghc</code> should probably be fixed to produce one section
+per strongly connected component of functions that refer one another.
+<code>libHSpandoc</code> consists of almost half a million <code>ELF</code> sections. Average
+section size for which is about 250 bytes.</p>
+<p><code>ld.bfd</code> while being slower than <code>ld.gold</code> still has simple performance
+bugs in obscure scenarios. Just like today’s
+<a href="https://sourceware.org/PR33530"><code>PR33530</code></a> example.</p>
+<p><code>binutils</code> upstream was very fast to come up with a possible fix to test.</p>
+<p>Even fixed <code>ld.bfd</code> is still quite a bit slower on synthetic test with
+huge sections compared to <code>ld.gold</code>. But at least it’s not exponentially
+worse.</p>
+<p><code>lld</code> and <code>mold</code> are still way faster than either <code>ld.bfd</code> or <code>ld.gold</code>.
+About 6-7 times on <code>pandoc</code> test. <code>ld.bfd</code> still has a lot of room for
+improvement :)</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Thu, 09 Oct 2025 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/340-profiling-binutils-linkers-in-nixpkgs.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>gcc-16 devirtualization changes</title>
     <link>https://trofi.github.io/posts/339-gcc-16-devirtualization-changes.html</link>
     <description><![CDATA[<h2 id="a-quiz">A quiz</h2>
@@ -5615,259 +6254,6 @@ everywhere <code>C</code> projects like <code>zip</code>, <code>opensp</code>, <
 <p>Have fun!</p>]]></description>
     <pubDate>Sat, 13 Apr 2024 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/311-gcc-14-bug-pile-4.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>a libpam bug</title>
-    <link>http://trofi.github.io/posts/310-a-libpam-bug.html</link>
-    <description><![CDATA[<p>Over a past few months I updated <code>libpam</code> <code>nixpkgs</code> package a few times.
-I broke it at least three times:</p>
-<ul>
-<li><a href="https://github.com/NixOS/nixpkgs/pull/266828">fix clobbered patched <code>Makefile.in</code></a></li>
-<li><a href="https://github.com/NixOS/nixpkgs/pull/281182">fix deleted <code>required pam_lastlog</code> module</a></li>
-<li><a href="https://github.com/NixOS/nixpkgs/pull/298994">fix broken empty password handling</a></li>
-</ul>
-<p>It’s not great. But at least each bug is slightly different.
-Exploring it gives me some insight into how <code>libpam</code> works.
-Let’s look at the most recent breakage related to empty passwords.</p>
-<h2 id="actual-password-handling-bug">actual password handling bug</h2>
-<p>In <a href="https://github.com/NixOS/nixpkgs/issues/297920"><code>nixpkgs</code> issue#297920</a>
-Thomas M. DuBuisson reported that users with empty passwords no longer
-work on <code>NixOS</code>.
-An example <code>/etc/nixos/configuration.nix</code> snippet to create such an user
-is:</p>
-<pre class="nix"><code>{ ... }:
-{
-  users.users.test = {
-    isNormalUser = true;
-    password = &quot;&quot;;
-    extraGroups = [ ];
-  };
-}</code></pre>
-<p>After an update to <code>libpam-1.6.0</code> <code>login</code> did not work any more:</p>
-<pre><code>login: test
-Password:
-
-Login incorrect</code></pre>
-<p>Why did it break? Let’s look at the way passwords are stored in <code>linux</code>.</p>
-<h2 id="etcshadow-structure"><code>/etc/shadow</code> structure</h2>
-<p>On <code>linux</code> desktops hashed user passwords are usually stored in
-<code>/etc/shadow</code>:</p>
-<pre><code># cat /etc/shadow
-...
-nobody:!:1::::::
-nulloktest:$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.:1::::::</code></pre>
-<p><a href="https://manpages.opensuse.org/Tumbleweed/shadow/shadow.5.en.html"><code>man 5 shadow</code></a>
-from <code>shadow</code> package has more detail on what each field means.
-As hashed passwords are still sensitive information <code>/etc/shadow</code> is not
-readable by most users:</p>
-<pre><code>$ ls -l /etc/shadow
--rw-r----- 1 root shadow 3454 Mar 29 07:03 /etc/shadow</code></pre>
-<p>Programs that check passwords are usually ran as <code>root</code> or are
-<code>SUID</code>-root themselves.</p>
-<h2 id="hash-structure">hash structure</h2>
-<p><code>$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.</code>
-is not just a hash string of a well known hash algorithm. It used to be.
-But not any more.
-<a href="https://manpages.opensuse.org/Tumbleweed/libxcrypt-devel/crypt.5.en.html"><code>man 5 crypt</code></a>
-from <code>libxcrypt</code> package explains the string format in detail. It’s 10
-pages long!
-The main takeaway from that page is that there are a few ways to encode
-empty (“” password) and blank (no password prompt) passwords for a user:</p>
-<pre><code>nulloktest:$6$D0XkOSlH$fWuW6/7aFD5ZD2YzBuerj0STra3LddBNoXMn5pomYRmdbmsjM6bGzIX7nQQS4bGepDBoao2U.IZRGhgAJ4qOp.:1::::::
-nulloktest::1::::::</code></pre>
-<p>Hashed version (first) accepts only empty(““) password while empty version
-(second) does not prompt for a password at all.</p>
-<p>This hashed version happens to use <code>SHA512</code> algorithm (<code>$6$</code> prefix). You
-can have other encodings as well: by varying used hash salt for <code>SHA512</code>
-algorithm or by switching the hashing algorithm (for example to
-<code>yescrypt</code>.)</p>
-<h2 id="libpam-overview"><code>libpam</code> overview</h2>
-<p><code>PAM</code> stands for “Pluggable Authentication Modules”. It allows programs
-to embed user authentication without having to deal with the specifics of
-accessing <code>/etc/shadow</code> contents directly. <code>libpam</code> allows you to
-completely change authentication back end via <code>/etc/pam.d/</code>
-configuration to use non-<code>shadow</code> mechanisms instead. I’ll focus on
-<code>shadow</code> here and will avoid any configuration aspects.</p>
-<p>Well known <code>libpam</code> users are <code>sudo</code> and <code>login</code> programs. Those are
-expected to be ran as <code>root</code> or gain <code>root</code> via <code>SUID</code> <code>root</code> bit on the
-binaries. <code>login</code> can authenticate any user in the system while <code>sudo</code>
-probably only needs to authenticate current user.</p>
-<p>Fun fact: normally you need <code>root</code> (or <code>shadow</code>) privileges to read
-<code>/etc/shadow</code> for password verification purposes.</p>
-<p>But <code>libpam</code> can be used for non-root programs as well! The typical
-example is the session screen locker like <code>swaylock</code> or <code>i3lock</code>: those
-lock your screen until you type current user’s password. How do they
-manage to validate current user’s password without having a <code>SUID</code>
-<code>root</code> bit? <code>libpam</code> does it by calling external <code>unix_chkpwd</code>
-<code>SUID</code> <code>root</code> program from <code>libpam</code> package:</p>
-<pre><code>$ ls -l `which unix_chkpwd`
--r-s--x--x 1 root root 63472 Mar 29 04:41 /run/wrappers/bin/unix_chkpwd</code></pre>
-<p>No magic unfortunately :)</p>
-<h2 id="back-to-password-handling-bug">back to password handling bug</h2>
-<p>In <a href="https://github.com/linux-pam/linux-pam/issues/758"><code>libpam</code> issue#758</a>
-Chris Severance narrowed the regression down to
-<a href="https://github.com/linux-pam/linux-pam/commit/b3020da7da384d769f27a8713257fbe1001878be">the <code>pam_unix/passverify</code> change</a>.
-Here are two diagrams to show the effect of that change.</p>
-<p>Before the change <code>libpam-1.5.3</code> password checking diagram looked this way:</p>
-<img src="https://trofi.github.io/posts.data.inline/310-a-libpam-bug/fig-0.gv.svg" />
-<p>After the change <code>libpam-1.6.0</code> password checking diagram looks this way:</p>
-<img src="https://trofi.github.io/posts.data.inline/310-a-libpam-bug/fig-1.gv.svg" />
-<p>To phrase it in words: <code>libpam-1.5.3</code> used <code>unix_chkpwd</code> external helper
-program only if <code>program</code> was not already ran as <code>root</code>. <code>libpam-1.6.0</code>
-in contrast always uses <code>unix_chkpwd</code>.</p>
-<p>In theory both versions should work the same.
-In practice <code>unix_chkpwd</code> disallows empty passwords (bug) but allows the
-blank ones (feature).
-Mechanically the bug happens as <code>unix_chkpwd</code> adds
-<a href="https://github.com/linux-pam/linux-pam/commit/9e74e90147c530801e3ea3428d64371722c90e01">this extra bit of code</a>:</p>
-<pre class="diff"><code>--- a/modules/pam_unix/passverify.c
-+++ b/modules/pam_unix/passverify.c
-@@ -1096,6 +1096,12 @@ helper_verify_password(const char *name, const char *p, int nullok)
- 	if (pwd == NULL || hash == NULL) {
- 		helper_log_err(LOG_NOTICE, &quot;check pass; user unknown&quot;);
- 		retval = PAM_USER_UNKNOWN;
-+	} else if (p[0] == '\0' &amp;&amp; nullok) {
-+		if (hash[0] == '\0') {
-+			retval = PAM_SUCCESS;
-+		} else {
-+			retval = PAM_AUTH_ERR;
-+		}
- 	} else {
- 		retval = verify_pwd_hash(p, hash, nullok);
- 	}</code></pre>
-<p>Here <code>helper_verify_password()</code> started rejecting empty passwords with
-non-empty hashes present in <code>/etc/shadow</code>. Oops. This change is what
-distinguishes theses hashes:</p>
-<ul>
-<li><code>nulloktest::1::::::</code>: <code>hash[0] == '\0'</code> (hash of length <code>0</code>): accepted</li>
-<li><code>nulloktest:$6$D0...</code>: <code>hash[0] != '\0'</code> (hash of length <code>&gt;0</code>): rejected</li>
-</ul>
-<p>Such an early rejection is a bug. The hash needs to have a chance to be
-verified instead.</p>
-<p><code>helper_verify_password()</code> function is only used by external helpers like
-<code>unix_chkpwd</code> and was never used by <code>libpam.so</code> itself. That’s why
-<code>libpam-1.5.3</code> just worked for <code>login</code>.</p>
-<p>The fix is <a href="https://github.com/linux-pam/linux-pam/pull/784">simple</a>:</p>
-<pre class="diff"><code>--- a/modules/pam_unix/passverify.c
-+++ b/modules/pam_unix/passverify.c
-@@ -76,9 +76,13 @@ PAMH_ARG_DECL(int verify_pwd_hash,
- 
- 	strip_hpux_aging(hash);
- 	hash_len = strlen(hash);
--	if (!hash_len) {
-+
-+	if (p &amp;&amp; p[0] == '\0' &amp;&amp; !nullok) {
-+		/* The passed password is empty */
-+		retval = PAM_AUTH_ERR;
-+	} else if (!hash_len) {
- 		/* the stored password is NULL */
--		if (nullok) { /* this means we've succeeded */
-+		if (p &amp;&amp; p[0] == '\0' &amp;&amp; nullok) { /* this means we've succeeded */
- 			D((&quot;user has empty password - access granted&quot;));
- 			retval = PAM_SUCCESS;
- 		} else {
-@@ -1109,12 +1113,6 @@ helper_verify_password(const char *name, const char *p, int nullok)
- 	if (pwd == NULL || hash == NULL) {
- 		helper_log_err(LOG_NOTICE, &quot;check pass; user unknown&quot;);
- 		retval = PAM_USER_UNKNOWN;
--	} else if (p[0] == '\0' &amp;&amp; nullok) {
--		if (hash[0] == '\0') {
--			retval = PAM_SUCCESS;
--		} else {
--			retval = PAM_AUTH_ERR;
--		}
- 	} else {
- 		retval = verify_pwd_hash(p, hash, nullok);
- 	}</code></pre>
-<p>Here we move all the null password checking to a common <code>verify_pwd_hash</code>
-code and check for password length and not for hash length to handle
-<code>nullok</code> <code>libpam</code> configuration.</p>
-<h2 id="debugging-tips">debugging tips</h2>
-<p><code>unix_chkpwd</code> is a <code>SUID</code> <code>root</code> binary. Moreover, it changes it’s
-behavior based on actual user calling it. I wanted to find a way to
-probe directly it’s ability to validate <code>/etc/shadow</code> contents without
-involving external <code>login</code> binary.
-On a system with <code>libpam</code> installed password checking session for an
-arbitrary user could be done this way:</p>
-<pre><code>$ printf &quot;correct-password\0&quot; | sudo unix_chkpwd testuser nullok; echo $?
-0
-$ printf &quot;incorrect-password\0&quot; | sudo unix_chkpwd testuser nullok; echo $?
-7</code></pre>
-<p>You need to pass null-terminated password into <code>unix_chkpwd</code> <code>stdin</code>
-descriptor. The error code will tell you back if the check succeeded or
-why it failed.
-I needed an equivalent check for a locally built <code>unix_chkpwd</code> from
-<code>linux-pam</code> <code>git</code> repository. I came up with this hack:</p>
-<pre><code># build unix_chkpwd
-$ cd linux-pam
-$ ./configure --disable-doc
-$ make
-
-# mark unix_chkpwd SUID-root
-$ sudo chown root modules/pam_unix/unix_chkpwd
-$ sudo chmod 4755 modules/pam_unix/unix_chkpwd
-
-# check if it can authenticate the suer
-$ printf &quot;\0&quot; | sudo modules/pam_unix/unix_chkpwd nulloktest nullok; echo $?</code></pre>
-<p>This setup allowed me to quickly find the problematic bit using
-<code>printf()</code> debugging.</p>
-<h2 id="hashed-empty-passwords">hashed empty passwords</h2>
-<p>Is it typical to have empty hashed passwords? At least <code>passwd</code> does not
-allow you to specify an empty password explicitly:</p>
-<pre><code># passwd nulloktest
-New password:
-Retype new password:
-No password has been supplied.
-...
-passwd: Permission denied
-passwd: password unchanged</code></pre>
-<p>But we can set a blank password with a <code>-d</code> option:</p>
-<pre><code># passwd -d nulloktest
-passwd: password changed.
-
-# grep nulloktest /etc/shadow
-nulloktest::1::::::</code></pre>
-<p>This subtlety was one of the reasons why upstream <code>linux-pam</code> had a hard
-time verifying a problem of empty hashed password. So how does <code>NixOS</code>
-manage to create empty hashed passwords in the first place?</p>
-<p>It uses <code>perl</code> code to call <code>crypt()</code> function from <code>libxcrypt</code> to
-generate one. <a href="https://github.com/NixOS/nixpkgs/blob/8f72bd17eae0d1a7fcb63e3f1a3baa7dadebef68/nixos/modules/config/update-users-groups.pl#L37">Actual code</a>:</p>
-<pre class="perl"><code>sub hashPassword {
-    my ($password) = @_;
-    my $salt = &quot;&quot;;
-    my @chars = ('.', '/', 0..9, 'A'..'Z', 'a'..'z');
-    $salt .= $chars[rand 64] for (1..8);
-    return crypt($password, '$6$' . $salt . '$');
-}</code></pre>
-<p>Here the <code>$password</code> passed is an empty string. We can generate a few of
-them just for fun:</p>
-<pre><code>$ perl -e 'my $salt = &quot;&quot;; my @chars = (&quot;.&quot;, &quot;/&quot;, 0..9, &quot;A&quot;..&quot;Z&quot;, &quot;a&quot;..&quot;z&quot;); $salt .= $chars[rand 64] for (1..8); print(crypt(&quot;&quot;, &quot;\$6\$&quot; . $salt . &quot;\$&quot;) . &quot;\n&quot;);'
-$6$AgpQ6azd$0YmJW0VFg0FwyPgSW1KSiF8cy5qB8NB/.IcMbjMa1OCbGH3ki9a4bkuhtMxQupeMeiagB86tpW7F/7yOl3Hhc0</code></pre>
-<h2 id="parting-words">parting words</h2>
-<p><code>libpam</code> updates are tricky. Every time I update <code>libpam</code> I break
-something. This time it was a somewhat benign case of empty password
-handling. We need more tests. The empty password fix was merged to
-<code>libpam</code> as <a href="https://github.com/linux-pam/linux-pam/pull/784"><code>PR#784</code></a>
-and to <code>nixpkgs</code> as <a href="https://github.com/NixOS/nixpkgs/pull/298994"><code>PR#298994</code></a>.</p>
-<p>If you are affected by an empty password bug you can set the password to
-a blank hash with <code>hashedPassword = ""</code>. Or set it to blank with
-<code>passwd -d $user</code>. Both are equivalent.</p>
-<p><code>libpam-1.6.0</code> executes an external<code>unix_chkpwd</code> binary with <code>SUID</code>
-<code>root</code> set to validate passwords.</p>
-<p>Blank passwords (empty hash) are subtly different from empty passwords
-(present hash of empty string): blank passwords don’t get prompted by
-<code>login</code> and friends while empty passwords do. Sometimes this causes the
-confusion.</p>
-<p><code>NixOS</code> uses direct <code>crypt()</code> call to <code>libxcrypt</code> to generate
-<code>/etc/shadow</code> entries.</p>
-<p><code>libxcrypt</code> supports quite a few hashing algorithms and tweaks on top of
-them that control hashing rounds and so on.</p>
-<p><code>linux-pam</code> upstream is very responsive! It’s always a pleasure to send
-fixes there.</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Sat, 30 Mar 2024 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/310-a-libpam-bug.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
