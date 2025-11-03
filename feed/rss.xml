@@ -7,8 +7,173 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sat, 01 Nov 2025 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Mon, 03 Nov 2025 00:00:00 UT</lastBuildDate>
         <item>
+    <title>Zero Hydra Failures towards 25.11 NixOS release</title>
+    <link>https://trofi.github.io/posts/342-Zero-Hydra-Failures-towards-25.11-NixOS-release.html</link>
+    <description><![CDATA[<p>It is November again! THe usual plan is to have a <code>NixOS-.25.11</code> release
+on 30th (<a href="https://github.com/NixOS/nixpkgs/issues/443568">full schedule</a>).</p>
+<p>Yesterday the schedule got to
+<a href="https://github.com/NixOS/nixpkgs/issues/457852"><code>ZHF phase</code></a> where no
+major changes are accepted to <code>master</code> branch and the focus is on fixing
+build failures</p>
+<p>It’s a good time to fix easy build failures or remove long broken
+packages. <a href="https://github.com/NixOS/nixpkgs/issues/457852" class="uri">https://github.com/NixOS/nixpkgs/issues/457852</a> contains
+detailed step-by-step to identify interesting packages.</p>
+<p>This year <code>nixpkgs</code> has especially large list of failures to sort out.
+It feels like most build failures are either <code>cmake-4</code> or <code>qt-6.10</code>
+related.</p>
+<h2 id="an-example-package-fix">an example package fix</h2>
+<p>Let’s try to fix a single package for <code>ZHF</code>. I’ll pick the
+<a href="https://hydra.nixos.org/build/310538459"><code>diskscan</code></a>. It’s build log
+is typical of <code>cmake-4</code> failure:</p>
+<pre><code>...
+CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake &lt; 3.5 has been removed from CMake.
+
+  Update the VERSION argument &lt;min&gt; value.  Or, use the &lt;min&gt;...&lt;max&gt; syntax
+  to tell CMake that the project requires at least &lt;min&gt; but has been updated
+  to work with policies introduced by &lt;max&gt; or earlier.
+
+  Or, add -DCMAKE_POLICY_VERSION_MINIMUM=3.5 to try configuring anyway.</code></pre>
+<p>I know little to nothing about <code>cmake</code>. But this failure is the result
+of <code>cmake</code> dropping support for pre-<code>cmake-3.5</code> behavior. Chances are
+upstream already fixed the problem and we can use the patch as is.</p>
+<p>Let’s find the source repository by inspecting the package’s definition:</p>
+<pre><code>$ EDITOR=cat nix edit -f '&lt;nixpkgs&gt;' diskscan</code></pre>
+<pre class="nix"><code>{
+  lib,
+  stdenv,
+  fetchFromGitHub,
+  cmake,
+  ncurses,
+  zlib,
+}:
+
+stdenv.mkDerivation rec {
+  pname = &quot;diskscan&quot;;
+  version = &quot;0.21&quot;;
+
+  src = fetchFromGitHub {
+    owner = &quot;baruch&quot;;
+    repo = &quot;diskscan&quot;;
+    rev = version;
+    sha256 = &quot;sha256-2y1ncPg9OKxqImBN5O5kXrTsuwZ/Cg/8exS7lWyZY1c=&quot;;
+  };
+
+  buildInputs = [
+    ncurses
+    zlib
+  ];
+
+  nativeBuildInputs = [ cmake ];
+
+  meta = with lib; {
+    homepage = &quot;https://github.com/baruch/diskscan&quot;;
+    description = &quot;Scan HDD/SSD for failed and near failed sectors&quot;;
+    platforms = with platforms; linux;
+    maintainers = with maintainers; [ peterhoeg ];
+    license = licenses.gpl3;
+    mainProgram = &quot;diskscan&quot;;
+  };
+}</code></pre>
+<p>Easy! <a href="https://github.com/baruch/diskscan" class="uri">https://github.com/baruch/diskscan</a> displayed nothing related to
+<code>cmake-4</code> fix. Let’s write one! Trying to reproduce the failure locally
+against upstream <code>master</code> branch:</p>
+<pre><code>$ git clone https://github.com/baruch/diskscan
+$ cd diskscan
+
+$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; diskscan.overrideAttrs (oa: { src = builtins.fetchGit ./.; })' -L
+...
+diskscan&gt; CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+diskscan&gt;   Compatibility with CMake &lt; 3.5 has been removed from CMake.</code></pre>
+<p>Yay! Same failure! For this particular case the fix is trivial:</p>
+<pre class="diff"><code>--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 3.0.2)
++cmake_minimum_required(VERSION 3.10)
+ project(diskscan
+         VERSION 0.19)
+</code></pre>
+<p>Testing the fix:</p>
+<pre><code>$ nix build --impure --expr 'with import &lt;nixpkgs&gt; {}; diskscan.overrideAttrs (oa: { src = builtins.fetchGit ./.; })' -L
+warning: Git tree '/tmp/diskscan' is dirty
+# done!
+
+$ find result/
+result/
+result/bin
+result/bin/diskscan
+result/share
+result/share/man
+result/share/man/man1
+result/share/man/man1/diskscan.1.gz</code></pre>
+<p>You can run the result and see if it does what’s expected. I proposed
+this trivial fix upstream as <a href="https://github.com/baruch/diskscan/pull/77"><code>PR#77</code></a>.</p>
+<p>Now we can use that to craft the <code>nixpkgs</code> fix! Let’s check if the bug
+is still there:</p>
+<pre><code>$ git clone https://github.com/NixOS/nixpkgs
+$ cd nixpkgs
+
+$ nix build -f. diskscan -L
+...
+diskscan&gt; CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+diskscan&gt;   Compatibility with CMake &lt; 3.5 has been removed from CMake.</code></pre>
+<p>Still there. Crafting the patch against <code>nixpkgs</code>:</p>
+<pre class="diff"><code>--- a/pkgs/by-name/di/diskscan/package.nix
++++ b/pkgs/by-name/di/diskscan/package.nix
+@@ -2,6 +2,7 @@
+   lib,
+   stdenv,
+   fetchFromGitHub,
++  fetchpatch,
+   cmake,
+   ncurses,
+   zlib,
+@@ -18,6 +19,16 @@ stdenv.mkDerivation rec {
+     sha256 = &quot;sha256-2y1ncPg9OKxqImBN5O5kXrTsuwZ/Cg/8exS7lWyZY1c=&quot;;
+   };
+
++  patches = [
++    # cmake-4 support:
++    #   https://github.com/baruch/diskscan/pull/77
++    (fetchpatch {
++      name = &quot;cmake-4.patch&quot;;
++      url = &quot;https://github.com/baruch/diskscan/commit/6e342469dcab32be7a33109a4d394141d5c905b5.patch?full_index=1&quot;;
++      hash = &quot;sha256-05ctYPmGWTJRUc4aN35fvb0ITwIZlQdIweH7tSQ0RjA=&quot;;
++    })
++  ];
++
+   buildInputs = [
+     ncurses
+     zlib</code></pre>
+<p>And testing the build:</p>
+<pre><code>$ nix build -f. diskscan -L
+...
+
+$ find result/
+result/
+result/bin
+result/bin/diskscan
+result/share
+result/share/man
+result/share/man/man1
+result/share/man/man1/diskscan.1.gz</code></pre>
+<p>All good! Proposed the fix as
+<a href="https://github.com/NixOS/nixpkgs/pull/458258"><code>PR#458258</code></a>.</p>
+<h2 id="parting-words">parting words</h2>
+<p>If you are thinking to contribute to <code>nixpkgs</code> and never did <code>ZHF</code> is a
+good time to start!</p>
+<p><code>cmake-4</code> set of failures has it’s own seemingly infinite list of
+<a href="https://github.com/NixOS/nixpkgs/issues/445447">failures</a> waiting to be
+fixed just like the example above.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Mon, 03 Nov 2025 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/342-Zero-Hydra-Failures-towards-25.11-NixOS-release.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>AoC of 2024</title>
     <link>https://trofi.github.io/posts/341-AoC-of-2024.html</link>
     <description><![CDATA[<p>Almost a year later I finally finished <code>AoC</code> 2024:
@@ -4849,1367 +5014,6 @@ report! So quick!</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Sat, 18 May 2024 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/313-highway-debugging-example.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>the sagemath saga</title>
-    <link>http://trofi.github.io/posts/312-the-sagemath-saga.html</link>
-    <description><![CDATA[<p>It’s a story of me was
-<a href="https://fosstodon.org/@sheerluck@misskey.io/112372289317724185">nerd sniped</a>
-by <code>@sheerluck@misskey.io</code> with <a href="https://gcc.gnu.org/PR114872"><code>PR114872</code></a>.
-I spent this week having fun with a rare kind of bug: <code>gcc</code> was suspected
-to have a bug that causes <code>sagemath</code> to crash with <code>SIGSEGV</code> on certain
-inputs.</p>
-<p>Ideally <code>sage</code> should not <code>SIGSEGV</code> on problematic inputs and should
-instead print reasonable backtraces. At least printing a nicer error
-message should not be hard, should it?</p>
-<h2 id="the-symptom">The symptom</h2>
-<p>The report said that a simple session caused <code>sage</code> tool from <code>sagemath</code>
-package to <code>SIGSEGV</code>:</p>
-<pre><code>$ sage
-sage: libgap.AbelianGroup(0,0,0)
-
-...
-Segmentation fault (core dumped)</code></pre>
-<p><code>sage</code> is an <code>ipython</code> <code>REPL</code> with a bunch of bindings for math
-libraries like <a href="https://www.gap-system.org/"><code>GAP</code></a>.
-It is said that the bug happens only when <code>sagemath</code> is built against
-<code>python-3.12</code> while <code>python-3.11</code> would work without the problems.
-Normally it would be a strong hint of a <code>sagemath</code> bug. But the reporter
-suspected it’s a <code>gcc</code> problem as building <code>sage</code> with <code>-O1</code> made the
-bug go away. Thus, the bug is at least dependent on generated code and is
-likely not just a logic bug.</p>
-<p><strong>Quick quiz: where do you think the bug lies?</strong> In <code>gcc</code>, <code>sagemath</code> or
-somewhere else? And while at it: what is the cause of the bug?
-Use-after-free, use of uninitialized data, logic bug or maybe something
-else?</p>
-<h2 id="the-first-reproducer-attempt-nixpkgs-package">The first reproducer attempt: <code>nixpkgs</code> package</h2>
-<p>I tried to reproduce the bug by building <code>sage</code> from <code>nxipkgs</code>. As
-expected <code>sage</code> built against <code>python-3.11</code> worked just fine.
-<code>python-3.11</code> is a <code>nixpkgs</code> default. I tried to flip the default to
-<code>python-3.12</code> with this local change:</p>
-<pre class="diff"><code>--- a/pkgs/top-level/all-packages.nix
-+++ b/pkgs/top-level/all-packages.nix
-@@ -17505 +17505 @@ with pkgs;
--  python3 = python311;
-+  python3 = python312;
-@@ -17509 +17509 @@ with pkgs;
--  python3Packages = dontRecurseIntoAttrs python311Packages;
-+  python3Packages = dontRecurseIntoAttrs python312Packages;</code></pre>
-<p>Building it did not work as is:</p>
-<pre><code>$ nix build -f. sage
-...
-
-error: ipython-genutils-0.2.0 not supported for interpreter python3.12
-
-error: nose-1.3.7 not supported for interpreter python3.12
-
-&gt; src/gmpy2_convert_gmp.c:464:76: error: ‘PyLongObject’ {aka ‘struct _longobject’} has no member named ‘ob_digit’
-&gt;   464 |                    sizeof(templong-&gt;ob_digit[0])*8 - PyLong_SHIFT, templong-&gt;ob_digit);
-&gt;       |                                                                            ^~
-&gt; error: command '/nix/store/8mjb3ziimfi3rki71q4s0916xkm4cm5p-gcc-wrapper-13.2.0/bin/gcc' failed with exit code 1
-&gt; /nix/store/558iw5j1bk7z6wrg8cp96q2rx03jqj1v-stdenv-linux/setup: line 1579: pop_var_context: head of shell_variables not a function context
-For full logs, run 'nix log /nix/store/g7mf3p2cylf74j3ypq2ifcspx61isb36-python3.12-gmpy2-2.1.2.drv'.
-
-&gt; ModuleNotFoundError: No module named 'distutils'
-&gt; configure: error: Python explicitly requested and python headers were not found
-For full logs, run 'nix log /nix/store/xyd63v16k1krblcfypfn5bs6jqbj9lwd-audit-3.1.2.drv'.</code></pre>
-<p>The above told me that some dependencies (at least in <code>nixpkgs</code>) are not
-ready for <code>python-3.12</code>:</p>
-<ul>
-<li><code>nose</code> and <code>ipython-genutils</code> are explicitly disabled for <code>python-3.12</code>
-in <code>nixpkgs</code></li>
-<li><code>gmpy2</code> and <code>audit</code> just fail to build for API changes in <code>python</code>
-itself</li>
-</ul>
-<p><code>gmpy2</code> specifically has an open
-<a href="https://github.com/aleaxit/gmpy/issues/446">upstream report</a>
-to add support for <code>python-3.12</code>. This means distributions have to apply
-not yet upstreamed changes to get earlier <code>python-3.12</code> support.</p>
-<p>All the above means that porting fixes are sometimes not trivial and
-might vary from a distribution to distribution if they want to get
-<code>python-3.12</code> tested earlier.
-I did not feel confident to patch at least 4 <code>python</code> libraries to get
-<code>sagemath</code> to build. I switched the tactic to reproduce the bug on the
-system reporters were using and to explore it there.
-Original reporter used Arch Linux to reproduce the failure. Another user
-<a href="https://github.com/sagemath/sage/pull/36407#issuecomment-2093792864">reported</a>
-that <code>Gentoo</code> users also seen the similar problem.</p>
-<h2 id="the-second-reproducer-attempt-gentoo-package-from-sage-on-gentoo">The second reproducer attempt: <code>Gentoo</code> package from <code>::sage-on-gentoo</code></h2>
-<p>I had a <code>Gentoo</code> <code>chroot</code> lying around for <code>nix</code> packaging testing. I
-tried to reproduce <code>sagemath</code> failure there by using
-<a href="https://github.com/cschwan/sage-on-gentoo"><code>::sage-on-gentoo</code></a> overlay.
-Unfortunately neither latest release of <code>sagemath-standard-10.3</code> nor
-<code>sagemath-standard-9999</code> <code>git</code> versions did build for me as is. I filed
-2 bugs:</p>
-<ul>
-<li><a href="https://github.com/cschwan/sage-on-gentoo/issues/783"><code>cschwan/sage-on-gentoo#783</code></a>: <code>=sci-mathematics/sagemath-standard-10.3</code> fails as: <code>AttributeError: Can't pickle local object '_prepare_extension_detection.&lt;locals&gt;.&lt;lambda&gt;'</code></li>
-<li><a href="https://github.com/cschwan/sage-on-gentoo/issues/784"><code>cschwan/sage-on-gentoo#784</code></a>: <code>=sci-mathematics/sage_setup-9999</code> fails as: <code>tar (child): sage-setup-*.tar.gz: Cannot open: No such file or directory</code></li>
-</ul>
-<p>I hoped that <code>pickle</code> failure was fixed in latest <code>git</code> and I could avoid
-the second pickle bug by using it.
-At least the <code>tar</code> failure looked like a packaging issue:</p>
-<pre><code># ACCEPT_KEYWORDS='**' USE=text emerge -av1 sagemath-standard
-...
-tar (child): sage-setup-*.tar.gz: Cannot open: No such file or directory
-tar (child): Error is not recoverable: exiting now
-tar: Child returned status 2
-tar: Error is not recoverable: exiting now
- * ERROR: sci-mathematics/sage_setup-9999::sage-on-gentoo failed (unpack phase):
-...</code></pre>
-<p>François Bissey promptly
-<a href="https://github.com/cschwan/sage-on-gentoo/commit/cc57aef4021bf673d02d20bd483b2708f9336f63">fixed</a>
-<code>tar</code> failure! Unfortunately that did not fix the <code>pickle</code> bug in
-<code>sagemath-standard-9999</code> for me and it started failing just like <code>sagemath-standard-10.3</code>:</p>
-<pre><code># emerge -av1 sagemath-standard
-...
-AttributeError: Can't pickle local object '_prepare_extension_detection.&lt;locals&gt;.&lt;lambda&gt;'</code></pre>
-<p>Surprisingly not everyone saw that problem and some people were able to
-build the packages just fine. Day later I explored where
-<code>_prepare_extension_detection</code> comes from and I was able to find a
-<a href="https://github.com/cschwan/sage-on-gentoo/issues/783#issuecomment-2095500118">surprising workaround</a>:
-I needed to uninstall completely unrelated <code>scikit-build-core</code> <code>python</code>
-package that happened to be present in my system. <code>scikit-build-core</code> is
-not used by <code>sagemath-standard</code> neither directly nor indirectly. But
-somehow <a href="https://github.com/scikit-build/scikit-build-core/blob/f6ed5a28fc85e621b03d984011d17def888ee0db/src/scikit_build_core/setuptools/build_cmake.py#L183">it’s code</a> injected
-the extra attributes to <code>cmake</code>-based package builds and failed the build.</p>
-<p>At least I finally got <code>sage</code> tool in my <code>$PATH</code>!
-I took me two evenings to get <code>sagemath</code> to build. At last I could look
-at the crash now.</p>
-<h2 id="exploring-the-crash">Exploring the crash</h2>
-<p><code>sage</code> is a python program. It has a default handler that executes <code>gdb</code>
-at crash time. Unfortunately it does not work on <code>Gentoo</code>:</p>
-<pre><code>Attaching gdb to process id 1023.
-Traceback (most recent call last):
-  File &quot;/usr/lib/python-exec/python3.12/cysignals-CSI&quot;, line 225, in &lt;module&gt;
-    main(args)
-  File &quot;/usr/lib/python-exec/python3.12/cysignals-CSI&quot;, line 174, in main
-    trace = run_gdb(args.pid, not args.nocolor)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File &quot;/usr/lib/python-exec/python3.12/cysignals-CSI&quot;, line 98, in run_gdb
-    stdout, stderr = cmd.communicate(gdb_commands(pid, color))
-                                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  File &quot;/usr/lib/python-exec/python3.12/cysignals-CSI&quot;, line 71, in gdb_commands
-    with open(script, 'rb') as f:
-         ^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: '/usr/lib/python-exec/python3.12/../share/cysignals/cysignals-CSI-helper.py'</code></pre>
-<p>Missing <code>cysignals-CSI-helper.py</code> file at the expected location is a
-case of <a href="https://bugs.gentoo.org/927767">packaging error</a>. <code>Gentoo</code> uses
-very unusual path to python launcher and breaks too simplistic
-<code>argv[0]+"/../share"</code> path construction used in <code>cysignals</code>. Adding a
-few more <code>"../../../"</code> should do as a workaround.
-I was able to work around <code>gdb</code> launch failure by attaching <code>gdb</code> to
-already running process before pasting the problematic command into the
-<code>REPL</code>:</p>
-<pre><code># gdb --quiet -p `pgrep sage-ipython`
-Attaching to process 1060
-[New LWP 1082]
-[New LWP 1083]
-[Thread debugging using libthread_db enabled]
-Using host libthread_db library &quot;/lib64/libthread_db.so.1&quot;.
-0x00007fedba181256 in epoll_wait (epfd=5, events=events@entry=0x7fed57127590, maxevents=maxevents@entry=2,
-    timeout=timeout@entry=500) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
-30        return SYSCALL_CANCEL (epoll_wait, epfd, events, maxevents, timeout);</code></pre>
-<p>To get more details from the crash site I ran <code>continue</code> in <code>gdb</code> and
-typed the trigger expression: <code>libgap.AbelianGroup(0,0,0)</code>.
-To my surprise I got not a <code>SIGSEGV</code> but a <code>SIGABRT</code>:</p>
-<pre><code>(gdb) continue
-Continuing.
-[Thread 0x7fed56e006c0 (LWP 1083) exited]
-[Detaching after vfork from child process 1105]
-
-Thread 1 &quot;sage-ipython&quot; received signal SIGABRT, Aborted.
-0x00007fedba0b97a7 in __GI_kill () at ../sysdeps/unix/syscall-template.S:120
-120     T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)</code></pre>
-<p>The default signal handler for <code>SIGABRT</code> normally crashes the process
-and generates a core dump. <code>sagemath</code> installs <code>SIGABRT</code> handler (via
-<code>cysignals</code> library) to report and recover from some errors like argument
-type errors in the interpreter session.
-<code>gdb</code> always intercepts <code>SIGABRT</code> before executing the handler. Thus, I
-needed to explicitly continue execution in <code>gdb</code> session:</p>
-<pre><code>(gdb) continue
-Continuing.
-
-Thread 1 &quot;sage-ipython&quot; received signal SIGSEGV, Segmentation fault.
-0x00007fed5d13956f in _Py_IsImmortal (op=0x0) at /usr/include/python3.12/object.h:242
-242         return _Py_CAST(PY_INT32_T, op-&gt;ob_refcnt) &lt; 0;</code></pre>
-<p>Yay! I got the <code>SIGSEGV</code>!</p>
-<p>A simple <code>NULL</code> dereference. What could be easier to debug? Just check
-where it was set to <code>NULL</code> and do something about it, right?
-First thing I wondered about is how does <code>SIGABRT</code> handler look like? It
-was an idle curiosity. I expected to see some simple global variable tweak.
-Alas what I found was <a href="https://github.com/sagemath/cysignals/blob/035ed1605a8741a6f265a55cc682b26ea6e5d1c2/src/cysignals/implementation.c#L279"><code>longjmp()</code></a>:</p>
-<pre class="c"><code>static void cysigs_interrupt_handler(int sig)
-{
-...
-    if (cysigs.sig_on_count &gt; 0)
-    {
-        if (!cysigs.block_sigint &amp;&amp; !PARI_SIGINT_block &amp;&amp; !custom_signal_is_blocked())
-        {
-            /* Raise an exception so Python can see it */
-            do_raise_exception(sig);
-
-            /* Jump back to sig_on() (the first one if there is a stack) */
-            siglongjmp(trampoline, sig);
-        }
-    }
-...
-}</code></pre>
-<p>One has to be
-<a href="https://trofi.github.io/posts/188-grub-0.97-and-gcc-4.9.html">very</a>
-<a href="https://trofi.github.io/posts/205-stack-protection-on-mips64.html">careful</a>
-with <code>setjmp()</code> / <code>longjmp()</code>.</p>
-<h2 id="the-example-setjmp-longjmp-failure-mode">The example <code>setjmp()</code> / <code>longjmp()</code> failure mode</h2>
-<p>The <code>C</code> standard has a few constructs that don’t mix well with <code>C</code>
-abstract machine. <code>setjmp()</code> / <code>longjmp()</code> is one of those. It’s a
-frequent source of subtle and latent bugs.
-In theory <code>setjmp()</code> / <code>longjmp()</code> is a portable way to save and restore
-the execution at a certain point in the program. It’s a non-local
-<code>goto</code>. It is very powerful: you can jump from a few nested calls with
-a <code>longjmp()</code> back to where you called <code>setjmp()</code>. In practice one has
-to be very careful to get something that works most of the time.</p>
-<p>Let’s look at a contrived and <strong>intentionally buggy</strong> example:</p>
-<pre class="c"><code>// $ cat a.c
-#include &lt;assert.h&gt;
-#include &lt;setjmp.h&gt;
-#include &lt;stdio.h&gt;
-
-static jmp_buf jb;
-
-__attribute__((noipa)) static int foo(void) {
-    int a = 0;
-    int r = setjmp(jb); // r = 0 initially, r = 1 after longjmp()
-
-    a += 1; // gets executed twice, but the compiler does not know it!
-
-    if (!r) longjmp(jb, 1); // execute it just once
-
-    return a;
-}
-
-int main(void) {
-    int r = foo();
-    printf(&quot;foo() = %d (expect 2)\n&quot;, r);
-    assert(r == 2);
-    return 0;
-}</code></pre>
-<p>Here we execute <code>foo()</code> function once and use <code>longjmp()</code> to return to
-<code>setjmp()</code> (also just once). As a result we should execute <code>a += 1;</code>
-statement twice:</p>
-<ul>
-<li>once during natural <code>foo()</code> execution</li>
-<li>once via “hidden” jump via <code>longjmp()</code> call to <code>setjmp()</code>
-location.</li>
-</ul>
-<p>I’m using <code>__attribute__((noipa))</code> to keep <code>foo()</code> from being inlined
-into <code>main()</code> to ease <code>foo()</code> code exploration.</p>
-<p>The test against the unoptimized build confirms that <code>a += 1</code> gets
-executed twice:</p>
-<pre><code>$ gcc a.c -o a -O0 &amp;&amp; ./a
-foo() = 2 (expect 2)</code></pre>
-<p>Assembly output shows the expected code:</p>
-<pre class="asm"><code>; $ gdb ./a
-; (gdb) disassemble foo
-Dump of assembler code for function foo:
-   &lt;+0&gt;:     push   %rbp
-   &lt;+1&gt;:     mov    %rsp,%rbp
-   &lt;+4&gt;:     sub    $0x10,%rsp
-   &lt;+8&gt;:     movl   $0x0,-0x8(%rbp)
-   &lt;+15&gt;:    lea    0x2ed4(%rip),%rax        # 0x404040 &lt;jb&gt;
-   &lt;+22&gt;:    mov    %rax,%rdi
-   &lt;+25&gt;:    call   0x401050 &lt;_setjmp@plt&gt; // setjmp();
-   &lt;+30&gt;:    mov    %eax,-0x4(%rbp)
-   &lt;+33&gt;:    addl   $0x1,-0x8(%rbp)        // a += 1;
-   &lt;+37&gt;:    cmpl   $0x0,-0x4(%rbp)        // if (!r) ...
-   &lt;+41&gt;:    jne    0x401195 &lt;foo+63&gt;
-   &lt;+43&gt;:    mov    $0x1,%esi
-   &lt;+48&gt;:    lea    0x2eb3(%rip),%rax        # 0x404040 &lt;jb&gt;
-   &lt;+55&gt;:    mov    %rax,%rdi
-   &lt;+58&gt;:    call   0x401060 &lt;longjmp@plt&gt; // longjmp();
-   &lt;+63&gt;:    mov    -0x8(%rbp),%eax
-   &lt;+66&gt;:    leave
-   &lt;+67&gt;:    ret                           // return a;</code></pre>
-<p>It’s a linear code with a single explicit branch to skip <code>longjmp()</code> call.
-Looks easy?</p>
-<p>Now let’s optimize it:</p>
-<pre><code>$ gcc a.c -o a -O2 &amp;&amp; ./a
-foo() = 1 (expect 2)
-a: a.c:21: main: Assertion `r == 2' failed.
-Aborted (core dumped)</code></pre>
-<p>Whoops. <code>foo() = 1</code> output suggests that <code>a</code> was incremented only once.
-Let’s look at the generated code to get the idea of what happened:</p>
-<pre class="asm"><code>; $ gdb ./a
-; (gdb) disassemble foo
-Dump of assembler code for function foo:
-   &lt;+0&gt;:     sub    $0x8,%rsp
-   &lt;+4&gt;:     lea    0x2e85(%rip),%rdi        # 0x404040 &lt;jb&gt;
-   &lt;+11&gt;:    call   0x401040 &lt;_setjmp@plt&gt;
-   &lt;+16&gt;:    test   %eax,%eax              // if (!r) ...
-   &lt;+18&gt;:    je     0x4011ce &lt;foo+30&gt;
-   &lt;+20&gt;:    mov    $0x1,%eax              // a = 1;
-   &lt;+25&gt;:    add    $0x8,%rsp
-   &lt;+29&gt;:    ret                           // return a
-   &lt;+30&gt;:    mov    $0x1,%esi
-   &lt;+35&gt;:    lea    0x2e66(%rip),%rdi        # 0x404040 &lt;jb&gt;
-   &lt;+42&gt;:    call   0x401060 &lt;__longjmp_chk@plt&gt;</code></pre>
-<p>Nothing prevented <code>gcc</code> from transforming the original <code>foo()</code> into this
-simpler form:</p>
-<pre class="c"><code>// ...
-__attribute__((noipa)) static int foo(void) {
-    int r = setjmp(jb); // r = 0 initially, r = 1 after longjmp()
-    if (!r) longjmp(jb, 1);
-    int a = 1;          // moved `int a = 0;` here and merged into `a += 1;`.
-    return a;
-}
-// ...</code></pre>
-<p>Here <code>gcc</code> did quite a bit of code motion:</p>
-<ul>
-<li><code>gcc</code> moved <code>int a = 0;</code> assignment and an <code>a += 1;</code> increment after
-both <code>setjmp()</code> and <code>longjmp()</code>.</li>
-<li><code>gcc</code> merged <code>int a = 0;</code>, <code>a += 1;</code> and <code>return a;</code> into a single <code>return 1;</code>.</li>
-</ul>
-<p><strong>Note that <code>gcc</code> moved all <code>a</code> manipulation across <code>setjmp()</code> and even
-<code>longjmp()</code> boundaries</strong>. <code>setjmp()</code> is expected to be
-just a <code>C</code> function for <code>gcc</code>. <code>gcc</code> does not have to have any special
-knowledge about control flow semantics of those functions. Thus, this
-optimization transformation while completely breaking the original
-code’s intent is legitimate and expected.</p>
-<p><code>man 3 setjmp</code> covers exactly this case in <code>CAVEATS</code> section as:</p>
-<pre><code>CAVEATS
-  The compiler may optimize variables into registers, and longjmp() may
-  restore the values of other registers in addition to the stack pointer
-  and program counter. Consequently, the values of automatic variables
-  are unspecified after a call to longjmp() if they meet all the
-  following criteria:
-  •  they are local to the function that made the corresponding setjmp()
-     call;
-  •  their values are changed between the calls to setjmp() and
-     longjmp(); and
-  •  they are not declared as volatile.</code></pre>
-<p>It’s up to code author to adhere to these <code>CAVEATS</code>. Would be nice if
-the compiler would be able to warn about the violations in simpler cases
-though: <code>-flto</code> could expose large chunk of the control flow graph to
-the analyzer.</p>
-<p>Back to our broken example. One of the possible fixes here is to declare
-<code>a</code> as <code>volatile</code>:</p>
-<pre class="diff"><code>--- a.c.buggy   2024-05-09 23:14:54.383811692 +0100
-+++ a.c 2024-05-10 00:03:53.694219636 +0100
-@@ -7,3 +7,3 @@
- __attribute__((noipa)) static int foo(void) {
--    int a = 0;
-+    volatile int a = 0;
-     int r = setjmp(jb); // r = 0 initially, r = 1 after longjmp()</code></pre>
-<p>That would give us the following (correct) example:</p>
-<pre class="c"><code>#include &lt;assert.h&gt;
-#include &lt;setjmp.h&gt;
-#include &lt;stdio.h&gt;
-
-static jmp_buf jb;
-
-__attribute__((noipa)) static int foo(void) {
-    volatile int a = 0;
-    int r = setjmp(jb); // r = 0 initially, r = 1 after longjmp()
-
-    a += 1; // gets executed twice
-
-    if (!r) longjmp(jb, 1);
-
-    return a;
-}
-
-int main(void) {
-    int r = foo();
-    printf(&quot;foo() = %d (expect 2)\n&quot;, r);
-    assert(r == 2);
-}</code></pre>
-<p>Running:</p>
-<pre><code>$ gcc a.c -o a -O0 &amp;&amp; ./a
-foo() = 2 (expect 2)
-
-$ gcc a.c -o a -O2 &amp;&amp; ./a
-foo() = 2 (expect 2)</code></pre>
-<p>The execution confirms that both optimizations run the increment twice
-as intended. This is the generated code for completeness:</p>
-<pre class="asm"><code>; gdb ./a
-; (gdb) disassemble foo
-Dump of assembler code for function foo:
-   &lt;+0&gt;:     sub    $0x18,%rsp
-   &lt;+4&gt;:     lea    0x2e85(%rip),%rdi        # 0x404040 &lt;jb&gt;
-   &lt;+11&gt;:    movl   $0x0,0xc(%rsp)           // int a = 0;
-   &lt;+19&gt;:    call   0x401040 &lt;_setjmp@plt&gt;
-   &lt;+24&gt;:    mov    %eax,%edx
-   &lt;+26&gt;:    mov    0xc(%rsp),%eax           // load a from stack
-   &lt;+30&gt;:    add    $0x1,%eax                // a += 1;
-   &lt;+33&gt;:    mov    %eax,0xc(%rsp)           // store a on stack
-   &lt;+37&gt;:    test   %edx,%edx
-   &lt;+39&gt;:    je     0x4011e2 &lt;foo+50&gt;
-   &lt;+41&gt;:    mov    0xc(%rsp),%eax           // load a from stack
-   &lt;+45&gt;:    add    $0x18,%rsp
-   &lt;+49&gt;:    ret                             // return
-   &lt;+50&gt;:    mov    $0x1,%esi
-   &lt;+55&gt;:    lea    0x2e52(%rip),%rdi        # 0x404040 &lt;jb&gt;
-   &lt;+62&gt;:    call   0x401060 &lt;__longjmp_chk@plt&gt;</code></pre>
-<p>Note that use of <code>volatile</code> in <code>setjmp()</code> / <code>longjmp()</code> effectively
-inhibits completely reasonable compiler optimizations just to make loads
-and stores in generated code to match the order written in <code>C</code> source
-code for a given function.</p>
-<p>I wonder if adding <code>volatile</code> is enough for more heavyweight
-optimizations like <code>-flto</code> that enable even more code movement, constant
-propagation and stack reuse. The time will tell.</p>
-<h2 id="sagemath-use-of-setjmp-longjmp"><code>sagemath</code> use of <code>setjmp()</code> / <code>longjmp()</code></h2>
-<p>After I noticed <code>setjmp()</code> / <code>longjmp()</code> use in <code>sagemath</code> I wondered how
-many <code>volatile</code> keywords it has in the code where those were used.
-To my surprise it had none. That was a good hint in a sense that it
-looked like the problem we are dealing with. From that point I was
-reasonably sure it’s an application bug and not a <code>gcc</code> bug.
-Still, having the concrete corruption evidence would help to clear any
-doubts and would help the reporter to craft a fix for <code>sagemath</code>.</p>
-<p>The backtrace claimed that the crash happens in
-<code>__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__</code>
-function:</p>
-<pre><code>(gdb) continue
-Continuing.
-
-Thread 1 &quot;sage-ipython&quot; received signal SIGSEGV, Segmentation fault.
-0x00007feb544b756f in _Py_IsImmortal (op=0x0) at /usr/include/python3.12/object.h:242
-242         return _Py_CAST(PY_INT32_T, op-&gt;ob_refcnt) &lt; 0;
-(gdb) bt
-#0  0x00007feb544b756f in _Py_IsImmortal (op=0x0) at /usr/include/python3.12/object.h:242
-#1  Py_DECREF (op=0x0) at /usr/include/python3.12/object.h:700
-#2  Py_XDECREF (op=0x0) at /usr/include/python3.12/object.h:798
-#3  __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__ (
-    __pyx_v_self=__pyx_v_self@entry=0x7feb4e274f40,
-    __pyx_v_args=__pyx_v_args@entry=(&lt;sage.rings.integer.Integer at remote 0x7feb533456e0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd8c0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd620&gt;))
-    at /usr/src/debug/sci-mathematics/sagemath-standard-10.3/sagemath-standard-10.3-python3_12/build/cythonized/sage/libs/gap/element.c:26535
-...</code></pre>
-<p><code>"__pyx_"</code> prefix suggests it’s a function generated by
-<a href="https://cython.org/"><code>cython</code></a>, a python-style DSL for writing <code>C</code> part
-of code to create bindings for <code>C</code> libraries to be used in <code>python</code>
-libraries. In this case <code>sagemath</code> created bindings for <code>libgap</code>
-discrete algebra library.</p>
-<p>The <code>cython</code> code for a function we saw a <code>SIGSEGV</code> in looked
-<a href="https://github.com/sagemath/sage/blob/744939e037a67193e730d7205e612e2d58197fca/src/sage/libs/gap/element.pyx#L2504">this way</a>:</p>
-<pre class="python"><code>cdef class GapElement_Function(GapElement):
-    # ...
-    def __call__(self, *args):
-    # ...
-        cdef Obj result = NULL
-        cdef Obj arg_list
-        cdef int n = len(args)
-
-        if n &gt; 0 and n &lt;= 3:
-            libgap = self.parent()
-            a = [x if isinstance(x, GapElement) else libgap(x) for x in args]
-
-        try:
-            sig_GAP_Enter()
-            sig_on()
-            if n == 0:
-                result = GAP_CallFunc0Args(self.value)
-            elif n == 1:
-                result = GAP_CallFunc1Args(self.value,
-                                           (&lt;GapElement&gt;a[0]).value)
-            elif n == 2:
-                result = GAP_CallFunc2Args(self.value,
-                                           (&lt;GapElement&gt;a[0]).value,
-                                           (&lt;GapElement&gt;a[1]).value)
-            elif n == 3:
-                result = GAP_CallFunc3Args(self.value,
-                                           (&lt;GapElement&gt;a[0]).value,
-                                           (&lt;GapElement&gt;a[1]).value,
-                                           (&lt;GapElement&gt;a[2]).value)
-            else:
-                arg_list = make_gap_list(args)
-                result = GAP_CallFuncList(self.value, arg_list)
-            sig_off()
-        finally:
-            GAP_Leave()
-        if result == NULL:
-            # We called a procedure that does not return anything
-            return None
-        return make_any_gap_element(self.parent(), result)</code></pre>
-<p>Looks very straightforward. No <code>setjmp()</code> in sight yet, or is there?.</p>
-<p>WARNING: you are about to scroll through A Lot Of Code. You might want
-to skip the bulk it and return later The build system produces
-<code>element.c</code> with this contents:</p>
-<pre class="c"><code>#define sig_GAP_Enter() {int t = GAP_Enter(); if (!t) sig_error();}
-#define GAP_Enter() GAP_Error_Setjmp(); GAP_EnterStack()
-#define GAP_Error_Setjmp() \
-    (GAP_unlikely(GAP_Error_Prejmp_(__FILE__, __LINE__)) \
-     || GAP_Error_Postjmp_(_setjmp(*GAP_GetReadJmpError())))
-// ...
-static PyObject *__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__(struct __pyx_obj_4sage_4libs_3gap_7element_GapElement_Function *__pyx_v_self, PyObject *__pyx_v_args) {
-  Obj __pyx_v_result;
-  Obj __pyx_v_arg_list;
-  int __pyx_v_n;
-  PyObject *__pyx_v_libgap = NULL;
-  PyObject *__pyx_v_a = NULL;
-  PyObject *__pyx_8genexpr3__pyx_v_x = NULL;
-  PyObject *__pyx_r = NULL;
-  __Pyx_RefNannyDeclarations
-  Py_ssize_t __pyx_t_1;
-  int __pyx_t_2;
-  int __pyx_t_3;
-  PyObject *__pyx_t_4 = NULL;
-  PyObject *__pyx_t_5 = NULL;
-  PyObject *__pyx_t_6 = NULL;
-  int __pyx_t_7;
-  PyObject *__pyx_t_8 = NULL;
-  PyObject *__pyx_t_9 = NULL;
-  PyObject *__pyx_t_10 = NULL;
-  Obj __pyx_t_11;
-  int __pyx_t_12;
-  char const *__pyx_t_13;
-  PyObject *__pyx_t_14 = NULL;
-  PyObject *__pyx_t_15 = NULL;
-  PyObject *__pyx_t_16 = NULL;
-  PyObject *__pyx_t_17 = NULL;
-  PyObject *__pyx_t_18 = NULL;
-  PyObject *__pyx_t_19 = NULL;
-  int __pyx_lineno = 0;
-  const char *__pyx_filename = NULL;
-  int __pyx_clineno = 0;
-  __Pyx_RefNannySetupContext(&quot;__call__&quot;, 1);
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2504
- *             hello from the shell
- *         &quot;&quot;&quot;
- *         cdef Obj result = NULL             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *         cdef Obj arg_list
- *         cdef int n = len(args)
- */
-  __pyx_v_result = NULL;
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2506
- *         cdef Obj result = NULL
- *         cdef Obj arg_list
- *         cdef int n = len(args)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- * 
- *         if n &gt; 0 and n &lt;= 3:
- */
-  __pyx_t_1 = __Pyx_PyTuple_GET_SIZE(__pyx_v_args); if (unlikely(__pyx_t_1 == ((Py_ssize_t)-1))) __PYX_ERR(0, 2506, __pyx_L1_error)
-  __pyx_v_n = __pyx_t_1;
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2508
- *         cdef int n = len(args)
- * 
- *         if n &gt; 0 and n &lt;= 3:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             libgap = self.parent()
- *             a = [x if isinstance(x, GapElement) else libgap(x) for x in args]
- */
-  __pyx_t_3 = (__pyx_v_n &gt; 0);
-  if (__pyx_t_3) {
-  } else {
-    __pyx_t_2 = __pyx_t_3;
-    goto __pyx_L4_bool_binop_done;
-  }
-  __pyx_t_3 = (__pyx_v_n &lt;= 3);
-  __pyx_t_2 = __pyx_t_3;
-  __pyx_L4_bool_binop_done:;
-  if (__pyx_t_2) {
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2509
- * 
- *         if n &gt; 0 and n &lt;= 3:
- *             libgap = self.parent()             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             a = [x if isinstance(x, GapElement) else libgap(x) for x in args]
- * 
- */
-    __pyx_t_5 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_self), __pyx_n_s_parent); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 2509, __pyx_L1_error)
-    __Pyx_GOTREF(__pyx_t_5);
-    __pyx_t_6 = NULL;
-    __pyx_t_7 = 0;
-    #if CYTHON_UNPACK_METHODS
-    if (likely(PyMethod_Check(__pyx_t_5))) {
-      __pyx_t_6 = PyMethod_GET_SELF(__pyx_t_5);
-      if (likely(__pyx_t_6)) {
-        PyObject* function = PyMethod_GET_FUNCTION(__pyx_t_5);
-        __Pyx_INCREF(__pyx_t_6);
-        __Pyx_INCREF(function);
-        __Pyx_DECREF_SET(__pyx_t_5, function);
-        __pyx_t_7 = 1;
-      }
-    }
-    #endif
-    {
-      PyObject *__pyx_callargs[2] = {__pyx_t_6, NULL};
-      __pyx_t_4 = __Pyx_PyObject_FastCall(__pyx_t_5, __pyx_callargs+1-__pyx_t_7, 0+__pyx_t_7);
-      __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;
-      if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2509, __pyx_L1_error)
-      __Pyx_GOTREF(__pyx_t_4);
-      __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
-    }
-    __pyx_v_libgap = __pyx_t_4;
-    __pyx_t_4 = 0;
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2510
- *         if n &gt; 0 and n &lt;= 3:
- *             libgap = self.parent()
- *             a = [x if isinstance(x, GapElement) else libgap(x) for x in args]             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- * 
- *         try:
- */
-    { /* enter inner scope */
-      __pyx_t_4 = PyList_New(0); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2510, __pyx_L8_error)
-      __Pyx_GOTREF(__pyx_t_4);
-      __pyx_t_5 = __pyx_v_args; __Pyx_INCREF(__pyx_t_5);
-      __pyx_t_1 = 0;
-      for (;;) {
-        {
-          Py_ssize_t __pyx_temp = __Pyx_PyTuple_GET_SIZE(__pyx_t_5);
-          #if !CYTHON_ASSUME_SAFE_MACROS
-          if (unlikely((__pyx_temp &lt; 0))) __PYX_ERR(0, 2510, __pyx_L8_error)
-          #endif
-          if (__pyx_t_1 &gt;= __pyx_temp) break;
-        }
-        #if CYTHON_ASSUME_SAFE_MACROS &amp;&amp; !CYTHON_AVOID_BORROWED_REFS
-        __pyx_t_6 = PyTuple_GET_ITEM(__pyx_t_5, __pyx_t_1); __Pyx_INCREF(__pyx_t_6); __pyx_t_1++; if (unlikely((0 &lt; 0))) __PYX_ERR(0, 2510, __pyx_L8_error)
-        #else
-        __pyx_t_6 = __Pyx_PySequence_ITEM(__pyx_t_5, __pyx_t_1); __pyx_t_1++; if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 2510, __pyx_L8_error)
-        __Pyx_GOTREF(__pyx_t_6);
-        #endif
-        __Pyx_XDECREF_SET(__pyx_8genexpr3__pyx_v_x, __pyx_t_6);
-        __pyx_t_6 = 0;
-        __pyx_t_2 = __Pyx_TypeCheck(__pyx_8genexpr3__pyx_v_x, __pyx_ptype_4sage_4libs_3gap_7element_GapElement); 
-        if (__pyx_t_2) {
-          __Pyx_INCREF(__pyx_8genexpr3__pyx_v_x);
-          __pyx_t_6 = __pyx_8genexpr3__pyx_v_x;
-        } else {
-          __Pyx_INCREF(__pyx_v_libgap);
-          __pyx_t_9 = __pyx_v_libgap; __pyx_t_10 = NULL;
-          __pyx_t_7 = 0;
-          #if CYTHON_UNPACK_METHODS
-          if (unlikely(PyMethod_Check(__pyx_t_9))) {
-            __pyx_t_10 = PyMethod_GET_SELF(__pyx_t_9);
-            if (likely(__pyx_t_10)) {
-              PyObject* function = PyMethod_GET_FUNCTION(__pyx_t_9);
-              __Pyx_INCREF(__pyx_t_10);
-              __Pyx_INCREF(function);
-              __Pyx_DECREF_SET(__pyx_t_9, function);
-              __pyx_t_7 = 1;
-            }
-          }
-          #endif
-          {
-            PyObject *__pyx_callargs[2] = {__pyx_t_10, __pyx_8genexpr3__pyx_v_x};
-            __pyx_t_8 = __Pyx_PyObject_FastCall(__pyx_t_9, __pyx_callargs+1-__pyx_t_7, 1+__pyx_t_7);
-            __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-            if (unlikely(!__pyx_t_8)) __PYX_ERR(0, 2510, __pyx_L8_error)
-            __Pyx_GOTREF(__pyx_t_8);
-            __Pyx_DECREF(__pyx_t_9); __pyx_t_9 = 0;
-          }
-          __pyx_t_6 = __pyx_t_8;
-          __pyx_t_8 = 0;
-        }
-        if (unlikely(__Pyx_ListComp_Append(__pyx_t_4, (PyObject*)__pyx_t_6))) __PYX_ERR(0, 2510, __pyx_L8_error)
-        __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
-      }
-      __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
-      __Pyx_XDECREF(__pyx_8genexpr3__pyx_v_x); __pyx_8genexpr3__pyx_v_x = 0;
-      goto __pyx_L12_exit_scope;
-      __pyx_L8_error:;
-      __Pyx_XDECREF(__pyx_8genexpr3__pyx_v_x); __pyx_8genexpr3__pyx_v_x = 0;
-      goto __pyx_L1_error;
-      __pyx_L12_exit_scope:;
-    } /* exit inner scope */
-    __pyx_v_a = ((PyObject*)__pyx_t_4);
-    __pyx_t_4 = 0;
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2508
- *         cdef int n = len(args)
- * 
- *         if n &gt; 0 and n &lt;= 3:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             libgap = self.parent()
- *             a = [x if isinstance(x, GapElement) else libgap(x) for x in args]
- */
-  }
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2512
- *             a = [x if isinstance(x, GapElement) else libgap(x) for x in args]
- * 
- *         try:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             sig_GAP_Enter()
- *             sig_on()
- */
-  /*try:*/ {
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2513
- * 
- *         try:
- *             sig_GAP_Enter()             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             sig_on()
- *             if n == 0:
- */
-    sig_GAP_Enter();
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2514
- *         try:
- *             sig_GAP_Enter()
- *             sig_on()             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             if n == 0:
- *                 result = GAP_CallFunc0Args(self.value)
- */
-    __pyx_t_7 = sig_on(); if (unlikely(__pyx_t_7 == ((int)0))) __PYX_ERR(0, 2514, __pyx_L14_error)
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2515
- *             sig_GAP_Enter()
- *             sig_on()
- *             if n == 0:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                 result = GAP_CallFunc0Args(self.value)
- *             elif n == 1:
- */
-    switch (__pyx_v_n) {
-      case 0:
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2516
- *             sig_on()
- *             if n == 0:
- *                 result = GAP_CallFunc0Args(self.value)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             elif n == 1:
- *                 result = GAP_CallFunc1Args(self.value,
- */
-      __pyx_v_result = GAP_CallFunc0Args(__pyx_v_self-&gt;__pyx_base.value);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2515
- *             sig_GAP_Enter()
- *             sig_on()
- *             if n == 0:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                 result = GAP_CallFunc0Args(self.value)
- *             elif n == 1:
- */
-      break;
-      case 1:
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2519
- *             elif n == 1:
- *                 result = GAP_CallFunc1Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             elif n == 2:
- *                 result = GAP_CallFunc2Args(self.value,
- */
-      if (unlikely(!__pyx_v_a)) { __Pyx_RaiseUnboundLocalError(&quot;a&quot;); __PYX_ERR(0, 2519, __pyx_L14_error) }
-      __pyx_t_4 = __Pyx_GetItemInt_List(__pyx_v_a, 0, long, 1, __Pyx_PyInt_From_long, 1, 0, 1); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2519, __pyx_L14_error)
-      __Pyx_GOTREF(__pyx_t_4);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2518
- *                 result = GAP_CallFunc0Args(self.value)
- *             elif n == 1:
- *                 result = GAP_CallFunc1Args(self.value,             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                                            (&lt;GapElement&gt;a[0]).value)
- *             elif n == 2:
- */
-      __pyx_v_result = GAP_CallFunc1Args(__pyx_v_self-&gt;__pyx_base.value, ((struct __pyx_obj_4sage_4libs_3gap_7element_GapElement *)__pyx_t_4)-&gt;value);
-      __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2517
- *             if n == 0:
- *                 result = GAP_CallFunc0Args(self.value)
- *             elif n == 1:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                 result = GAP_CallFunc1Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value)
- */
-      break;
-      case 2:
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2522
- *             elif n == 2:
- *                 result = GAP_CallFunc2Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value,             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                                            (&lt;GapElement&gt;a[1]).value)
- *             elif n == 3:
- */
-      if (unlikely(!__pyx_v_a)) { __Pyx_RaiseUnboundLocalError(&quot;a&quot;); __PYX_ERR(0, 2522, __pyx_L14_error) }
-      __pyx_t_4 = __Pyx_GetItemInt_List(__pyx_v_a, 0, long, 1, __Pyx_PyInt_From_long, 1, 0, 1); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2522, __pyx_L14_error)
-      __Pyx_GOTREF(__pyx_t_4);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2523
- *                 result = GAP_CallFunc2Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value,
- *                                            (&lt;GapElement&gt;a[1]).value)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             elif n == 3:
- *                 result = GAP_CallFunc3Args(self.value,
- */
-      if (unlikely(!__pyx_v_a)) { __Pyx_RaiseUnboundLocalError(&quot;a&quot;); __PYX_ERR(0, 2523, __pyx_L14_error) }
-      __pyx_t_5 = __Pyx_GetItemInt_List(__pyx_v_a, 1, long, 1, __Pyx_PyInt_From_long, 1, 0, 1); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 2523, __pyx_L14_error)
-      __Pyx_GOTREF(__pyx_t_5);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2521
- *                                            (&lt;GapElement&gt;a[0]).value)
- *             elif n == 2:
- *                 result = GAP_CallFunc2Args(self.value,             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                                            (&lt;GapElement&gt;a[0]).value,
- *                                            (&lt;GapElement&gt;a[1]).value)
- */
-      __pyx_v_result = GAP_CallFunc2Args(__pyx_v_self-&gt;__pyx_base.value, ((struct __pyx_obj_4sage_4libs_3gap_7element_GapElement *)__pyx_t_4)-&gt;value, ((struct __pyx_obj_4sage_4libs_3gap_7element_GapElement *)__pyx_t_5)-&gt;value);
-      __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
-      __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2520
- *                 result = GAP_CallFunc1Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value)
- *             elif n == 2:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                 result = GAP_CallFunc2Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value,
- */
-      break;
-      case 3:
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2526
- *             elif n == 3:
- *                 result = GAP_CallFunc3Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value,             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                                            (&lt;GapElement&gt;a[1]).value,
- *                                            (&lt;GapElement&gt;a[2]).value)
- */
-      if (unlikely(!__pyx_v_a)) { __Pyx_RaiseUnboundLocalError(&quot;a&quot;); __PYX_ERR(0, 2526, __pyx_L14_error) }
-      __pyx_t_5 = __Pyx_GetItemInt_List(__pyx_v_a, 0, long, 1, __Pyx_PyInt_From_long, 1, 0, 1); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 2526, __pyx_L14_error)
-      __Pyx_GOTREF(__pyx_t_5);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2527
- *                 result = GAP_CallFunc3Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value,
- *                                            (&lt;GapElement&gt;a[1]).value,             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                                            (&lt;GapElement&gt;a[2]).value)
- *             else:
- */
-      if (unlikely(!__pyx_v_a)) { __Pyx_RaiseUnboundLocalError(&quot;a&quot;); __PYX_ERR(0, 2527, __pyx_L14_error) }
-      __pyx_t_4 = __Pyx_GetItemInt_List(__pyx_v_a, 1, long, 1, __Pyx_PyInt_From_long, 1, 0, 1); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2527, __pyx_L14_error)
-      __Pyx_GOTREF(__pyx_t_4);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2528
- *                                            (&lt;GapElement&gt;a[0]).value,
- *                                            (&lt;GapElement&gt;a[1]).value,
- *                                            (&lt;GapElement&gt;a[2]).value)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             else:
- *                 arg_list = make_gap_list(args)
- */
-      if (unlikely(!__pyx_v_a)) { __Pyx_RaiseUnboundLocalError(&quot;a&quot;); __PYX_ERR(0, 2528, __pyx_L14_error) }
-      __pyx_t_6 = __Pyx_GetItemInt_List(__pyx_v_a, 2, long, 1, __Pyx_PyInt_From_long, 1, 0, 1); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 2528, __pyx_L14_error)
-      __Pyx_GOTREF(__pyx_t_6);
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2525
- *                                            (&lt;GapElement&gt;a[1]).value)
- *             elif n == 3:
- *                 result = GAP_CallFunc3Args(self.value,             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                                            (&lt;GapElement&gt;a[0]).value,
- *                                            (&lt;GapElement&gt;a[1]).value,
- */
-      __pyx_v_result = GAP_CallFunc3Args(__pyx_v_self-&gt;__pyx_base.value, ((struct __pyx_obj_4sage_4libs_3gap_7element_GapElement *)__pyx_t_5)-&gt;value, ((struct __pyx_obj_4sage_4libs_3gap_7element_GapElement *)__pyx_t_4)-&gt;value, ((struct __pyx_obj_4sage_4libs_3gap_7element_GapElement *)__pyx_t_6)-&gt;value);
-      __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
-      __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
-      __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2524
- *                                            (&lt;GapElement&gt;a[0]).value,
- *                                            (&lt;GapElement&gt;a[1]).value)
- *             elif n == 3:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                 result = GAP_CallFunc3Args(self.value,
- *                                            (&lt;GapElement&gt;a[0]).value,
- */
-      break;
-      default:
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2530
- *                                            (&lt;GapElement&gt;a[2]).value)
- *             else:
- *                 arg_list = make_gap_list(args)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *                 result = GAP_CallFuncList(self.value, arg_list)
- *             sig_off()
- */
-      __pyx_t_11 = __pyx_f_4sage_4libs_3gap_7element_make_gap_list(__pyx_v_args); if (unlikely(__pyx_t_11 == ((Obj)NULL))) __PYX_ERR(0, 2530, __pyx_L14_error)
-      __pyx_v_arg_list = __pyx_t_11;
-
-      /* &quot;sage/libs/gap/element.pyx&quot;:2531
- *             else:
- *                 arg_list = make_gap_list(args)
- *                 result = GAP_CallFuncList(self.value, arg_list)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             sig_off()
- *         finally:
- */
-      __pyx_v_result = GAP_CallFuncList(__pyx_v_self-&gt;__pyx_base.value, __pyx_v_arg_list);
-      break;
-    }
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2532
- *                 arg_list = make_gap_list(args)
- *                 result = GAP_CallFuncList(self.value, arg_list)
- *             sig_off()             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *         finally:
- *             GAP_Leave()
- */
-    sig_off();
-  }
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2534
- *             sig_off()
- *         finally:
- *             GAP_Leave()             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *         if result == NULL:
- *             # We called a procedure that does not return anything
- */
-  /*finally:*/ {
-    /*normal exit:*/{
-      GAP_Leave();
-      goto __pyx_L15;
-    }
-    __pyx_L14_error:;
-    /*exception exit:*/{
-      __Pyx_PyThreadState_declare
-      __Pyx_PyThreadState_assign
-      __pyx_t_14 = 0; __pyx_t_15 = 0; __pyx_t_16 = 0; __pyx_t_17 = 0; __pyx_t_18 = 0; __pyx_t_19 = 0;
-      __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-      __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
-      __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-      __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;
-      __Pyx_XDECREF(__pyx_t_8); __pyx_t_8 = 0;
-      __Pyx_XDECREF(__pyx_t_9); __pyx_t_9 = 0;
-      if (PY_MAJOR_VERSION &gt;= 3) __Pyx_ExceptionSwap(&amp;__pyx_t_17, &amp;__pyx_t_18, &amp;__pyx_t_19);
-      if ((PY_MAJOR_VERSION &lt; 3) || unlikely(__Pyx_GetException(&amp;__pyx_t_14, &amp;__pyx_t_15, &amp;__pyx_t_16) &lt; 0)) __Pyx_ErrFetch(&amp;__pyx_t_14, &amp;__pyx_t_15, &amp;__pyx_t_16);
-      __Pyx_XGOTREF(__pyx_t_14);
-      __Pyx_XGOTREF(__pyx_t_15);
-      __Pyx_XGOTREF(__pyx_t_16);
-      __Pyx_XGOTREF(__pyx_t_17);
-      __Pyx_XGOTREF(__pyx_t_18);
-      __Pyx_XGOTREF(__pyx_t_19);
-      __pyx_t_7 = __pyx_lineno; __pyx_t_12 = __pyx_clineno; __pyx_t_13 = __pyx_filename;
-      {
-        GAP_Leave();
-      }
-      if (PY_MAJOR_VERSION &gt;= 3) {
-        __Pyx_XGIVEREF(__pyx_t_17);
-        __Pyx_XGIVEREF(__pyx_t_18);
-        __Pyx_XGIVEREF(__pyx_t_19);
-        __Pyx_ExceptionReset(__pyx_t_17, __pyx_t_18, __pyx_t_19);
-      }
-      __Pyx_XGIVEREF(__pyx_t_14);
-      __Pyx_XGIVEREF(__pyx_t_15);
-      __Pyx_XGIVEREF(__pyx_t_16);
-      __Pyx_ErrRestore(__pyx_t_14, __pyx_t_15, __pyx_t_16);
-      __pyx_t_14 = 0; __pyx_t_15 = 0; __pyx_t_16 = 0; __pyx_t_17 = 0; __pyx_t_18 = 0; __pyx_t_19 = 0;
-      __pyx_lineno = __pyx_t_7; __pyx_clineno = __pyx_t_12; __pyx_filename = __pyx_t_13;
-      goto __pyx_L1_error;
-    }
-    __pyx_L15:;
-  }
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2535
- *         finally:
- *             GAP_Leave()
- *         if result == NULL:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             # We called a procedure that does not return anything
- *             return None
- */
-  __pyx_t_2 = (__pyx_v_result == NULL);
-  if (__pyx_t_2) {
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2537
- *         if result == NULL:
- *             # We called a procedure that does not return anything
- *             return None             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *         return make_any_gap_element(self.parent(), result)
- * 
- */
-    __Pyx_XDECREF(__pyx_r);
-    __pyx_r = Py_None; __Pyx_INCREF(Py_None);
-    goto __pyx_L0;
-
-    /* &quot;sage/libs/gap/element.pyx&quot;:2535
- *         finally:
- *             GAP_Leave()
- *         if result == NULL:             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *             # We called a procedure that does not return anything
- *             return None
- */
-  }
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2538
- *             # We called a procedure that does not return anything
- *             return None
- *         return make_any_gap_element(self.parent(), result)             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- * 
- * 
- */
-  __Pyx_XDECREF(__pyx_r);
-  __pyx_t_4 = __Pyx_PyObject_GetAttrStr(((PyObject *)__pyx_v_self), __pyx_n_s_parent); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2538, __pyx_L1_error)
-  __Pyx_GOTREF(__pyx_t_4);
-  __pyx_t_5 = NULL;
-  __pyx_t_12 = 0;
-  #if CYTHON_UNPACK_METHODS
-  if (likely(PyMethod_Check(__pyx_t_4))) {
-    __pyx_t_5 = PyMethod_GET_SELF(__pyx_t_4);
-    if (likely(__pyx_t_5)) {
-      PyObject* function = PyMethod_GET_FUNCTION(__pyx_t_4);
-      __Pyx_INCREF(__pyx_t_5);
-      __Pyx_INCREF(function);
-      __Pyx_DECREF_SET(__pyx_t_4, function);
-      __pyx_t_12 = 1;
-    }
-  }
-  #endif
-  {
-    PyObject *__pyx_callargs[2] = {__pyx_t_5, NULL};
-    __pyx_t_6 = __Pyx_PyObject_FastCall(__pyx_t_4, __pyx_callargs+1-__pyx_t_12, 0+__pyx_t_12);
-    __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-    if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 2538, __pyx_L1_error)
-    __Pyx_GOTREF(__pyx_t_6);
-    __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
-  }
-  __pyx_t_4 = ((PyObject *)__pyx_f_4sage_4libs_3gap_7element_make_any_gap_element(__pyx_t_6, __pyx_v_result)); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 2538, __pyx_L1_error)
-  __Pyx_GOTREF(__pyx_t_4);
-  __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
-  __pyx_r = __pyx_t_4;
-  __pyx_t_4 = 0;
-  goto __pyx_L0;
-
-  /* &quot;sage/libs/gap/element.pyx&quot;:2412
- * 
- * 
- *     def __call__(self, *args):             # &lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;
- *         &quot;&quot;&quot;
- *         Call syntax for functions.
- */
-
-  /* function exit code */
-  __pyx_L1_error:;
-  __Pyx_XDECREF(__pyx_t_4);
-  __Pyx_XDECREF(__pyx_t_5);
-  __Pyx_XDECREF(__pyx_t_6);
-  __Pyx_XDECREF(__pyx_t_8);
-  __Pyx_XDECREF(__pyx_t_9);
-  __Pyx_XDECREF(__pyx_t_10);
-  __Pyx_AddTraceback(&quot;sage.libs.gap.element.GapElement_Function.__call__&quot;, __pyx_clineno, __pyx_lineno, __pyx_filename);
-  __pyx_r = NULL;
-  __pyx_L0:;
-  __Pyx_XDECREF(__pyx_v_libgap);
-  __Pyx_XDECREF(__pyx_v_a);
-  __Pyx_XDECREF(__pyx_8genexpr3__pyx_v_x);
-  __Pyx_XGIVEREF(__pyx_r);
-  __Pyx_RefNannyFinishContext();
-  return __pyx_r;
-}</code></pre>
-<p><code>cython</code> does a great job annotating generated code with corresponding
-source code. Very useful! While it’s a lot of boilerplate the code is
-straightforward. A few important facts:</p>
-<ol type="1">
-<li><code>sig_GAP_Enter()</code> is our <code>setjmp()</code> in disguise of a few
-macros defined at the beginning of the file. You can’t see <code>longjmp()</code>
-calls here but they are lurking in various <code>GAP_CallFunc3Args()</code> calls.</li>
-<li>There is a ton of local variables being updated in this file. And
-none of them has <code>volatile</code> annotations.</li>
-</ol>
-<p>The above strongly suggests we are hitting a <code>volatile</code> <code>setjmp()</code>
-<code>CAVEAT</code>. But how to find out for sure?</p>
-<h2 id="nailing-down-the-specific-variable-corruption">Nailing down the specific variable corruption</h2>
-<p>The general “missing <code>volatile</code>” hint is a bit abstract. Is it easy to
-find out what variable is being corrupted here? The <code>gdb</code> is
-surprisingly useful here. Let’s look at our <code>SIGSEGV</code> again:</p>
-<pre><code>(gdb) bt
-#0  0x00007feb544b756f in _Py_IsImmortal (op=0x0) at /usr/include/python3.12/object.h:242
-#1  Py_DECREF (op=0x0) at /usr/include/python3.12/object.h:700
-#2  Py_XDECREF (op=0x0) at /usr/include/python3.12/object.h:798
-#3  __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__ (
-    __pyx_v_self=__pyx_v_self@entry=0x7feb4e274f40,
-    __pyx_v_args=__pyx_v_args@entry=(&lt;sage.rings.integer.Integer at remote 0x7feb533456e0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd8c0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd620&gt;))
-    at /usr/src/debug/sci-mathematics/sagemath-standard-10.3/sagemath-standard-10.3-python3_12/build/cythonized/sage/libs/gap/element.c:26535
-#4  0x00007feb544b84e7 in __pyx_pw_4sage_4libs_3gap_7element_19GapElement_Function_3__call__ (
-    __pyx_v_self=&lt;sage.libs.gap.element.GapElement_Function at remote 0x7feb4e274f40&gt;,
-    __pyx_args=(&lt;sage.rings.integer.Integer at remote 0x7feb533456e0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd8c0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd620&gt;),
-    __pyx_kwds=&lt;optimized out&gt;)
-    at /usr/src/debug/sci-mathematics/sagemath-standard-10.3/sagemath-standard-10.3-python3_12/build/cythonized/sage/libs/gap/element.c:26105</code></pre>
-<p>Our function is in <code>frame 3</code> right now. Let’s look at it:</p>
-<pre><code>(gdb) fr 3
-#3  __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__ (
-    __pyx_v_self=__pyx_v_self@entry=0x7feb4e274f40,
-    __pyx_v_args=__pyx_v_args@entry=(&lt;sage.rings.integer.Integer at remote 0x7feb533456e0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd8c0&gt;, &lt;sage.rings.integer.Integer at remote 0x7feb4e5dd620&gt;))
-    at /usr/src/debug/sci-mathematics/sagemath-standard-10.3/sagemath-standard-10.3-python3_12/build/cythonized/sage/libs/gap/element.c:26535
-list
-26535         __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;</code></pre>
-<p><code>__Pyx_XDECREF()</code> looks promising.</p>
-<pre><code>(gdb) list
-26530         __Pyx_PyThreadState_assign
-26531         __pyx_t_14 = 0; __pyx_t_15 = 0; __pyx_t_16 = 0; __pyx_t_17 = 0; __pyx_t_18 = 0; __pyx_t_19 = 0;
-26532         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-26533         __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
-26534         __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-26535         __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;
-26536         __Pyx_XDECREF(__pyx_t_8); __pyx_t_8 = 0;
-26537         __Pyx_XDECREF(__pyx_t_9); __pyx_t_9 = 0;
-26538         if (PY_MAJOR_VERSION &gt;= 3) __Pyx_ExceptionSwap(&amp;__pyx_t_17, &amp;__pyx_t_18, &amp;__pyx_t_19);
-26539         if ((PY_MAJOR_VERSION &lt; 3) || unlikely(__Pyx_GetException(&amp;__pyx_t_14, &amp;__pyx_t_15, &amp;__pyx_t_16) &lt; 0)) __Pyx_ErrFetch(&amp;__pyx_t_14, &amp;__pyx_t_15, &amp;__pyx_t_16);</code></pre>
-<p><code>gdb</code> says that crash happens at line
-<code>26535 __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;</code>. Thus, <code>__pyx_t_6 = 0;</code>
-is our primary suspect.</p>
-<p>To trace the life of <code>__pyx_t_6</code> in assembly code I built <code>element.c</code>
-with extra <code>-S -fverbose-asm</code> flags and got this tiny snippet of variable
-reference:</p>
-<pre class="asm"><code># /usr/include/python3.12/object.h:242:     return _Py_CAST(PY_INT32_T, op-&gt;ob_refcnt) &lt; 0;
-    .loc 5 242 12 is_stmt 0 view .LVU66168
-    movq -200(%rbp), %rdx # %sfp, r
-    movq (%rdx), %rax # __pyx_t_6_10(ab)-&gt;D.11083.ob_refcnt, _1070</code></pre>
-<p>It’s the first few instructions of <code>__Pyx_XDECREF()</code> implementation.
-The main takeaway here is that <code>__pyx_t_6</code> is stored on stack at the
-address <code>%rbp-200</code>. We can trace all the updates at that location and
-see what is missing.
-Before doing that I navigated to the beginning of crashing
-<code>__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__</code>
-function as:</p>
-<pre><code>$ gdb -p `pgrep sage-ipython`
-(gdb) break __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__
-(gdb) continue
-
-    # trigger break with with ` libgap.AbelianGroup(0,0,0)`
-
-(gdb) disassemble
-Dump of assembler code for function __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__:
-=&gt; 0x00007f4ed9981b60 &lt;+0&gt;:     push   %rbp
-   0x00007f4ed9981b61 &lt;+1&gt;:     mov    %rsp,%rbp</code></pre>
-<p>And then executed first two instructions to initialize <code>%rbp</code>
-register (as our variable lives at a constant offset from <code>%rbp</code> on
-stack):</p>
-<pre><code>(gdb) nexti
-(gdb) nexti
-(gdb) disassemble
-Dump of assembler code for function __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__:
-   0x00007f4ed9981b60 &lt;+0&gt;:     push   %rbp
-   0x00007f4ed9981b61 &lt;+1&gt;:     mov    %rsp,%rbp
-=&gt; 0x00007f4ed9981b64 &lt;+4&gt;:     push   %r15</code></pre>
-<p>Now I set the watch point at stack memory where we expect <code>__pyx_t_6</code> to
-reside:</p>
-<pre><code>(gdb) print $rbp-200
-$2 = (void *) 0x7ffd2824c5e8
-
-(gdb) watch *(int*)(void *) 0x7ffd2824c5e8
-Hardware watchpoint 2: *(int*)(void *) 0x7ffd2824c5e8
-
-(gdb) continue
-Continuing.
-
-Thread 1 &quot;sage-ipython&quot; hit Hardware watchpoint 2: *(int*)(void *) 0x7ffd2824c5e8
-
-Old value = 673498624
-New value = 0
-0x00007f98e609d2a8 in __pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__ (
-    __pyx_v_self=__pyx_v_self@entry=0x7f98dfe70dc0,
-    __pyx_v_args=__pyx_v_args@entry=(&lt;sage.rings.integer.Integer at remote 0x7f98e4722c40&gt;, &lt;sage.rings.integer.Integer at remote 0x7f98dfe7afd0&gt;, &lt;sage.rings.integer.Integer at remote 0x7f98e01dd5c0&gt;))
-    at /usr/src/debug/sci-mathematics/sagemath-standard-10.3/sagemath-standard-10.3-python3_12/build/cythonized/sage/libs/gap/element.c:26192
-26192       __pyx_t_6 = NULL;</code></pre>
-<p>This break is our initial <code>__pyx_t_6 = NULL;</code> store. Nothing unusual.
-Moving to the next update:</p>
-<pre><code>(gdb) continue
-Continuing.
-
-Thread 1 &quot;sage-ipython&quot; hit Hardware watchpoint 2: *(int*)(void *) 0x7ffd2824c5e8
-
-Old value = 0
-New value = -538669696
-__Pyx_GetItemInt_List_Fast (wraparound=0, boundscheck=1, i=2,
-    o=[&lt;sage.libs.gap.element.GapElement_Integer at remote 0x7f98e0ac5c00&gt;, &lt;sage.libs.gap.element.GapElement_Integer at remote 0x7f98dfe4b500&gt;, &lt;sage.libs.gap.element.GapElement_Integer at remote 0x7f98dfe48d80&gt;])
-    at /usr/src/debug/sci-mathematics/sagemath-standard-10.3/sagemath-standard-10.3-python3_12/build/cythonized/sage/libs/gap/element.c:38070
-38070           Py_INCREF(r);</code></pre>
-<p>Here we create an object and increment a reference via <code>__pyx_t_6</code> address.
-Moving on:</p>
-<pre><code>(gdb) continue
-Continuing.
-
-Thread 1 &quot;sage-ipython&quot; received signal SIGABRT, Aborted.
-0x00007f99428617a7 in __GI_kill () at ../sysdeps/unix/syscall-template.S:120
-120     T_PSEUDO (SYSCALL_SYMBOL, SYSCALL_NAME, SYSCALL_NARGS)</code></pre>
-<p>Got to <code>SIGABRT</code> signal, <code>longjmp()</code> is about to be called. Moving on.</p>
-<pre><code>(gdb) continue
-Continuing.
-
-Thread 1 &quot;sage-ipython&quot; received signal SIGSEGV, Segmentation fault.
-0x00007f98e609c56f in _Py_IsImmortal (op=0x0) at /usr/include/python3.12/object.h:242
-242         return _Py_CAST(PY_INT32_T, op-&gt;ob_refcnt) &lt; 0;</code></pre>
-<p>We arrived at a final <code>SIGSEGV</code> signal.
-Curiously we see only two stores (one <code>NULL</code> store and one
-non-<code>NULL</code> store) at inspected address. Both are before the <code>SIGABRT</code>
-signal (and thus <code>longjmp()</code> call). I was initially afraid that stack
-got corrupted by stack reuse in nested functions. But it’s not the case
-and our case is a lot simpler than it could be. Phew.
-This session allowed me to finally understand the control flow happening
-here.</p>
-<h2 id="sagemath-breakage-mechanics"><code>sagemath</code> breakage mechanics</h2>
-<p>Armed with <code>__pyx_t_6</code> <code>runtime</code> behavior I think I got the properties
-<code>__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__</code> had
-to force <code>gcc</code> into <code>SIGSEGV</code>.
-Slightly oversimplified function has the following form:</p>
-<pre class="c"><code>__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__() {
-    __pyx_t_6 = NULL;
-
-    int mode = setjmp(jb);
-
-    switch (mode) {
-      case 1:                                  // longjmp() case
-        break;
-      case 0:                                  // regular case (`case 3:` in real code)
-        __pyx_t_6 = something_else();          // set __pyx_t_6 to non-zero
-        int done = use_post_setjmp(__pyx_t_6); // call longjmp(jb, 1) here
-        __pyx_t_6 = NULL;
-        break;
-    }
-
-    // get here via longjmp() or via natural execution flow
-    //
-    // Note: natural execution flow always gets here with `__pyx_t_6 = NULL`.
-    if (__pyx_t_6 != NULL) deref(__pyx_t_6);
-}</code></pre>
-<p>Similar to our contrived example we save the function state at the
-beginning of a function and return back to it from <code>use_post_setjmp()</code>
-helper after we changed the value of a local variable.</p>
-<p><code>__pyx_t_6</code> is not marked <code>volatile</code>. <code>gcc</code> noticed that <code>__pyx_t_6</code> is
-always expected to be <code>NULL</code> when it reaches the final statement. And
-<code>gcc</code> optimizes the function code into the following equivalent:</p>
-<pre class="c"><code>__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__() {
-    __pyx_t_6 = NULL;
-
-    int mode = setjmp(jb);
-
-    switch (mode) {
-      case 1:                                  // longjmp() case
-        break;
-      case 0:                                  // regular case (`case 3:` in real code)
-        __pyx_t_6 = something_else();          // set __pyx_t_6 to non-zero
-        int done = use_post_setjmp(__pyx_t_6); // call longjmp(jb, 1) here
-        __pyx_t_6 = NULL;
-        break;
-    }
-
-    // Constant-fold `__pyx_t_6 = NULL` in `deref()` call site
-    if (__pyx_t_6 != NULL) deref(NULL);
-}</code></pre>
-<p>Note that <code>gcc</code> did not eliminate the <code>if (__pyx_t_6 != NULL)</code> even
-though the condition is always expected to be <code>false</code> (Richard explains
-it <a href="https://gcc.gnu.org/PR114872#c24">here</a>).</p>
-<p>The presence of <code>longjmp()</code> effectively skips the
-<code>__pyx_t_6 = NULL;</code> assignment and executes <code>if (__pyx_t_6 != NULL) deref(NULL);</code>.
-That leads to <code>SIGSEGV</code>.
-Phew. We finally have the breakage mechanics caused by <code>gcc</code> code motion.</p>
-<p>This bug is known for a while in <code>sagemath</code> bug tracker as an
-<a href="https://github.com/sagemath/sage/issues/37026"><code>Issue#37026</code></a>.
-Fixing it will probably require adding <code>volatile</code> marking to quite a few
-temporary variables in <code>.pyx</code> files of <code>sagemath</code>. Or alternatively
-avoid the <code>setjmp()</code> / <code>longjmp()</code> pattern in inner functions if
-feasible. They are just too large to be auditable for <code>setjmp()</code>
-constraints.</p>
-<h2 id="bonus-how-setjmp-longjmp-works-in-glibc">Bonus: how <code>setjmp()</code> / <code>longjmp()</code> works in <code>glibc</code></h2>
-<p>Let’s look at what <code>glibc</code> does in <code>setjmp()</code> on <code>x86_64</code> at
-<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/x86_64/setjmp.S;h=40807e73b51c362464730212d7c973848be612bf;hb=HEAD"><code>sysdeps/x86_64/setjmp.S</code></a>:</p>
-<pre class="asm"><code>ENTRY (__sigsetjmp)
-        /* Save registers.  */
-        movq %rbx, (JB_RBX*8)(%rdi)
-#ifdef PTR_MANGLE
-        mov %RBP_LP, %RAX_LP
-        PTR_MANGLE (%RAX_LP)
-        mov %RAX_LP, (JB_RBP*8)(%rdi)
-#else
-        movq %rbp, (JB_RBP*8)(%rdi)
-#endif
-        movq %r12, (JB_R12*8)(%rdi)
-        movq %r13, (JB_R13*8)(%rdi)
-        movq %r14, (JB_R14*8)(%rdi)
-        movq %r15, (JB_R15*8)(%rdi)
-        lea 8(%rsp), %RDX_LP    /* Save SP as it will be after we return.  */
-#ifdef PTR_MANGLE
-        PTR_MANGLE (%RDX_LP)
-#endif
-        movq %rdx, (JB_RSP*8)(%rdi)
-        mov (%rsp), %RAX_LP     /* Save PC we are returning to now.  */
-        LIBC_PROBE (setjmp, 3, LP_SIZE@%RDI_LP, -4@%esi, LP_SIZE@%RAX_LP)
-#ifdef PTR_MANGLE
-        PTR_MANGLE (%RAX_LP)
-#endif
-        movq %rax, (JB_PC*8)(%rdi)
-
-        /* Make a tail call to __sigjmp_save; it takes the same args.  */
-        jmp __sigjmp_save
-END (__sigsetjmp)</code></pre>
-<p><code>%rdi</code> is our <code>env</code> parameter in <code>int setjmp(jmp_buf env);</code> signature.
-<code>__sigsetjmp</code> does a few things:</p>
-<ul>
-<li>is saves <code>r12</code>, <code>r13</code>, <code>r14</code>, <code>r15</code>, <code>rbx</code>, <code>rsp</code>, <code>rbp</code> registers into
-<code>jmp_buf env</code> parameter. These registers happen to be all <code>callee-save</code>
-registers on <code>System V x86_64 ABI</code>. Any <code>ABI</code>-conformant <code>C</code> function
-does the same if it plans to use these registers locally.</li>
-<li>the only twist is that some of the stack-related registers are
-obfuscated with <code>PTR_MANGLE</code> macro. The macro mixes in stack canary
-into the value.</li>
-<li><code>__sigsetjmp</code> also saves return address as <code>mov (%rsp), %RAX_LP</code> to be
-able to resume from it later.</li>
-<li><code>__sigsetjmp</code> also handles shadow call stack if that exists, I skipped
-it entirely for simplicity</li>
-</ul>
-<p>Importantly <code>__sigsetjmp</code> does not save any stack contents. It assumes
-that <code>gcc</code> and the code author make sure it does not get corrupted on
-return.</p>
-<p>The <code>longjmp()</code> recovery is a mirror-image of <code>setjmp()</code>
-in <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/x86_64/__longjmp.S;h=22fedc49970eba0ab86cb8dec8411197bec95d37;hb=HEAD"><code>sysdeps/x86_64/__longjmp.S</code></a>. I’ll skip
-pasting <code>longjmp()</code> implementation here.</p>
-<h2 id="bonus-2--wclobbered-is-able-to-detect-some-of-the-clobber-cases">Bonus 2: <code>-Wclobbered</code> is able to detect some of the clobber cases</h2>
-<p>Alexander Monakov <a href="https://fosstodon.org/@amonakov@mastodon.gamedev.place/112429019564307874">pointed out</a>
-that <code>gcc</code> actually has an option to detect some of the clobbering cases
-with <code>-Wclobbered</code>.</p>
-<p>On a contrived example it reports nothing:</p>
-<pre><code>$ gcc -O2 -c example.c -Wclobbered -Wall -Wextra -W</code></pre>
-<p>It’s unfortunate as we can clearly see the different output.</p>
-<p>But on the real <code>element.c</code> it complains as:</p>
-<pre><code>$ gcc -O2 -Wclobbered -c element.i
-...
-element.c: In function '__pyx_pf_4sage_4libs_3gap_7element_19GapElement_Function_2__call__':
-element.c:26122:13: warning: variable '__pyx_v_libgap' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26123:13: warning: variable '__pyx_v_a' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26125:13: warning: variable '__pyx_r' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26130:13: warning: variable '__pyx_t_4' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26131:13: warning: variable '__pyx_t_5' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26132:13: warning: variable '__pyx_t_6' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26134:13: warning: variable '__pyx_t_8' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26135:13: warning: variable '__pyx_t_9' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:26136:13: warning: variable '__pyx_t_10' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:38074:19: warning: variable 'r' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]
-element.c:38074:19: warning: variable 'r' might be clobbered by 'longjmp' or 'vfork' [-Wclobbered]</code></pre>
-<p>And that includes our <code>__pyx_t_6</code> variable!</p>
-<h2 id="parting-words">Parting words</h2>
-<p>Python ecosystem did not fully update to latest <code>python</code> release:
-<code>python-3.12</code> was out in October 2023 and many packages did not yet
-catch up with it. That makes it tedious to fix a long tail of issues
-like <code>sagemath</code> crashes. Also makes it hard to reproduce issues on some
-distributions that follow upstream packages without much patching.</p>
-<p>While it was a bit unfortunate that <code>sagemath</code> is not packaged in
-<code>::gentoo</code> I was pleasantly surprised by the responsive maintainer of
-<code>::sage-on-gentoo</code> overlay. I managed to build <code>sagemath-standard</code> with
-their help relatively quickly.</p>
-<p><code>scikit-build-core</code> package is invasive and is able to break the build
-of packages that don’t import it directly or indirectly, like
-<a href="https://github.com/cschwan/sage-on-gentoo/issues/783"><code>sagemath-standard</code></a>.</p>
-<p><code>cysignals</code> in <code>::gentoo</code> has a <a href="https://bugs.gentoo.org/927767">broken path</a>
-to the <code>gdb</code> helper which makes it more tedious to debug <code>sagemath</code>
-crashes.</p>
-<p><code>cysignals</code> uses <code>SIGABRT</code> and <code>setjmp()</code> / <code>longjmp()</code> to recover from
-errors. <code>sagemath</code> decided to use it in <code>C</code> bindings. Unfortunately it
-does not mix well with <code>cython</code> use of local variables and leads to
-broken code.</p>
-<p>I was lucky to look at the <code>SIGABRT</code> handler first to notice <code>longjmp()</code>
-there. If <code>gdb</code> hook would not fail for a wrong <code>share</code> path I would
-take me a lot more time to discover <code>setjmp()</code> clue.</p>
-<p>I was lucky as <code>gcc</code> did not delete <code>NULL</code>-dereferencing code and
-generated something that crashes on execution. Otherwise, it would be
-at best resource leak and use-after-free or data corruption at worst.</p>
-<p><code>setjmp()</code> / <code>longjmp()</code> is very hard to use correctly in large
-functions. One has to be very careful to sprinkle enough <code>volatile</code>
-keywords to inhibit enough compiler optimizations to get expected
-semantics from the program.</p>
-<p>It was not a compiler bug after all but the <code>sagemath</code> one. It was
-interaction between two aspects <code>sagemath</code> used:</p>
-<ul>
-<li><code>cython</code> usage that generates a ton of local variables it mutates
-along the way without the <code>volatile</code> annotations</li>
-<li>use of <code>cysignals</code> <code>sig_GAP_Enter()</code> (aka <code>setjmp()</code>) error recovery
-in the same function</li>
-</ul>
-<p><code>gcc</code> can detect some of the clobber cases with <code>-Wclobbered</code> flag.</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Sun, 12 May 2024 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/312-the-sagemath-saga.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
