@@ -7,8 +7,57 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Mon, 03 Nov 2025 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Wed, 17 Dec 2025 00:00:00 UT</lastBuildDate>
         <item>
+    <title>AoC of 2025</title>
+    <link>https://trofi.github.io/posts/343-AoC-of-2025.html</link>
+    <description><![CDATA[<p>This time I managed to finish all <code>AoC</code> challenges within a week of
+problems being published.
+My solutions: <a href="https://github.com/trofi/AoC/tree/main/2025" class="uri">https://github.com/trofi/AoC/tree/main/2025</a>.
+First 9 problems I managed to do in a day they were published. But the
+<a href="https://adventofcode.com/2025/day/10">10th</a> one was tough.</p>
+<p>As usual I tried to solve the problems within 24 hours of publish
+time and get the source code under <code>4K</code>. I used <code>rust</code> again. I did not
+use any external crates.
+This time I also attempted to handle errors in a more graceful way to
+avoid <code>.unwrap()</code> / <code>.expect("")</code> calls. I found a few nice patterns
+like collecting into <code>Result&lt;Vec&lt;_&gt;&gt;</code>:</p>
+<pre class="rust"><code>$ evcxr
+
+&gt;&gt; #[derive(Debug)] struct E{}
+
+&gt;&gt; [Ok(1),Ok(3),Ok(5)].into_iter().collect::&lt;Result&lt;Vec&lt;_&gt;, E&gt;&gt;()
+Ok([1, 3, 5])</code></pre>
+<p>Or reducing <code>Result</code> values:</p>
+<pre><code>&gt;&gt; [Ok(1),Ok(3),Ok(5)].into_iter().sum::&lt;Result&lt;isize, E&gt;&gt;()
+Ok(9)</code></pre>
+<p>I felt I did a bit too much <code>.map_err()</code> conversions to capture more into
+error context. I also relied on <code>Debug</code> instances instead of <code>Display</code>
+as I allowed <code>main()</code> to return by error type outside <code>main()</code>. There
+probably are better mechanisms to achieve the same. But otherwise error
+propagation is quite pleasant in <code>rust</code>.</p>
+<h2 id="funniest-problems">Funniest problems</h2>
+<p>No pencil-and-paper problems this time. All required a program to write.
+I did solve a few examples from <code>Day 10</code> by hand to explore it a bit
+better. A few of the problems had very interesting problem statement:</p>
+<ul>
+<li><a href="https://adventofcode.com/2025/day/8">Day 8: Playground</a> is a nice
+concise definition of a large input graph.</li>
+<li><a href="https://adventofcode.com/2025/day/10">Day 10: Factory</a> tricked me
+into searching for a brute force solution. After failing that I managed
+to see a nice system of equations and a function to minimize.
+I did not solve the minimization part nicely, but I liked the equation
+solver.</li>
+</ul>
+<p>It felt like first few problems had very gnarly corner cases to handle.
+I was afraid the problem complexity will really go up. But it was just
+about right for me.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Wed, 17 Dec 2025 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/343-AoC-of-2025.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>Zero Hydra Failures towards 25.11 NixOS release</title>
     <link>https://trofi.github.io/posts/342-Zero-Hydra-Failures-towards-25.11-NixOS-release.html</link>
     <description><![CDATA[<p>It is November again! The usual plan is to have a <code>NixOS-.25.11</code> release
@@ -4664,356 +4713,6 @@ it.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Sat, 25 May 2024 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/314-Zero-Hydra-Failures-towards-24.05-NixOS-release.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>highway debugging example</title>
-    <link>http://trofi.github.io/posts/313-highway-debugging-example.html</link>
-    <description><![CDATA[<p><a href="https://github.com/google/highway"><code>highway</code></a> test suite is a great
-stress test for <code>gcc</code> vectorization and SIMD intrinsics code
-generators:</p>
-<ul>
-<li>at compile time <code>highway</code> instantiates all the vector extensions your CPU could support</li>
-<li>at runtime it runs the tests on all the supported extensions against
-various vector sizes</li>
-</ul>
-<p>It cover many corner cases of what could possibly go wrong with vectored
-forms of various operations. A few past examples are:
-<a href="https://gcc.gnu.org/PR110274"><code>PR110274</code></a>,
-<a href="https://gcc.gnu.org/PR110880"><code>PR110880</code></a>,
-<a href="https://gcc.gnu.org/PR111048"><code>PR111048</code></a>,
-<a href="https://gcc.gnu.org/PR111051"><code>PR111051</code></a>,
-<a href="https://gcc.gnu.org/PR115115"><code>PR115115</code></a>.</p>
-<p>While <code>highway</code> tests are quite small they are somewhat tricky to
-extract into self-contained examples. In this post I’ll write down a few
-hacks I usually use to simplify this task.</p>
-<h2 id="an-example">An example</h2>
-<p>Today test suite failed at me on today’s <code>gcc-15</code> build against
-<code>nixpkgs</code> as:</p>
-<pre><code> 1146 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseLaneBytes/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
- 1151 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseBits/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
- 1186 - HwyShuffle4TestGroup/HwyShuffle4Test.TestAllPer4LaneBlockShuffle/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)</code></pre>
-<p><code>TestAllReverseLaneBytes</code> is the test function. <code>EMU128</code> is an
-(emulated) CPU target: the code does not use compiler intrinsics and
-uses loops over scalar operations to emulate <code>SIMD</code>.</p>
-<h2 id="check-latest-git">Check latest <code>git</code></h2>
-<p><code>highway</code> is actively maintained. In case the failure is caused by a
-<code>highway</code> bug (and not by a faulty compiler) chances are that it’s
-already fixed in latest version. Worth trying it first:</p>
-<pre><code># get the build time depends into the development shell
-$ nix develop -f ~/n libhwy
-
-$$ git clone https://github.com/google/highway.git
-$$ cd highway
-
-$$ mkdir build
-$$ cd build
-$$ cmake ..
-$$ make -j $(nproc) &amp;&amp; make test
-...
-1146 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseLaneBytes/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
-1151 - HwyReverseTestGroup/HwyReverseTest.TestAllReverseBits/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
-1186 - HwyShuffle4TestGroup/HwyShuffle4Test.TestAllPer4LaneBlockShuffle/EMU128  # GetParam() = 2305843009213693952 (Subprocess aborted)
-</code></pre>
-<p>The bug was still there!</p>
-<h2 id="enable-single-simplest-target">Enable single (simplest) target</h2>
-<p><code>highway</code> uses heavy <code>C++</code> template code and various iterator macros to
-compile the library for each supported CPU extension <code>highway</code> knows
-about. This increases build times and complicated debugging via code
-tweaking as code has to compile for all active targets, not just one.</p>
-<p>I disabled all targets except the problematic one. In our case the
-problematic target is <code>EMU128</code>. Thus, the local change to leave <code>EMU128</code>
-as the only available option is:</p>
-<pre class="diff"><code>--- a/hwy/detect_targets.h
-+++ b/hwy/detect_targets.h
-@@ -29,7 +29,7 @@
- // #define HWY_BASELINE_TARGETS (HWY_SSE4 | HWY_SCALAR)
-
- // Uncomment to override the default blocklist:
--// #define HWY_BROKEN_TARGETS HWY_AVX3
-+#define HWY_BROKEN_TARGETS (HWY_AVX2 | HWY_SSE4 | HWY_SSE2 | HWY_SSSE3 | HWY_SSE4 | HWY_AVX3_SPR | HWY_AVX3_ZEN4 | HWY_AVX3)
-
- // Uncomment to definitely avoid generating those target(s):
- // #define HWY_DISABLED_TARGETS HWY_SSE4</code></pre>
-<p>Here I disabled anything that build system reports as supported.
-Before the change I had <code>Compiled HWY_TARGETS:   AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2</code>
-in this output:</p>
-<pre><code>Config: emu128:0 scalar:0 static:0 all_attain:0 is_test:0
-Compiled HWY_TARGETS:   AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2
-HWY_ATTAINABLE_TARGETS: AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2 EMU128
-HWY_BASELINE_TARGETS:   SSE2 EMU128
-HWY_STATIC_TARGET:      SSE2
-HWY_BROKEN_TARGETS:     Unknown
-HWY_DISABLED_TARGETS:
-Current CPU supports:   AVX2 SSE4 SSSE3 SSE2 EMU128 SCALAR</code></pre>
-<p>After the change I get <code>Compiled HWY_TARGETS:   EMU128</code> in this output:</p>
-<pre><code>Config: emu128:0 scalar:0 static:0 all_attain:0 is_test:0
-Compiled HWY_TARGETS:   EMU128
-HWY_ATTAINABLE_TARGETS: EMU128
-HWY_BASELINE_TARGETS:   SSE2 EMU128
-HWY_STATIC_TARGET:      EMU128
-HWY_BROKEN_TARGETS:     AVX3_SPR AVX3_ZEN4 AVX3 AVX2 SSE4 SSSE3 SSE2
-HWY_DISABLED_TARGETS:
-Current CPU supports:   AVX2 SSE4 SSSE3 SSE2 EMU128 SCALAR</code></pre>
-<p>Leaving a single compiled target speeds the builds a few times up.
-Then I picked the specific binary that implements failing test. In this
-case it was <code>tests/reverse_test</code>:</p>
-<pre><code>$ make -j$(nproc) &amp;&amp; ./tests/reverse_test
-...
-[==========] Running 1 test from 1 test suite.
-[----------] Global test environment set-up.
-[----------] 1 test from HwyReverseTestGroup/HwyReverseTest
-[ RUN      ] HwyReverseTestGroup/HwyReverseTest.TestAllReverseLaneBytes/EMU128
-
-
-u16x4 expect [0+ -&gt;]:
-  0xD49E,0x049E,0x0137,0x69D3,
-u16x4 actual [0+ -&gt;]:
-  0xFF9E,0xFF9E,0x0137,0xFFD3,
-Abort at reverse_test.cc:162: EMU128, u16x4 lane 0 mismatch:
-  expected '0xD49E', got '0xFF9E'.
-
-Aborted (core dumped)</code></pre>
-<p>Here we can see that instead of expected <code>0xD49E,0x049E,0x0137,0x69D3</code>
-output our library did <code>0xFF9E,0xFF9E,0x0137,0xFFD3</code>.</p>
-<h2 id="shrink-the-test">Shrink the test</h2>
-<p>The rest reduction is usually test-specific, but some of the hacks can
-be applied to many tests. In this case I kept only one failing test:</p>
-<pre class="diff"><code>--- a/hwy/tests/reverse_test.cc
-+++ b/hwy/tests/reverse_test.cc
-@@ -293,13 +295,7 @@ HWY_AFTER_NAMESPACE();
-
- namespace hwy {
- HWY_BEFORE_TEST(HwyReverseTest);
--HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse);
--HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse2);
--HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse4);
--HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverse8);
- HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseLaneBytes);
--HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseBits);
--HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseBlocks);
- HWY_AFTER_TEST();
- }  // namespace hwy</code></pre>
-<p>The test was still failing (sometimes it’s not the case when mere
-presence of unrelated code changes the inlining and vectorization
-decisions).
-Then I shrunk the cases down to 16-bit element sizes by inlining a
-<code>ForUI163264</code> definition:</p>
-<pre class="diff"><code>--- a/hwy/tests/reverse_test.cc
-+++ b/hwy/tests/reverse_test.cc
-@@ -248,7 +249,7 @@ HWY_NOINLINE void TestAllReverse8() {
- }
-
- HWY_NOINLINE void TestAllReverseLaneBytes() {
--  ForUI163264(ForPartialVectors&lt;TestReverseLaneBytes&gt;());
-+  ForPartialVectors&lt;TestReverseLaneBytes&gt;()(uint16_t());
- }</code></pre>
-<p>Then I removed all the other unrelated test asserts from the
-<code>hwy/tests/reverse_test.cc</code> file.
-Then I inlined obvious template parameters right into local test class.
-Then I extracted random generated data used in the failing vectors (using
-<code>printf()</code> statements) and inlined values into <code>.cc</code> file. Sometimes
-I had to sprinkle <code>__attribute__((noipa))</code> attributes on local functions
-to inhibit too eager constant folding.</p>
-<h2 id="gdb-hints"><code>gdb</code> hints</h2>
-<p>To explore generated code in <code>gdb</code> I explored <code>hwy::N_&lt;target&gt;::</code>
-namespace as:</p>
-<pre><code>$ gdb tests/reverse_test
-(gdb) disassemble hwy::N_EMU128::TestAllReverseLaneBytes
-...
-   &lt;+113&gt;:   mov    0x3d190(%rip),%rax        # 0x4dc68
-   &lt;+120&gt;:   mov    $0xffffd49e,%esi
-   &lt;+125&gt;:   xor    %edx,%edx
-   &lt;+127&gt;:   mov    $0x8,%edi
-   &lt;+132&gt;:   mov    %rax,0x0(%rbp)
-   &lt;+136&gt;:   mov    %si,(%r12)
-
-   &lt;+141&gt;:   movzwl 0x2(%rbp),%eax
-   &lt;+145&gt;:   xor    %esi,%esi
-   &lt;+147&gt;:   rol    $0x8,%ax
-   &lt;+151&gt;:   mov    %ax,0x2(%r12)
-
-   &lt;+157&gt;:   movzwl 0x4(%rbp),%eax
-   &lt;+161&gt;:   rol    $0x8,%ax
-   &lt;+165&gt;:   mov    %ax,0x4(%r12)
-
-   &lt;+171&gt;:   movzwl 0x6(%rbp),%eax
-   &lt;+175&gt;:   rol    $0x8,%ax
-   &lt;+179&gt;:   mov    %ax,0x6(%r12)
-
-   &lt;+185&gt;:   mov    0x0(%rbp),%rax
-   &lt;+189&gt;:   movq   %rax,%xmm0
-   &lt;+194&gt;:   movdqa %xmm0,%xmm1
-   &lt;+198&gt;:   psllw  $0x8,%xmm0
-   &lt;+203&gt;:   psraw  $0x8,%xmm1
-   &lt;+208&gt;:   por    %xmm0,%xmm1
-   &lt;+212&gt;:   movq   %xmm1,0x8(%rsp)</code></pre>
-<p>Here I was lucky! I immediately spotted the bug. We see both:</p>
-<ul>
-<li>16-bit wide move/rotate/move: <code>movzwl / rol / mov</code> (looks correct)</li>
-<li>and 128-bit wide move/rotate/move: <code>movq / psllw / psraw / por / movq</code></li>
-</ul>
-<p>The rotate part is broken here: it should have been logical <code>psrlw</code>
-shift, not arithmetic (sign-preserving) <code>psraw</code> shift.
-At this point my test looked this way:</p>
-<pre class="cpp"><code>HWY_NOINLINE void TestAllReverseLaneBytes() {
-    const CappedTag&lt;uint16_t, 4, 0&gt; d;
-
-    const size_t N = Lanes(d);
-    fprintf(stderr, &quot;N = %zu\n&quot;, N);
-    auto in = AllocateAligned&lt;uint16_t&gt;(N);
-    auto expected = AllocateAligned&lt;uint16_t&gt;(N);
-
-    fprintf(stderr, &quot;iter\n&quot;);
-        in[0] = 0x9ed4u;
-        in[1] = 0x049eu;
-        in[2] = 0x0137u;
-        in[3] = 0x69d3u;
-        expected[0] = ReverseBytesOfValue(in[0]);
-        expected[1] = ReverseBytesOfValue(in[1]);
-        expected[2] = ReverseBytesOfValue(in[2]);
-        expected[3] = ReverseBytesOfValue(in[3]);
-
-    const auto v = Load(d, in.get());
-    HWY_ASSERT_VEC_EQ(d, expected.get(), ReverseLaneBytes(v));
-}</code></pre>
-<p>I looked at the <code>ReverseLaneBytes()</code> implementation. It had two parts.
-The first part was generic for all targets:</p>
-<pre class="cpp"><code>// from hwy/ops/generic_ops-inl.h
-template &lt;class V, HWY_IF_T_SIZE_V(V, 2)&gt;
-HWY_API V ReverseLaneBytes(V v) {
-  const DFromV&lt;V&gt; d;
-  const Repartition&lt;uint8_t, decltype(d)&gt; du8;
-  return BitCast(d, Reverse2(du8, BitCast(du8, v)));
-}</code></pre>
-<p>And the second part was <code>EMU128</code>-specific:</p>
-<pre class="cpp"><code>// from hwy/ops/emu128-inl.h
-template &lt;class D&gt;
-HWY_API VFromD&lt;D&gt; Reverse2(D d, VFromD&lt;D&gt; v) {
-  VFromD&lt;D&gt; ret;
-  for (size_t i = 0; i &lt; MaxLanes(d); i += 2) {
-    ret.raw[i + 0] = v.raw[i + 1];
-    ret.raw[i + 1] = v.raw[i + 0];
-  }
-  return ret;
-}</code></pre>
-<p>I inlined the above definitions into the test and got this:</p>
-<pre class="cpp"><code>// $ cat hwy/tests/reverse_test.cc
-#include &lt;stddef.h&gt;
-
-#undef HWY_TARGET_INCLUDE
-#define HWY_TARGET_INCLUDE &quot;tests/reverse_test.cc&quot;
-#include &quot;hwy/foreach_target.h&quot;  // IWYU pragma: keep
-#include &quot;hwy/highway.h&quot;
-#include &quot;hwy/tests/test_util-inl.h&quot;
-
-HWY_BEFORE_NAMESPACE();
-namespace hwy {
-namespace HWY_NAMESPACE {
-
-template &lt;class D&gt;
-__attribute__((noipa))
-static VFromD&lt;D&gt; Reverse2_(D d, VFromD&lt;D&gt; v) {
-  VFromD&lt;D&gt; ret;
-  for (size_t i = 0; i &lt; MaxLanes(d); i += 2) {
-    ret.raw[i + 0] = v.raw[i + 1];
-    ret.raw[i + 1] = v.raw[i + 0];
-  }
-  return ret;
-}
-
-HWY_NOINLINE void TestAllReverseLaneBytes() {
-    const CappedTag&lt;uint16_t, 4, 0&gt; d;
-
-    const size_t N = Lanes(d); // 4
-    auto in = AllocateAligned&lt;uint16_t&gt;(N);
-    auto expected = AllocateAligned&lt;uint16_t&gt;(N);
-
-    in[0] = 0x9ed4u;
-    in[1] = 0x049eu;
-    in[2] = 0x0137u;
-    in[3] = 0x69d3u;
-    expected[0] = 0xd49eu;
-    expected[1] = 0x9e04u;
-    expected[2] = 0x3701u;
-    expected[3] = 0xd369u;
-
-    const auto v = Load(d, in.get());
-    const Repartition&lt;uint8_t, decltype(d)&gt; du8;
-    const auto r = BitCast(d, Reverse2_(du8, BitCast(du8, v)));
-    HWY_ASSERT_VEC_EQ(d, expected.get(), r);
-}
-
-// NOLINTNEXTLINE(google-readability-namespace-comments)
-}  // namespace HWY_NAMESPACE
-}  // namespace hwy
-HWY_AFTER_NAMESPACE();
-
-#if HWY_ONCE
-
-namespace hwy {
-HWY_BEFORE_TEST(HwyReverseTest);
-HWY_EXPORT_AND_TEST_P(HwyReverseTest, TestAllReverseLaneBytes);
-HWY_AFTER_TEST();
-}  // namespace hwy
-
-#endif</code></pre>
-<h2 id="make-sure-its-an-optimizer">Make sure it’s an optimizer</h2>
-<p>Adding <code>#pragma GCC optimize(0)</code> to the beginning of the file makes the
-bug to go away. It’s a good hint that it’s a compiler bug: the test looks
-obviously correct (not much hidden code is left in the templates).
-But the only way to make sure is to finish the reduction down to a
-self-contained example. We will need it anyway to report upstream.</p>
-<h2 id="final-result">Final result</h2>
-<p>After a few manual extra inlines and simplifications I got this
-self-contained example:</p>
-<pre class="c"><code>// $ cat bug.c
-typedef unsigned char u8;
-
-__attribute__((noipa))
-static void fill_src(u8 * src) {
-    src[0] = 0x00; src[1] = 0xff;
-}
-
-__attribute__((noipa))
-static void assert_dst(const u8 * dst) {
-    if (dst[0] != 0xff) __builtin_trap();
-    if (dst[1] != 0x00) __builtin_trap();
-}
-
-int main() {
-    u8 src[8] __attribute__((aligned(16))) = { 0 };
-    u8 dst[8] __attribute__((aligned(16))) = { 0 };
-
-    // place 0x00 into src[0] and 0xFF into src[1]
-    fill_src(src);
-
-    // swap bytes:
-    // place 0xFF into dst[0], 0x00 into dst[1]
-    for (unsigned long i = 0; i &lt; 8; i += 2) {
-        dst[i + 0] = src[i + 1];
-        dst[i + 1] = src[i + 0];
-    }
-
-    // make sure bytes swapped
-    assert_dst(dst);
-}</code></pre>
-<p>Triggering:</p>
-<pre><code>$ gcc bug.c -o a -O1 &amp;&amp; ./a
-$ gcc bug.c -o a -O2 &amp;&amp; ./a
-Illegal instruction (core dumped)</code></pre>
-<h2 id="upstream-report">Upstream report</h2>
-<p>I reported the bug as <a href="https://gcc.gnu.org/PR115146"><code>PR115146</code></a>.
-Bisecting <code>gcc</code> pointed me to this
-<a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=a71f90c5a7ae29">“vector shift” change</a>.
-This change looks very close to the culprit as the code explicitly picks
-the “arithmetic” flavor of shift instruction (should be “logical”
-instead).
-By now the original change author already provided a test patch in the
-report! So quick!</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Sat, 18 May 2024 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/313-highway-debugging-example.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
