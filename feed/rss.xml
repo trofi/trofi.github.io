@@ -7,8 +7,170 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Wed, 17 Dec 2025 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sun, 28 Dec 2025 00:00:00 UT</lastBuildDate>
         <item>
+    <title>zellij terminal emulator</title>
+    <link>https://trofi.github.io/posts/344-zellij-terminal-emulator.html</link>
+    <description><![CDATA[<h2 id="my-tmux-setup">my <code>tmux</code> setup</h2>
+<p>I use <code>tmux</code> by default for all my terminal sessions since around 2016
+(almost 10 years!): on most days I switch from local desktop keyboard to
+a laptop and back to run/debug stuff on my desktop. I usually have 4
+sessions: various builders, development session, chat session and
+various one-off investigations.</p>
+<p>I have a moderate <a href="https://github.com/trofi/home/blob/master/.tmux.conf"><code>~/.tmux.conf</code></a>:</p>
+<pre><code>set -ga terminal-overrides ',xterm*:smcup@:rmcup@'
+
+set -sg escape-time 0
+
+set -g mouse on
+bind -T root WheelUpPane   if-shell -F -t = &quot;#{alternate_on}&quot; &quot;send-keys -M&quot; &quot;select-pane -t =; copy-mode -e; send-keys -M&quot;
+bind -T root WheelDownPane if-shell -F -t = &quot;#{alternate_on}&quot; &quot;send-keys -M&quot; &quot;select-pane -t =; send-keys -M&quot;
+
+set -g @scroll-speed-num-lines-per-scroll 3
+
+# override default
+set -g status-right-length 60 # was 40
+set -g status-right '#h, %Y-%m-%d %H:%M' # was something like '&quot;#h&quot;, #S'
+
+# Start windows and panes at 1, not 0
+set -g base-index 1
+setw -g pane-base-index 1
+
+# defatul is ~2000
+set-option -g history-limit 10000
+
+# Allow title update from within tmux apps
+set-option -g set-titles on
+
+# Host-specific overrides
+if-shell &quot;[ -e ~/.tmux.conf.local ]&quot; &quot;source-file ~/.tmux.conf.local&quot;
+
+# Extend default variable list of:
+#   &quot;DISPLAY SSH_ASKPASS SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION WINDOWID XAUTHORITY&quot;
+set-option -g update-environment &quot;DISPLAY SSH_ASKPASS SSH_AUTH_SOCK SSH_AGENT_PID SSH_CONNECTION WINDOWID XAUTHORITY   WAYLAND_DISPLAY SWAYSOCK I3SOCK&quot;
+
+# Join current window into a previous one. Should act as inverse of Ctrl-b !
+bind-key j &quot;join-pane -s !&quot;</code></pre>
+<p>While a bit wordy it’s not a big or complicated setup. And it already
+contains a few hacks like <code>set -sg escape-time 0</code> to make <code>ESC</code> button
+act more responsive. Without it switching modes in <code>vim</code>-like editors
+has a perceptible delay. I had to press <code>ESC</code> twice to get something out
+of <code>vim</code> instantly.</p>
+<h2 id="a-tmux-hickup">a <code>tmux</code> hickup</h2>
+<p>A month ago I casually <code>ssh</code>ed on my desktop and was not able to access
+any of my running <code>tmux</code> sessions:</p>
+<pre><code>$ tmux a
+open terminal failed: not a terminal
+$ tmux
+open terminal failed: not a terminal</code></pre>
+<p>This happened because <code>tmux</code> updated from <code>3.5a</code> version to <code>3.6</code> and
+changed its protocol implementation between server (still ran <code>3.5a</code>)
+and the client (updated to <code>3.6</code>). The workaround was trivial: run <code>3.5</code>
+client for a while until the machine get scheduled for a reboot.</p>
+<p>I debugged it a bit and find out it was an intentional change. I filed
+<a href="https://github.com/tmux/tmux/issues/4711"><code>tmux issue #4711</code></a> to improve
+the error message on <code>tmux</code> side.
+From what I understand at least on <code>linux</code> the change that caused the
+protocol change was entirely in <code>tmux</code> source code base (around
+<code>compat/imsg.h</code> / <code>compat/imsg.c</code> files imported from <code>OpenBSD</code>).
+<code>tmux</code> author decided not to improve the error message.</p>
+<h2 id="zellij"><code>zellij</code></h2>
+<p>This event prompted me to wonder what are the other terminal
+multiplexers out there.</p>
+<p>I tried <code>zellij</code> and am using it for the past month. It’s not a drop-in
+replacement for <code>tmux</code> but it gets very close for my use cases. I
+collected a few niceties and a few snags below I encountered while using
+it.</p>
+<h3 id="nice-zellij-retains-many-ctrl-b-tmux-style-keys-as-is">nice: <code>zellij</code> retains many <code>Ctrl-b</code> <code>tmux</code>-style keys as is</h3>
+<p>Default <code>zellij</code> configuration is usable as is for a <code>tmux</code> user:
+<code>Ctrl-b c</code> opens a new pane (as expected), <code>Ctrl-b ,</code> renames a tab and
+so on. That makes it very easy to try <code>zellij</code> without any exploration
+of config file format.</p>
+<h3 id="snag-some-keybindings-interfere-with-other-applications">snag: some keybindings interfere with other applications</h3>
+<p><code>zellij</code> uses a few escape-style initial sequences, not just
+<code>tmux</code>-style <code>Ctrl-b</code>, but also <code>Ctrl-p</code> (panes), <code>Ctrl-n</code> (resizes),
+<code>Ctrl-h</code> (moves), <code>Ctrl-o</code> (session operations) and a bunch of <code>Alt-</code>
+ones.</p>
+<p>Sometimes these escapes interfere with rich applications like <code>mc</code>,
+<code>vifm</code>, <code>vim</code> or <code>helix</code> editors.</p>
+<p>On the bright side many of them are very convenient, like <code>Alt-n</code> /
+<code>Alt-f</code> to get a short-lived pane.</p>
+<p>Status bar always makes it clear that you got into one of <code>zellij</code>
+modes. But I had to disable quite a few <code>Ctrl-</code> and <code>Alt-</code>-based key
+bindings in favor of deeper nested <code>Ctrl-b</code> ones in <code>tmux</code> style.</p>
+<h3 id="nice-ctrl-g-to-disable-all-the-zellij-bindings">nice: <code>Ctrl-g</code> to disable all the <code>zellij</code> bindings</h3>
+<p>Given the above <code>zellij</code> has a nice <code>Ctrl-g</code> kill-switch to turn all
+bindings off (except <code>Ctrl-g</code> itself).</p>
+<h3 id="nice-scrollback-buffer-editing">nice: scrollback buffer editing</h3>
+<p>When in the scrollback scrolling mode (<code>Ctrl-b [</code> in<code>tmux</code>) I sometimes
+want to save part of the log (or all the contents) into a file. In <code>zellij</code>
+it’s right there at <code>e</code> key: it opens default editor with full contents.</p>
+<h3 id="nice-fast-scrolling-on-copypaste-from-the-scrollback">nice: fast scrolling on copy/paste from the scrollback</h3>
+<p>Very occasionally I want to copy 100-200 lines of a scrollback and paste
+it into the browser. I usually use the mouse and in <code>tmux</code> it was very
+slow for me. I did not always succeed on a <code>ChromeOS</code> terminal.</p>
+<h3 id="nice-modern-features">nice: modern features</h3>
+<p>I noticed that many features like link uderscores and tooltip pop-ups
+work in<code>zellij</code> without any configuration just like they work in a host
+terminal. <code>tmux</code> does not advertise some of them.</p>
+<h3 id="snag-cpu-ram-usage-is-high">snag: <code>CPU</code> / <code>RAM</code> usage is high</h3>
+<p><code>zellij</code> can use quite a bit of <code>CPU</code> (and <code>RAM</code>) if the program pipes
+out a lot of text. For example <code>cat -v /dev/zero</code> command will use
+<code>135%</code> <code>CPU</code> on my system with quite a bit of <code>RAM</code> usage (I <code>Ctrl-C</code>ed
+at <code>15GiB</code>).</p>
+<p>It’s not as bad on more typical multiline workloads.</p>
+<p>There is an existing <a href="https://github.com/zellij-org/zellij/issues/3594">report</a>
+to get it slightly better.</p>
+<h3 id="snag-a-banner-in-the-status-line">snag: a banner in the status line</h3>
+<p><code>zellij</code> keeps its verbatim name in status bar as an advertisement bit.
+Which takes away 10 bytes from the status bar
+(<a href="https://github.com/zellij-org/zellij/issues/4504">the report</a>).</p>
+<p>In theory it’s a one-liner change. But patching it out is not very
+convenient as <code>zellij</code> implements plugins as <code>wasm</code> binaries and ships
+the status bar as precompiled <code>.wasm</code> file. I did not manage to rebuild
+it locally yet.</p>
+<h3 id="snag-no-tmux-style-mouse-drag-support">snag: no <code>tmux</code>-style mouse drag support</h3>
+<p>I liked how <code>tmux</code> allows you to resize panes just by dragging them.
+<code>zellij</code> did not implement it yet (<a href="https://github.com/zellij-org/zellij/issues/1262">the report</a>).</p>
+<p><code>Ctrl-n</code> and arrow keys would have to do for now.</p>
+<h3 id="snag-no-environment-variable-clobber-support">snag: no environment variable clobber support</h3>
+<p><code>tmux</code> has a nice variable clobbering feature when <code>DISPLAY</code>,
+<code>SSH_AUTH_SOCK</code> and a few other variables are updated with variable
+values of the most recent attached client. As a result <code>ssh-agent</code>,
+<code>X11</code> sessions and other things Just Work in newly opened panes.
+<code>zellij</code> does not have the feature yet
+(<a href="https://github.com/zellij-org/zellij/issues/1637">the report</a>’</p>
+<h3 id="snag-no-support-for-editing-keys-in-tab-editor">snag: no support for editing keys in tab editor</h3>
+<p>In <code>tmux</code> when renaming a tab you can use things like <code>Ctrl-w</code> to delete
+existing word. <code>zellij</code> dumps a <code>[119;5u</code> escape.</p>
+<h2 id="parting-words">parting words</h2>
+<p>When I started using <code>zellij</code> I got a lot more than I expected:</p>
+<ul>
+<li>friendly UI that tells you what modes are there and which one is active</li>
+<li>nice and short configuration file format</li>
+<li>modern terminal features support (URL underscores, tooltips)</li>
+<li>mostly compatible with <code>tmux</code> key bindings</li>
+<li>intuitive text selection in the scrollback</li>
+</ul>
+<p>But it has quite a few snags as well:</p>
+<ul>
+<li><p>banner in the status line</p></li>
+<li><p>no environment variable clobber support</p></li>
+<li><p>default config needs some tweaking to be more usable:</p>
+<ul>
+<li>disable hello pop-up (<code>show_startup_tips false</code>)</li>
+<li>disable key bindings that clash with <code>helix</code> editor</li>
+<li>disable pane frames by default (<code>pane_frames false</code>)</li>
+<li>disable session serialization (<code>session_serialization false</code>)</li>
+</ul></li>
+</ul>
+<p>So far <code>zellij</code> is a nice alternative to <code>tmux</code> for me.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Sun, 28 Dec 2025 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/344-zellij-terminal-emulator.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>AoC of 2025</title>
     <link>https://trofi.github.io/posts/343-AoC-of-2025.html</link>
     <description><![CDATA[<p>This time I managed to finish all <code>AoC</code> challenges within a week of
@@ -4636,83 +4798,6 @@ on a defined cadence (moderate)</li>
 <p>Have fun!</p>]]></description>
     <pubDate>Sun, 26 May 2024 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/315-nixpkgs-bootstrap-files-update.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>Zero Hydra Failures towards 24.05 NixOS release</title>
-    <link>http://trofi.github.io/posts/314-Zero-Hydra-Failures-towards-24.05-NixOS-release.html</link>
-    <description><![CDATA[<p>I somehow missed the beginning of <code>ZHF</code> phase
-<a href="https://github.com/NixOS/nixpkgs/issues/309482">this release cycle</a>.
-For those who don’t know <code>ZHF</code> (or Zero Hydra Failures) is the time when
-most build failures are squashed before final <code>NixOS-24.05</code> release
-(see <a href="https://github.com/NixOS/nixpkgs/issues/303285">full release schedule</a>).</p>
-<p>To follow the tradition let’s fix one bug for <code>ZHF</code>.
-I picked <a href="https://hydra.nixos.org/build/261188699"><code>miniupnpc</code></a> build
-failure. Surprisingly it blocks about 60 packages!
-The failure looks trivial:</p>
-<pre><code>trying https://miniupnp.tuxfamily.org/files/miniupnpc-2.2.7.tar.gz
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:--  0:02:14 --:--:--     0
-curl: (28) Failed to connect to miniupnp.tuxfamily.org port 443 after 134794 ms: Couldn't connect to server
-Warning: Problem : timeout. Will retry in 1 seconds. 3 retries left.
-  0     0    0     0    0     0      0      0 --:--:--  0:02:14 --:--:--     0
-curl: (28) Failed to connect to miniupnp.tuxfamily.org port 443 after 134159 ms: Couldn't connect to server
-Warning: Problem : timeout. Will retry in 2 seconds. 2 retries left.
-  0     0    0     0    0     0      0      0 --:--:--  0:02:13 --:--:--     0
-curl: (28) Failed to connect to miniupnp.tuxfamily.org port 443 after 133158 ms: Couldn't connect to server
-Warning: Problem : timeout. Will retry in 4 seconds. 1 retries left.
-  0     0    0     0    0     0      0      0 --:--:--  0:02:15 --:--:--     0
-curl: (28) Failed to connect to miniupnp.tuxfamily.org port 443 after 135253 ms: Couldn't connect to server
-error: cannot download miniupnpc-2.2.7.tar.gz from any mirror</code></pre>
-<p>Upstream source is unavailable and <code>curl</code> times out fetching it.
-With great suggestions from others to switch the package to <code>github</code>
-source fetch I came up with <a href="https://github.com/NixOS/nixpkgs/pull/314510"><code>PR#314510</code></a>:</p>
-<pre class="diff"><code>--- a/pkgs/tools/networking/miniupnpc/default.nix
-+++ b/pkgs/tools/networking/miniupnpc/default.nix
-@@ -1,6 +1,6 @@
- { lib
- , stdenv
--, fetchurl
-+, fetchFromGitHub
- , cmake
- }:
-
-@@ -8,14 +8,15 @@ stdenv.mkDerivation rec {
-   pname = &quot;miniupnpc&quot;;
-   version = &quot;2.2.7&quot;;
-
--  src = fetchurl {
--    urls = [
--      &quot;https://miniupnp.tuxfamily.org/files/${pname}-${version}.tar.gz&quot;
--      &quot;http://miniupnp.free.fr/files/${pname}-${version}.tar.gz&quot;
--    ];
--    sha256 = &quot;sha256-sMOicFaED9DskyilqbrD3F4OxtLoczNJz1d7CqHnCsE=&quot;;
-+  src = fetchFromGitHub {
-+    owner = &quot;miniupnp&quot;;
-+    repo = &quot;miniupnp&quot;;
-+    rev = &quot;miniupnpc_${lib.replaceStrings [&quot;.&quot;] [&quot;_&quot;] version}&quot;;
-+    hash = &quot;sha256-cIijY1NcdF169tibfB13845UT9ZoJ/CZ+XLES9ctWTY=&quot;;
-   };
-
-+  sourceRoot = &quot;${src.name}/miniupnpc&quot;;
-+
-   nativeBuildInputs = [ cmake ];
-
-   doCheck = !stdenv.isFreeBSD;</code></pre>
-<p>The fix is slightly larger than the average one-liner as we have to
-fiddle with the source-fetching helper. But otherwise it’s simple.
-Testing:</p>
-<pre><code>$ nix build -f. miniupnpc</code></pre>
-<p>All good!</p>
-<h2 id="parting-words">Parting words</h2>
-<p>As <code>24.05</code> branch was already created the fix will have to be backported
-to it by adding a specific label. One of the maintainers will have to do
-it.</p>
-<p>Otherwise, contributing to <code>ZHF</code> is very easy. Give it a try!</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Sat, 25 May 2024 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/314-Zero-Hydra-Failures-towards-24.05-NixOS-release.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
