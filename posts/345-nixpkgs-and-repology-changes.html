@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>nixpkgs and repology changes</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>nixpkgs and repology changes</h1>
+            
+                <div class="info">January 25, 2026</div>
+            
+
+            <h2 id="tldr-nixpkgs-changed-the-way-it-exports-data-to-repology-and-many-packages-need-fixing">Tl;DR: <code>nixpkgs</code> changed the way it exports data to <code>repology</code> and many packages need fixing</h2>
+<p>In <a href="https://github.com/NixOS/nixpkgs/pull/451424"><code>nixpkgs/451424</code></a> <code>nixpkgs</code>
+changed substantially how it exports data about available packages.
+As a result some packages like <code>flare</code> stopped being reported to <code>repology.org</code>
+correctly. Luckily the fix is to usually use <code>pname</code> / <code>version</code> instead of
+direct <code>name</code>. Example <a href="https://github.com/NixOS/nixpkgs/pull/483476">fix</a>
+for <code>flare</code> package:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/by-name/fl/flare/package.nix</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/by-name/fl/flare/package.nix</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -6,7 +6,8 @@</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a> }:</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a> buildEnv {</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  name = &quot;flare-1.14&quot;;</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  pname = &quot;flare&quot;;</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="va">+  version = &quot;1.14&quot;;</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>   paths = [</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>     (callPackage ./engine.nix { })</span></code></pre></div>
+<h2 id="the-bug">The bug</h2>
+<p>I happen to maintain <a href="https://github.com/trofi/nix-olde"><code>nix-olde</code></a> program.
+It’s a tool to show you what outdated packages your system has installed.
+The tool is hacky: both in a way how it looks up what you have installed
+in the system and in how it maps that information to <code>repology.org</code> database.
+It errs on the side to not print possibly wrong or missing information.</p>
+<p>A few days ago I casually ran <code>nix-olde</code> against my system and got very
+odd outputs, like:</p>
+<pre><code>        repology r:clock &quot;0.7.4&quot; | nixpkgs {&quot;0.8.4&quot;} {&quot;haskellPackages.clock&quot;}
+        repology r:digest &quot;0.6.39&quot; | nixpkgs {&quot;0.0.2.1&quot;} {&quot;haskellPackages.digest&quot;}
+        repology r:hedgehog &quot;0.2&quot; | nixpkgs {&quot;1.5&quot;} {&quot;haskellPackages.hedgehog&quot;}
+        repology r:mmap &quot;0.6-23&quot; | nixpkgs {&quot;0.5.9&quot;} {&quot;haskellPackages.mmap&quot;}
+        repology r:warp &quot;0.2.3&quot; | nixpkgs {&quot;3.4.9&quot;} {&quot;haskellPackages.warp&quot;}
+        repology r:yaml &quot;2.3.12&quot; | nixpkgs {&quot;0.11.11.2&quot;} {&quot;haskellPackages.yaml&quot;}</code></pre>
+<p>Here <code>nix-olde</code> says that it compared <code>R</code> language packages against
+<code>Haskell</code> language packages and was unhappy about version mismatch. That
+looked very wrong. Turns out that <code>repology.org</code> changed the way it
+reports <code>nixpkgs</code> packages for <code>nixpkgs_unstable</code> repository.
+Before the change <code>repology</code> reported the following package descriptions:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;python:networkx&quot;</span><span class="er">:</span> <span class="ot">[</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">{</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;repo&quot;</span><span class="fu">:</span> <span class="st">&quot;nixpkgs_unstable&quot;</span><span class="fu">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;srcname&quot;</span><span class="fu">:</span> <span class="st">&quot;python310Packages.networkx&quot;</span><span class="fu">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;visiblenamename&quot;</span><span class="fu">:</span> <span class="st">&quot;python3.10-networkx&quot;</span><span class="fu">,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;2.8.6&quot;</span><span class="fu">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;outdated&quot;</span><span class="fu">,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="ot">]</span></span></code></pre></div>
+<p>After the change it started producing the following output:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode json"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="st">&quot;python:networkx&quot;</span><span class="er">:</span> <span class="ot">[</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;repo&quot;</span><span class="fu">:</span> <span class="st">&quot;nixpkgs_unstable&quot;</span><span class="fu">,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;srcname&quot;</span><span class="fu">:</span> <span class="st">&quot;python310Packages.networkx&quot;</span><span class="fu">,</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;visiblename&quot;</span><span class="fu">:</span> <span class="st">&quot;networkx&quot;</span><span class="fu">,</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;2.8.6&quot;</span><span class="fu">,</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;status&quot;</span><span class="fu">:</span> <span class="st">&quot;outdated&quot;</span><span class="fu">,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="ot">]</span></span></code></pre></div>
+<p><code>nix-olde</code> used to rely on <code>visiblename</code>: it was conveniently not too
+specific (did not contain a version) and yet was specific enough to contain
+package ecosystem prefix. But now <code>visiblename</code> omits ecosystem entirely.
+This caused all the problematic reports.
+I fixed it with <a href="https://github.com/trofi/nix-olde/commit/ec6313f5abf33ae2701afa6c165a8abc2087699e">this commit</a>.</p>
+<h2 id="how-does-nixpkgs-export-data-to-repology">How does <code>nixpkgs</code> export data to repology?</h2>
+<p><code>repology.org</code> is configured to fetch package lists from <code>nixpkgs</code>
+<a href="https://github.com/repology/repology-updater/blob/85f1accfc4d6edd1c940a620b886b4b21c0c1fb8/repos.d/nixos.yaml#L65">here</a>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> nix_unstable</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">type</span><span class="kw">:</span><span class="at"> repository</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">desc</span><span class="kw">:</span><span class="at"> nixpkgs unstable</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">statsgroup</span><span class="kw">:</span><span class="at"> nix</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">family</span><span class="kw">:</span><span class="at"> nix</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">ruleset</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="at">nix</span><span class="kw">,</span><span class="at"> nix_name</span><span class="kw">]</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">color</span><span class="kw">:</span><span class="at"> </span><span class="st">'7eb2dd'</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">minpackages</span><span class="kw">:</span><span class="at"> </span><span class="dv">120000</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">default_maintainer</span><span class="kw">:</span><span class="at"> fallback-mnt-nix@repology</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">sources</span><span class="kw">:</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> packages-unstable.json</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">fetcher</span><span class="kw">:</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">class</span><span class="kw">:</span><span class="at"> FileFetcher</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">url</span><span class="kw">:</span><span class="at"> https://channels.nixos.org/nixos-unstable/packages.json.br</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">parser</span><span class="kw">:</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">class</span><span class="kw">:</span><span class="at"> NixJsonParser</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="at">        </span><span class="fu">use_pname</span><span class="kw">:</span><span class="at"> </span><span class="ch">true</span></span></code></pre></div>
+<p>Note that it was changed
+<a href="https://github.com/repology/repology-updater/commit/e134ff779ed1f776784473403dca19bdd3a64a64">very recently</a> to enable <code>use_pname</code>.</p>
+<p><code>nixpkgs</code> on its side generates <code>packages.json.br</code> with an equivalent of
+<a href="https://github.com/NixOS/nixpkgs/blob/aa6e0f1bcb02bcb16084e5ec00d56df94e1e235e/pkgs/top-level/make-tarball.nix#L47">this</a>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="va">NIX_STATE_DIR</span><span class="op">=</span><span class="va">$TMPDIR</span> <span class="va">NIX_PATH</span><span class="op">=</span> <span class="ex">nix-instantiate</span> <span class="at">--eval</span> <span class="at">--raw</span> <span class="at">--expr</span> <span class="st">&quot;import </span><span class="va">$src</span><span class="st">/pkgs/top-level/packages-info.nix {}&quot;</span> <span class="kw">|</span> <span class="fu">sed</span> <span class="st">&quot;s|</span><span class="va">$src</span><span class="st">/||g&quot;</span> <span class="kw">|</span> <span class="ex">jq</span> <span class="at">-c</span> <span class="op">&gt;</span> packages.json</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">brotli</span> <span class="at">-9</span> <span class="op">&lt;</span> packages.json <span class="op">&gt;</span> packages.json.br</span></code></pre></div>
+<p>Note that this also
+<a href="https://github.com/NixOS/nixpkgs/commit/e6fd1262842edfd00c54523a4b18d1a16f5c0587">changed recently</a>.
+Before the change the code used to use <code>nix-env</code>:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="at">-n</span> <span class="st">'{&quot;version&quot;:2,&quot;packages&quot;:'</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">NIX_STATE_DIR</span><span class="op">=</span><span class="va">$TMPDIR</span> <span class="va">NIX_PATH</span><span class="op">=</span> <span class="ex">nix-env</span> <span class="at">-f</span> <span class="va">$src</span> <span class="at">-qa</span> <span class="at">--meta</span> <span class="at">--json</span> <span class="at">--show-trace</span> <span class="at">--arg</span> config <span class="st">'import ${./packages-config.nix}'</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="at">-n</span> <span class="st">'}'</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="kw">)</span> <span class="kw">|</span> <span class="fu">sed</span> <span class="st">&quot;s|</span><span class="va">$src</span><span class="st">/||g&quot;</span> <span class="kw">|</span> <span class="ex">jq</span> <span class="at">-c</span> <span class="op">&gt;</span> packages.json</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">brotli</span> <span class="at">-9</span> <span class="op">&lt;</span> packages.json <span class="op">&gt;</span> packages.json.br</span></code></pre></div>
+<h2 id="is-there-a-difference-introduced">Is there a difference introduced?</h2>
+<p>Why does it matter? Conveniently currently only <code>nixpkgs_unstable</code> has
+the change. Previous releases like <code>nixos-25.11</code> still use the previous
+mechanism. Let’s compare the outputs of <code>python3Packages.networkx</code>:</p>
+<pre><code>$ curl -L https://channels.nixos.org/nixos-unstable/packages.json.br &gt; unstable-packages.json.br
+
+$ brotli -d &lt;unstable-packages.json.br | jq '.packages.&quot;python313Packages.networkx&quot;|[.name, .pname, .version]'
+[
+  &quot;python3.13-networkx-3.5&quot;,
+  &quot;networkx&quot;,
+  &quot;3.5&quot;
+]
+
+$ curl -L https://channels.nixos.org/nixos-25.11/packages.json.br &gt; 25.11-packages.json.br
+
+$ brotli -d &lt;25.11-packages.json.br | jq '.packages.&quot;python313Packages.networkx&quot;|[.name, .pname, .version]'
+[
+  &quot;python3.13-networkx-3.5&quot;,
+  &quot;python3.13-networkx&quot;,
+  &quot;3.5&quot;
+]</code></pre>
+<p>Here we see that <code>pname</code> changed from <code>python3.13-networkx</code> to <code>networkx</code>.
+For this package it’s a reasonable change. Let’s look at <code>flare</code> instead:</p>
+<pre><code>$ brotli -d &lt;unstable-packages.json.br | jq '.packages.flare|[.name, .pname, .version]'
+[
+  &quot;flare-1.14&quot;,
+  &quot;flare-1.14&quot;,
+  &quot;&quot;
+]
+
+$ brotli -d &lt;25.11-packages.json.br | jq '.packages.flare|[.name, .pname, .version]'
+[
+  &quot;flare-1.14&quot;,
+  &quot;flare&quot;,
+  &quot;1.14&quot;
+]</code></pre>
+<p>Here the change effectively broke both package name and version reporting
+in <code>unstable</code>. As a result <code>flare-rpg</code> is missing an <code>unstable</code> entry on
+<a href="https://repology.org/project/flare-rpg/versions">repology</a>:</p>
+<pre><code>nixpkgs stable 23.11	flare	1.14
+nixpkgs stable 24.05	flare	1.14
+nixpkgs stable 24.11	flare	1.14
+nixpkgs stable 25.05	flare	1.14
+nixpkgs stable 25.11	flare	1.14</code></pre>
+<p>Normally <code>unstable</code> entry looks like
+<a href="https://repology.org/project/re2c/versions">this</a>:</p>
+<pre><code>nixpkgs stable 23.11	re2c	3.1
+nixpkgs stable 24.05	re2c	3.1
+nixpkgs stable 24.11	re2c	3.1
+nixpkgs stable 25.05	re2c	4.1
+nixpkgs stable 25.11	re2c	4.3.1
+nixpkgs unstable	re2c	4.4</code></pre>
+<h2 id="why-does-it-happen">Why does it happen?</h2>
+<p>Before the <a href="https://github.com/NixOS/nixpkgs/pull/451424"><code>nixpkgs/451424</code></a>
+change the split from <code>"flare-1.14"</code> down to <code>"flare" "1.14"</code> was done
+by <code>nix-env -qa</code> itself! It does not have any advanced heuristics. I
+noticed it before when I just started on <code>nix-olde</code>.
+For example in
+<a href="https://github.com/NixOS/nix/issues/7540"><code>nix/7540</code></a> <code>nix</code> splits
+<code>"font-adobe-75dpi-1.0.3"</code> in an unexpected way:</p>
+<pre><code>$ nix-env -f. -qa --json | fgrep -A9  xorg.fontadobe75dpi
+  &quot;xorg.fontadobe75dpi&quot;: {
+    &quot;name&quot;: &quot;font-adobe-75dpi-1.0.3&quot;,
+    &quot;outputName&quot;: &quot;out&quot;,
+    &quot;outputs&quot;: {
+      &quot;out&quot;: null
+    },
+    &quot;pname&quot;: &quot;font-adobe&quot;,
+    &quot;system&quot;: &quot;x86_64-linux&quot;,
+    &quot;version&quot;: &quot;75dpi-1.0.3&quot;
+  },</code></pre>
+<p>It’s <code>"font-adobe" "75dpi-1.0.3"</code>. But it should have been
+<code>"font-adobe-75dpi" "1.0.3"</code> instead!</p>
+<p>Normally all 3 <code>name / pname / version</code> come directly from the attributes
+of a package:</p>
+<pre><code>$ nix repl -f '&lt;nixpkgs&gt;'
+
+nix-repl&gt; with re2c; [ name pname version ]
+[
+  &quot;re2c-4.4&quot;
+  &quot;re2c&quot;
+  &quot;4.4&quot;
+]</code></pre>
+<p>For some packages not all of them are defined:</p>
+<pre><code>nix-repl&gt; with flare; [ name pname version ]
+[
+  &quot;flare-1.14&quot;
+  «error: undefined variable 'pname'»
+  «error: undefined variable 'version'»
+]</code></pre>
+<p>The fix is usually simple: instead of defining <code>name</code> directly use
+<code>pname</code> / <code>version</code> split. For <a href="https://github.com/NixOS/nixpkgs/pull/483476">example</a>:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/by-name/fl/flare/package.nix</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/by-name/fl/flare/package.nix</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -6,7 +6,8 @@</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a> }:</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a> buildEnv {</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  name = &quot;flare-1.14&quot;;</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  pname = &quot;flare&quot;;</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="va">+  version = &quot;1.14&quot;;</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>   paths = [</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>     (callPackage ./engine.nix { })</span></code></pre></div>
+<h2 id="how-does-repology-handle-such-packages">How does repology handle such packages?</h2>
+<p>Does <code>repology</code> do anything special about these <code>"version": ""</code> cases?
+<code>repology-updater/repology/parsers/parsers/nix.py</code> handles versions
+somewhere <a href="https://github.com/repology/repology-updater/blob/85f1accfc4d6edd1c940a620b886b4b21c0c1fb8/repology/parsers/parsers/nix.py#L160">here</a>.</p>
+<p>It already has to work around cases of wrong version splits:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> verprefix <span class="kw">in</span> [<span class="st">'100dpi'</span>, <span class="st">'75dpi'</span>]:</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> packagedata[<span class="st">'version'</span>].startswith(verprefix):</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>            pkg.log(<span class="st">'dropping &quot;</span><span class="sc">{}</span><span class="st">&quot;, &quot;</span><span class="sc">{}</span><span class="st">&quot; does not belong to version'</span>.<span class="bu">format</span>(packagedata[<span class="st">'name'</span>], verprefix), severity<span class="op">=</span>Logger.ERROR)</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>            skip <span class="op">=</span> <span class="va">True</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>            <span class="cf">break</span></span></code></pre></div>
+<p>Otherwise, <code>"version"</code> is extracted
+<a href="https://github.com/repology/repology-updater/blob/85f1accfc4d6edd1c940a620b886b4b21c0c1fb8/repology/parsers/parsers/nix.py#L180">as is</a>:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>    pname <span class="op">=</span> packagedata[<span class="st">'pname'</span>]</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    version <span class="op">=</span> packagedata[<span class="st">'version'</span>]</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="co"># This is temporary solution (see #854) which overrides pname and version with ones</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="co"># (ambigiously) parsed from name. That's what nix currently does (instead of exposing</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    <span class="co"># explicitly set pname and version), and we do the same instead of using pname/version</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    <span class="co"># provided by them to avoid unexpected change in data when/if they change their logic</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># As soon as they do and changed data is verified, this block may be removed</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    match <span class="op">=</span> re.match(<span class="st">'(.+?)-([0-9].*)$'</span>, packagedata[<span class="st">'name'</span>])</span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> match <span class="kw">is</span> <span class="va">None</span>:</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>        pkg.log(<span class="st">'cannot parse name &quot;</span><span class="sc">{}</span><span class="st">&quot;'</span>.<span class="bu">format</span>(packagedata[<span class="st">'name'</span>]), severity<span class="op">=</span>Logger.ERROR)</span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>        <span class="cf">continue</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">elif</span> <span class="kw">not</span> <span class="va">self</span>._use_pname:</span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>        pname <span class="op">=</span> match.group(<span class="dv">1</span>)</span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>        version <span class="op">=</span> match.group(<span class="dv">2</span>)</span></code></pre></div>
+<p>Thus, <code>_use_pname</code> (enabled in <code>nixpkgs_unstable</code>) effectively disables <code>name</code> version
+heuristics.</p>
+<h2 id="are-there-any-more-affected-packages">Are there any more affected packages?</h2>
+<p>I wondered now many more packages in <code>packages.json</code> that do have
+version in <code>pname</code> with a version specified, but lack <code>name</code> form:</p>
+<pre><code>$ brotli -d &lt;unstable-packages.json.br | fgrep -B4 '&quot;version&quot;: &quot;&quot;' d | fgrep pname | sort -u | grep -P -- '-[0-9]+(\.[0-9]+)*\&quot;' | wc -l
+260</code></pre>
+<p>Here I filtered only <code>pname</code> that seemingly look like a version. I probably
+missed a few complicated cases. But it’s a good first pass. Here are
+package examples:</p>
+<pre><code>$ brotli -d &lt;unstable-packages.json.br | fgrep -B4 '&quot;version&quot;: &quot;&quot;' d | fgrep pname | sort -u | grep -P -- '-[0-9]+(\.[0-9]
+      &quot;pname&quot;: &quot;afro-graphics-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-5.10.248&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-5.15.198&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.1.161&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.12.66&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.12.67&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.18.6&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.18.7&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.6.121&quot;,
+      &quot;pname&quot;: &quot;android-studio-for-platform-2024.2.2.13&quot;,
+      &quot;pname&quot;: &quot;android-studio-for-platform-canary-2024.3.1.9&quot;,
+      &quot;pname&quot;: &quot;auditable-cargo-1.92.0&quot;,
+      &quot;pname&quot;: &quot;autoreiv-theme-47.01&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-5.10.248&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-5.15.198&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.1.161&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.12.66&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.12.67&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.18.6&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.18.7&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.6.121&quot;,
+      &quot;pname&quot;: &quot;binary-black-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;binary-blue-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;binary-red-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;binary-white-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-5.10.248&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-5.15.198&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.1.161&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.12.66&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.12.67&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.18.6&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.18.7&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.6.121&quot;,
+      &quot;pname&quot;: &quot;bundler-audit-0.9.2&quot;,
+      &quot;pname&quot;: &quot;cabal2nix-2.21.0&quot;,
+      &quot;pname&quot;: &quot;caribou-0.4.21&quot;,
+      &quot;pname&quot;: &quot;catppuccin-frappe-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;catppuccin-latte-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;catppuccin-macchiato-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;catppuccin-mocha-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;cctools-binutils-darwin-dualas-1010.6&quot;,
+      &quot;pname&quot;: &quot;cfn-nag-0.8.10&quot;,
+      &quot;pname&quot;: &quot;chicken-base64-3.3.1&quot;,
+      &quot;pname&quot;: &quot;chicken-defstruct-1.6&quot;,
+      &quot;pname&quot;: &quot;chicken-http-client-0.18&quot;,
+      &quot;pname&quot;: &quot;chicken-intarweb-1.7&quot;,
+      &quot;pname&quot;: &quot;chicken-matchable-3.7&quot;,
+      &quot;pname&quot;: &quot;chicken-sendfile-1.8.3&quot;,
+      &quot;pname&quot;: &quot;chicken-simple-md5-0.0.1&quot;,
+      &quot;pname&quot;: &quot;chicken-uri-common-1.4&quot;,
+      &quot;pname&quot;: &quot;chicken-uri-generic-2.46&quot;,
+      &quot;pname&quot;: &quot;cloudformation-0.9.64&quot;,
+      &quot;pname&quot;: &quot;compass-1.0.3&quot;,
+      &quot;pname&quot;: &quot;d1x-rebirth-full-2.0.0.7&quot;,
+      &quot;pname&quot;: &quot;d2x-rebirth-full-2.0.0.7&quot;,
+      &quot;pname&quot;: &quot;dbus-1&quot;,
+      &quot;pname&quot;: &quot;deadbeef-with-plugins-1.10.0&quot;,
+      &quot;pname&quot;: &quot;dejavu-fonts-2.37&quot;,
+      &quot;pname&quot;: &quot;Dell-5130cdn-Color-Laser-1.3-1&quot;,
+      &quot;pname&quot;: &quot;dfgraphics-theme-42.05&quot;,
+      &quot;pname&quot;: &quot;distcc-masq-gcc-15.2.0&quot;,
+      &quot;pname&quot;: &quot;docbook-sgml-3.1&quot;,
+      &quot;pname&quot;: &quot;docbook-sgml-4.1&quot;,
+      &quot;pname&quot;: &quot;dracula-2020-07-02&quot;,
+      &quot;pname&quot;: &quot;drawio-headless-29.0.3&quot;,
+      &quot;pname&quot;: &quot;eclipse-plugin-antlr-runtime-4.5.3&quot;,
+      &quot;pname&quot;: &quot;eclipse-plugin-antlr-runtime-4.7.1&quot;,
+      &quot;pname&quot;: &quot;ecm-7.0.6&quot;,
+      &quot;pname&quot;: &quot;exact-audio-copy-1.8.0&quot;,
+      &quot;pname&quot;: &quot;faust2alqt-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2alsa-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2csound-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2firefox-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2jack-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2jackrust-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2jaqt-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2ladspa-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2lv2-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2sc.py-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2sndfile-2.83.1&quot;,
+      &quot;pname&quot;: &quot;fcitx5-with-addons-5.1.16&quot;,
+      &quot;pname&quot;: &quot;flare-1.14&quot;,
+      &quot;pname&quot;: &quot;fluentd-1.18.0&quot;,
+      &quot;pname&quot;: &quot;foreman-0.87.2&quot;,
+      &quot;pname&quot;: &quot;frogatto-unstable-2023-02-27&quot;,
+      &quot;pname&quot;: &quot;geany-with-vte-2.1&quot;,
+      &quot;pname&quot;: &quot;gear-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;gemset-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;gimp-with-plugins-2.10.38&quot;,
+      &quot;pname&quot;: &quot;gimp-with-plugins-3.0.6&quot;,
+      &quot;pname&quot;: &quot;git_fame-3.2.19&quot;,
+      &quot;pname&quot;: &quot;gitweb-2.52.0&quot;,
+      &quot;pname&quot;: &quot;glibc-iconv-2.42&quot;,
+      &quot;pname&quot;: &quot;glibc-multi-2.42-47&quot;,
+      &quot;pname&quot;: &quot;glob2-0.9.4.4&quot;,
+      &quot;pname&quot;: &quot;gradient-grey-2018-10-20&quot;,
+      &quot;pname&quot;: &quot;helm-3.19.1&quot;,
+      &quot;pname&quot;: &quot;hiera-eyaml-4.3.0&quot;,
+      &quot;pname&quot;: &quot;homesick-1.1.6&quot;,
+      &quot;pname&quot;: &quot;html-proofer-5.0.8&quot;,
+      &quot;pname&quot;: &quot;hxnodejs-6.9.0&quot;,
+      &quot;pname&quot;: &quot;ibus-with-plugins-1.5.33&quot;,
+      &quot;pname&quot;: &quot;idris-1.3.4&quot;,
+      &quot;pname&quot;: &quot;idris-with-packages-1.3.4&quot;,
+      &quot;pname&quot;: &quot;indi-full-2.1.6&quot;,
+      &quot;pname&quot;: &quot;indi-full-nonfree-2.1.6&quot;,
+      &quot;pname&quot;: &quot;indi-with-drivers-2.1.6&quot;,
+      &quot;pname&quot;: &quot;inkscape-with-extensions-1.4.3&quot;,
+      &quot;pname&quot;: &quot;ironhand-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;jolly-bastion-theme-47.04&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-5.10.248&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-5.15.198&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.1.161&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.12.66&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.12.67&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.18.6&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.18.7&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.6.121&quot;,
+      &quot;pname&quot;: &quot;kakoune-2025.06.03&quot;,
+      &quot;pname&quot;: &quot;keeagent-0.12.0&quot;,
+      &quot;pname&quot;: &quot;keepass-charactercopy-1.0.0&quot;,
+      &quot;pname&quot;: &quot;keepasshttp-1.8.4.2&quot;,
+      &quot;pname&quot;: &quot;keepass-keetraytotp-0.108.0&quot;,
+      &quot;pname&quot;: &quot;keepass-qrcodeview-1.0.4&quot;,
+      &quot;pname&quot;: &quot;keepassrpc-1.16.0&quot;,
+      &quot;pname&quot;: &quot;klibc-2.0.14&quot;,
+      &quot;pname&quot;: &quot;legends-browser-1.19.2&quot;,
+      &quot;pname&quot;: &quot;libidn2-2.3.8&quot;,
+      &quot;pname&quot;: &quot;libxml2+py-2.15.1&quot;,
+      &quot;pname&quot;: &quot;license_finder-7.0.1&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-18.1.8&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-19.1.7&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-20.1.8&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-21.1.8&quot;,
+      &quot;pname&quot;: &quot;matrix-synapse-wrapped-1.145.0&quot;,
+      &quot;pname&quot;: &quot;mayday-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;moonscape-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;mosaic-blue-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;mpv-with-scripts-0.41.0&quot;,
+      &quot;pname&quot;: &quot;msp430-newlib-4.5.0.20241231&quot;,
+      &quot;pname&quot;: &quot;nemo-with-extensions-6.6.3&quot;,
+      &quot;pname&quot;: &quot;net-tools-1003.1-2008&quot;,
+      &quot;pname&quot;: &quot;nineish-2019-12-04&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-frappe-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-frappe-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-latte-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-latte-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-macchiato-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-macchiato-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-mocha-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-mocha-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-dark-gray-2020-07-02&quot;,
+      &quot;pname&quot;: &quot;nineish-dark-gray-2021-07-20&quot;,
+      &quot;pname&quot;: &quot;nineish-dark-light-2021-07-20&quot;,
+      &quot;pname&quot;: &quot;nix-generate-from-cpan-3&quot;,
+      &quot;pname&quot;: &quot;nix-index-0.1.9&quot;,
+      &quot;pname&quot;: &quot;nixops-2.0.0-unstable-2025-12-28&quot;,
+      &quot;pname&quot;: &quot;obsidian-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;ocaml5.3.0-uucp-17.0.0&quot;,
+      &quot;pname&quot;: &quot;ocaml5.3.0-vg-0.9.5&quot;,
+      &quot;pname&quot;: &quot;ocaml5.4.0-uucp-17.0.0&quot;,
+      &quot;pname&quot;: &quot;ocaml5.4.0-vg-0.9.5&quot;,
+      &quot;pname&quot;: &quot;open-watcom-bin-1.9&quot;,
+      &quot;pname&quot;: &quot;open-watcom-v2-0-unstable-2025-11-15&quot;,
+      &quot;pname&quot;: &quot;otpkeyprov-2.6&quot;,
+      &quot;pname&quot;: &quot;phoebus-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;plikd-1.3.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-14.20&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-15.15&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-16.11&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-17.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-18.1&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-14.20&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-15.15&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-16.11&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-17.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-18.1&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-14.20&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-15.15&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-16.11&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-17.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-18.1&quot;,
+      &quot;pname&quot;: &quot;postgrey-1.37&quot;,
+      &quot;pname&quot;: &quot;powerline-symbols-2.8.4&quot;,
+      &quot;pname&quot;: &quot;procps-1003.1-2008&quot;,
+      &quot;pname&quot;: &quot;python3.13-subunit-1.4.5&quot;,
+      &quot;pname&quot;: &quot;python3.14-subunit-1.4.5&quot;,
+      &quot;pname&quot;: &quot;python3-3.13.11-llm-0.28&quot;,
+      &quot;pname&quot;: &quot;rally-ho-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;recursive-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;retroarch-with-cores-1.22.2&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-carddav-4.4.6&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-contextmenu-3.3.1&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-custom_from-1.6.6&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-persistent_login-5.3.0&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-thunderbird_labels-1.6.0&quot;,
+      &quot;pname&quot;: &quot;run-npush-0.7&quot;,
+      &quot;pname&quot;: &quot;scope-lite-0.2.0&quot;,
+      &quot;pname&quot;: &quot;service-wrapper-19.04&quot;,
+      &quot;pname&quot;: &quot;signwriting-1.1.4&quot;,
+      &quot;pname&quot;: &quot;simple-blue-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;simple-dark-gray-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;simple-dark-gray-2018-08-28&quot;,
+      &quot;pname&quot;: &quot;simple-dark-gray-bootloader-2018-08-28&quot;,
+      &quot;pname&quot;: &quot;simple-light-gray-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;simple-red-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;stripes-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;stripes-logo-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-5.10.248&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-5.15.198&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.1.161&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.12.66&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.12.67&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.18.6&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.18.7&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.6.121&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-5.10.248&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-5.15.198&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.1.161&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.12.66&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.12.67&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.18.6&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.18.7&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.6.121&quot;,
+      &quot;pname&quot;: &quot;systemtap-5.4&quot;,
+      &quot;pname&quot;: &quot;taffer-theme-47.04&quot;,
+      &quot;pname&quot;: &quot;teamocil-1.4.2&quot;,
+      &quot;pname&quot;: &quot;tectonic-wrapped-0.15.0&quot;,
+      &quot;pname&quot;: &quot;tergel-theme-47.01&quot;,
+      &quot;pname&quot;: &quot;travis-1.9.1&quot;,
+      &quot;pname&quot;: &quot;tsm-client-8.1.27.1&quot;,
+      &quot;pname&quot;: &quot;unicode-emoji-17.0.0&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-5.10.248&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-5.15.198&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.1.161&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.12.67&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.18.7&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.6.121&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-hardened-6.12.66&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-lqx-6.18.6&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-xanmod-6.12.66&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-xanmod-6.18.6&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-zen-6.18.6&quot;,
+      &quot;pname&quot;: &quot;util-linux-1003.1-2008&quot;,
+      &quot;pname&quot;: &quot;vdr-epgtableid0-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-hello-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdrift-unstable-2021-09-05-with-data-1446&quot;,
+      &quot;pname&quot;: &quot;vdr-osddemo-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-pictures-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-servicedemo-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-skincurses-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-status-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-svdrpdemo-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-with-plugins-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vettlingr-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;vscode-with-extensions-1.108.1&quot;,
+      &quot;pname&quot;: &quot;wanderlust-theme-47.04&quot;,
+      &quot;pname&quot;: &quot;waterfall-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;watersplash-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;wayfire-wrapped-0.10.1&quot;,</code></pre>
+<p>At least <code>flare</code> is in the list. I think most of these require a similar
+fix.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nixpkgs</code> now exposes slight less mangled data to <code>repology.org</code> for version
+comparison. Unfortunately <code>nixpkgs</code> itself is not fully switched to
+<code>pname</code> / <code>version</code> everywhere. And thus a small set of data is now lost.
+It should be easy to find and to restore those with a fix similar to
+<a href="https://github.com/NixOS/nixpkgs/pull/483476"><code>flare</code></a>.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>

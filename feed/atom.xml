@@ -10,8 +10,522 @@
         <email>slyich@gmail.com</email>
         
     </author>
-    <updated>2025-12-28T00:00:00Z</updated>
+    <updated>2026-01-25T00:00:00Z</updated>
     <entry>
+    <title>nixpkgs and repology changes</title>
+    <link href="https://trofi.github.io/posts/345-nixpkgs-and-repology-changes.html" />
+    <id>https://trofi.github.io/posts/345-nixpkgs-and-repology-changes.html</id>
+    <published>2026-01-25T00:00:00Z</published>
+    <updated>2026-01-25T00:00:00Z</updated>
+    <summary type="html"><![CDATA[<h2 id="tldr-nixpkgs-changed-the-way-it-exports-data-to-repology-and-many-packages-need-fixing">Tl;DR: <code>nixpkgs</code> changed the way it exports data to <code>repology</code> and many packages need fixing</h2>
+<p>In <a href="https://github.com/NixOS/nixpkgs/pull/451424"><code>nixpkgs/451424</code></a> <code>nixpkgs</code>
+changed substantially how it exports data about available packages.
+As a result some packages like <code>flare</code> stopped being reported to <code>repology.org</code>
+correctly. Luckily the fix is to usually use <code>pname</code> / <code>version</code> instead of
+direct <code>name</code>. Example <a href="https://github.com/NixOS/nixpkgs/pull/483476">fix</a>
+for <code>flare</code> package:</p>
+<pre class="diff"><code>--- a/pkgs/by-name/fl/flare/package.nix
++++ b/pkgs/by-name/fl/flare/package.nix
+@@ -6,7 +6,8 @@
+ }:
+
+ buildEnv {
+-  name = &quot;flare-1.14&quot;;
++  pname = &quot;flare&quot;;
++  version = &quot;1.14&quot;;
+
+   paths = [
+     (callPackage ./engine.nix { })</code></pre>
+<h2 id="the-bug">The bug</h2>
+<p>I happen to maintain <a href="https://github.com/trofi/nix-olde"><code>nix-olde</code></a> program.
+It’s a tool to show you what outdated packages your system has installed.
+The tool is hacky: both in a way how it looks up what you have installed
+in the system and in how it maps that information to <code>repology.org</code> database.
+It errs on the side to not print possibly wrong or missing information.</p>
+<p>A few days ago I casually ran <code>nix-olde</code> against my system and got very
+odd outputs, like:</p>
+<pre><code>        repology r:clock &quot;0.7.4&quot; | nixpkgs {&quot;0.8.4&quot;} {&quot;haskellPackages.clock&quot;}
+        repology r:digest &quot;0.6.39&quot; | nixpkgs {&quot;0.0.2.1&quot;} {&quot;haskellPackages.digest&quot;}
+        repology r:hedgehog &quot;0.2&quot; | nixpkgs {&quot;1.5&quot;} {&quot;haskellPackages.hedgehog&quot;}
+        repology r:mmap &quot;0.6-23&quot; | nixpkgs {&quot;0.5.9&quot;} {&quot;haskellPackages.mmap&quot;}
+        repology r:warp &quot;0.2.3&quot; | nixpkgs {&quot;3.4.9&quot;} {&quot;haskellPackages.warp&quot;}
+        repology r:yaml &quot;2.3.12&quot; | nixpkgs {&quot;0.11.11.2&quot;} {&quot;haskellPackages.yaml&quot;}</code></pre>
+<p>Here <code>nix-olde</code> says that it compared <code>R</code> language packages against
+<code>Haskell</code> language packages and was unhappy about version mismatch. That
+looked very wrong. Turns out that <code>repology.org</code> changed the way it
+reports <code>nixpkgs</code> packages for <code>nixpkgs_unstable</code> repository.
+Before the change <code>repology</code> reported the following package descriptions:</p>
+<pre class="json"><code>&quot;python:networkx&quot;: [
+  {
+    &quot;repo&quot;: &quot;nixpkgs_unstable&quot;,
+    &quot;srcname&quot;: &quot;python310Packages.networkx&quot;,
+    &quot;visiblenamename&quot;: &quot;python3.10-networkx&quot;,
+    &quot;version&quot;: &quot;2.8.6&quot;,
+    &quot;status&quot;: &quot;outdated&quot;,
+  },
+]</code></pre>
+<p>After the change it started producing the following output:</p>
+<pre class="json"><code>&quot;python:networkx&quot;: [
+  {
+    &quot;repo&quot;: &quot;nixpkgs_unstable&quot;,
+    &quot;srcname&quot;: &quot;python310Packages.networkx&quot;,
+    &quot;visiblename&quot;: &quot;networkx&quot;,
+    &quot;version&quot;: &quot;2.8.6&quot;,
+    &quot;status&quot;: &quot;outdated&quot;,
+  },
+]</code></pre>
+<p><code>nix-olde</code> used to rely on <code>visiblename</code>: it was conveniently not too
+specific (did not contain a version) and yet was specific enough to contain
+package ecosystem prefix. But now <code>visiblename</code> omits ecosystem entirely.
+This caused all the problematic reports.
+I fixed it with <a href="https://github.com/trofi/nix-olde/commit/ec6313f5abf33ae2701afa6c165a8abc2087699e">this commit</a>.</p>
+<h2 id="how-does-nixpkgs-export-data-to-repology">How does <code>nixpkgs</code> export data to repology?</h2>
+<p><code>repology.org</code> is configured to fetch package lists from <code>nixpkgs</code>
+<a href="https://github.com/repology/repology-updater/blob/85f1accfc4d6edd1c940a620b886b4b21c0c1fb8/repos.d/nixos.yaml#L65">here</a>:</p>
+<pre class="yaml"><code>- name: nix_unstable
+  type: repository
+  desc: nixpkgs unstable
+  statsgroup: nix
+  family: nix
+  ruleset: [nix, nix_name]
+  color: '7eb2dd'
+  minpackages: 120000
+  default_maintainer: fallback-mnt-nix@repology
+  sources:
+    - name: packages-unstable.json
+      fetcher:
+        class: FileFetcher
+        url: https://channels.nixos.org/nixos-unstable/packages.json.br
+      parser:
+        class: NixJsonParser
+        use_pname: true</code></pre>
+<p>Note that it was changed
+<a href="https://github.com/repology/repology-updater/commit/e134ff779ed1f776784473403dca19bdd3a64a64">very recently</a> to enable <code>use_pname</code>.</p>
+<p><code>nixpkgs</code> on its side generates <code>packages.json.br</code> with an equivalent of
+<a href="https://github.com/NixOS/nixpkgs/blob/aa6e0f1bcb02bcb16084e5ec00d56df94e1e235e/pkgs/top-level/make-tarball.nix#L47">this</a>:</p>
+<pre class="bash"><code>NIX_STATE_DIR=$TMPDIR NIX_PATH= nix-instantiate --eval --raw --expr &quot;import $src/pkgs/top-level/packages-info.nix {}&quot; | sed &quot;s|$src/||g&quot; | jq -c &gt; packages.json
+brotli -9 &lt; packages.json &gt; packages.json.br</code></pre>
+<p>Note that this also
+<a href="https://github.com/NixOS/nixpkgs/commit/e6fd1262842edfd00c54523a4b18d1a16f5c0587">changed recently</a>.
+Before the change the code used to use <code>nix-env</code>:</p>
+<pre class="bash"><code>(
+  echo -n '{&quot;version&quot;:2,&quot;packages&quot;:'
+  NIX_STATE_DIR=$TMPDIR NIX_PATH= nix-env -f $src -qa --meta --json --show-trace --arg config 'import ${./packages-config.nix}'
+  echo -n '}'
+) | sed &quot;s|$src/||g&quot; | jq -c &gt; packages.json
+brotli -9 &lt; packages.json &gt; packages.json.br</code></pre>
+<h2 id="is-there-a-difference-introduced">Is there a difference introduced?</h2>
+<p>Why does it matter? Conveniently currently only <code>nixpkgs_unstable</code> has
+the change. Previous releases like <code>nixos-25.11</code> still use the previous
+mechanism. Let’s compare the outputs of <code>python3Packages.networkx</code>:</p>
+<pre><code>$ curl -L https://channels.nixos.org/nixos-unstable/packages.json.br &gt; unstable-packages.json.br
+
+$ brotli -d &lt;unstable-packages.json.br | jq '.packages.&quot;python313Packages.networkx&quot;|[.name, .pname, .version]'
+[
+  &quot;python3.13-networkx-3.5&quot;,
+  &quot;networkx&quot;,
+  &quot;3.5&quot;
+]
+
+$ curl -L https://channels.nixos.org/nixos-25.11/packages.json.br &gt; 25.11-packages.json.br
+
+$ brotli -d &lt;25.11-packages.json.br | jq '.packages.&quot;python313Packages.networkx&quot;|[.name, .pname, .version]'
+[
+  &quot;python3.13-networkx-3.5&quot;,
+  &quot;python3.13-networkx&quot;,
+  &quot;3.5&quot;
+]</code></pre>
+<p>Here we see that <code>pname</code> changed from <code>python3.13-networkx</code> to <code>networkx</code>.
+For this package it’s a reasonable change. Let’s look at <code>flare</code> instead:</p>
+<pre><code>$ brotli -d &lt;unstable-packages.json.br | jq '.packages.flare|[.name, .pname, .version]'
+[
+  &quot;flare-1.14&quot;,
+  &quot;flare-1.14&quot;,
+  &quot;&quot;
+]
+
+$ brotli -d &lt;25.11-packages.json.br | jq '.packages.flare|[.name, .pname, .version]'
+[
+  &quot;flare-1.14&quot;,
+  &quot;flare&quot;,
+  &quot;1.14&quot;
+]</code></pre>
+<p>Here the change effectively broke both package name and version reporting
+in <code>unstable</code>. As a result <code>flare-rpg</code> is missing an <code>unstable</code> entry on
+<a href="https://repology.org/project/flare-rpg/versions">repology</a>:</p>
+<pre><code>nixpkgs stable 23.11	flare	1.14
+nixpkgs stable 24.05	flare	1.14
+nixpkgs stable 24.11	flare	1.14
+nixpkgs stable 25.05	flare	1.14
+nixpkgs stable 25.11	flare	1.14</code></pre>
+<p>Normally <code>unstable</code> entry looks like
+<a href="https://repology.org/project/re2c/versions">this</a>:</p>
+<pre><code>nixpkgs stable 23.11	re2c	3.1
+nixpkgs stable 24.05	re2c	3.1
+nixpkgs stable 24.11	re2c	3.1
+nixpkgs stable 25.05	re2c	4.1
+nixpkgs stable 25.11	re2c	4.3.1
+nixpkgs unstable	re2c	4.4</code></pre>
+<h2 id="why-does-it-happen">Why does it happen?</h2>
+<p>Before the <a href="https://github.com/NixOS/nixpkgs/pull/451424"><code>nixpkgs/451424</code></a>
+change the split from <code>"flare-1.14"</code> down to <code>"flare" "1.14"</code> was done
+by <code>nix-env -qa</code> itself! It does not have any advanced heuristics. I
+noticed it before when I just started on <code>nix-olde</code>.
+For example in
+<a href="https://github.com/NixOS/nix/issues/7540"><code>nix/7540</code></a> <code>nix</code> splits
+<code>"font-adobe-75dpi-1.0.3"</code> in an unexpected way:</p>
+<pre><code>$ nix-env -f. -qa --json | fgrep -A9  xorg.fontadobe75dpi
+  &quot;xorg.fontadobe75dpi&quot;: {
+    &quot;name&quot;: &quot;font-adobe-75dpi-1.0.3&quot;,
+    &quot;outputName&quot;: &quot;out&quot;,
+    &quot;outputs&quot;: {
+      &quot;out&quot;: null
+    },
+    &quot;pname&quot;: &quot;font-adobe&quot;,
+    &quot;system&quot;: &quot;x86_64-linux&quot;,
+    &quot;version&quot;: &quot;75dpi-1.0.3&quot;
+  },</code></pre>
+<p>It’s <code>"font-adobe" "75dpi-1.0.3"</code>. But it should have been
+<code>"font-adobe-75dpi" "1.0.3"</code> instead!</p>
+<p>Normally all 3 <code>name / pname / version</code> come directly from the attributes
+of a package:</p>
+<pre><code>$ nix repl -f '&lt;nixpkgs&gt;'
+
+nix-repl&gt; with re2c; [ name pname version ]
+[
+  &quot;re2c-4.4&quot;
+  &quot;re2c&quot;
+  &quot;4.4&quot;
+]</code></pre>
+<p>For some packages not all of them are defined:</p>
+<pre><code>nix-repl&gt; with flare; [ name pname version ]
+[
+  &quot;flare-1.14&quot;
+  «error: undefined variable 'pname'»
+  «error: undefined variable 'version'»
+]</code></pre>
+<p>The fix is usually simple: instead of defining <code>name</code> directly use
+<code>pname</code> / <code>version</code> split. For <a href="https://github.com/NixOS/nixpkgs/pull/483476">example</a>:</p>
+<pre class="diff"><code>--- a/pkgs/by-name/fl/flare/package.nix
++++ b/pkgs/by-name/fl/flare/package.nix
+@@ -6,7 +6,8 @@
+ }:
+
+ buildEnv {
+-  name = &quot;flare-1.14&quot;;
++  pname = &quot;flare&quot;;
++  version = &quot;1.14&quot;;
+
+   paths = [
+     (callPackage ./engine.nix { })</code></pre>
+<h2 id="how-does-repology-handle-such-packages">How does repology handle such packages?</h2>
+<p>Does <code>repology</code> do anything special about these <code>"version": ""</code> cases?
+<code>repology-updater/repology/parsers/parsers/nix.py</code> handles versions
+somewhere <a href="https://github.com/repology/repology-updater/blob/85f1accfc4d6edd1c940a620b886b4b21c0c1fb8/repology/parsers/parsers/nix.py#L160">here</a>.</p>
+<p>It already has to work around cases of wrong version splits:</p>
+<pre class="python"><code>    for verprefix in ['100dpi', '75dpi']:
+        if packagedata['version'].startswith(verprefix):
+            pkg.log('dropping &quot;{}&quot;, &quot;{}&quot; does not belong to version'.format(packagedata['name'], verprefix), severity=Logger.ERROR)
+            skip = True
+            break</code></pre>
+<p>Otherwise, <code>"version"</code> is extracted
+<a href="https://github.com/repology/repology-updater/blob/85f1accfc4d6edd1c940a620b886b4b21c0c1fb8/repology/parsers/parsers/nix.py#L180">as is</a>:</p>
+<pre class="python"><code>    pname = packagedata['pname']
+    version = packagedata['version']
+    # This is temporary solution (see #854) which overrides pname and version with ones
+    # (ambigiously) parsed from name. That's what nix currently does (instead of exposing
+    # explicitly set pname and version), and we do the same instead of using pname/version
+    # provided by them to avoid unexpected change in data when/if they change their logic
+    # As soon as they do and changed data is verified, this block may be removed
+    match = re.match('(.+?)-([0-9].*)$', packagedata['name'])
+    if match is None:
+        pkg.log('cannot parse name &quot;{}&quot;'.format(packagedata['name']), severity=Logger.ERROR)
+        continue
+    elif not self._use_pname:
+        pname = match.group(1)
+        version = match.group(2)</code></pre>
+<p>Thus, <code>_use_pname</code> (enabled in <code>nixpkgs_unstable</code>) effectively disables <code>name</code> version
+heuristics.</p>
+<h2 id="are-there-any-more-affected-packages">Are there any more affected packages?</h2>
+<p>I wondered now many more packages in <code>packages.json</code> that do have
+version in <code>pname</code> with a version specified, but lack <code>name</code> form:</p>
+<pre><code>$ brotli -d &lt;unstable-packages.json.br | fgrep -B4 '&quot;version&quot;: &quot;&quot;' d | fgrep pname | sort -u | grep -P -- '-[0-9]+(\.[0-9]+)*\&quot;' | wc -l
+260</code></pre>
+<p>Here I filtered only <code>pname</code> that seemingly look like a version. I probably
+missed a few complicated cases. But it’s a good first pass. Here are
+package examples:</p>
+<pre><code>$ brotli -d &lt;unstable-packages.json.br | fgrep -B4 '&quot;version&quot;: &quot;&quot;' d | fgrep pname | sort -u | grep -P -- '-[0-9]+(\.[0-9]
+      &quot;pname&quot;: &quot;afro-graphics-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-5.10.248&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-5.15.198&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.1.161&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.12.66&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.12.67&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.18.6&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.18.7&quot;,
+      &quot;pname&quot;: &quot;ajantv2-module-17.5.0-6.6.121&quot;,
+      &quot;pname&quot;: &quot;android-studio-for-platform-2024.2.2.13&quot;,
+      &quot;pname&quot;: &quot;android-studio-for-platform-canary-2024.3.1.9&quot;,
+      &quot;pname&quot;: &quot;auditable-cargo-1.92.0&quot;,
+      &quot;pname&quot;: &quot;autoreiv-theme-47.01&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-5.10.248&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-5.15.198&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.1.161&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.12.66&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.12.67&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.18.6&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.18.7&quot;,
+      &quot;pname&quot;: &quot;bbswitch-unstable-2021-11-29-6.6.121&quot;,
+      &quot;pname&quot;: &quot;binary-black-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;binary-blue-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;binary-red-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;binary-white-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-5.10.248&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-5.15.198&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.1.161&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.12.66&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.12.67&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.18.6&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.18.7&quot;,
+      &quot;pname&quot;: &quot;broadcom-sta-6.30.223.271-59-6.6.121&quot;,
+      &quot;pname&quot;: &quot;bundler-audit-0.9.2&quot;,
+      &quot;pname&quot;: &quot;cabal2nix-2.21.0&quot;,
+      &quot;pname&quot;: &quot;caribou-0.4.21&quot;,
+      &quot;pname&quot;: &quot;catppuccin-frappe-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;catppuccin-latte-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;catppuccin-macchiato-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;catppuccin-mocha-2024-02-15&quot;,
+      &quot;pname&quot;: &quot;cctools-binutils-darwin-dualas-1010.6&quot;,
+      &quot;pname&quot;: &quot;cfn-nag-0.8.10&quot;,
+      &quot;pname&quot;: &quot;chicken-base64-3.3.1&quot;,
+      &quot;pname&quot;: &quot;chicken-defstruct-1.6&quot;,
+      &quot;pname&quot;: &quot;chicken-http-client-0.18&quot;,
+      &quot;pname&quot;: &quot;chicken-intarweb-1.7&quot;,
+      &quot;pname&quot;: &quot;chicken-matchable-3.7&quot;,
+      &quot;pname&quot;: &quot;chicken-sendfile-1.8.3&quot;,
+      &quot;pname&quot;: &quot;chicken-simple-md5-0.0.1&quot;,
+      &quot;pname&quot;: &quot;chicken-uri-common-1.4&quot;,
+      &quot;pname&quot;: &quot;chicken-uri-generic-2.46&quot;,
+      &quot;pname&quot;: &quot;cloudformation-0.9.64&quot;,
+      &quot;pname&quot;: &quot;compass-1.0.3&quot;,
+      &quot;pname&quot;: &quot;d1x-rebirth-full-2.0.0.7&quot;,
+      &quot;pname&quot;: &quot;d2x-rebirth-full-2.0.0.7&quot;,
+      &quot;pname&quot;: &quot;dbus-1&quot;,
+      &quot;pname&quot;: &quot;deadbeef-with-plugins-1.10.0&quot;,
+      &quot;pname&quot;: &quot;dejavu-fonts-2.37&quot;,
+      &quot;pname&quot;: &quot;Dell-5130cdn-Color-Laser-1.3-1&quot;,
+      &quot;pname&quot;: &quot;dfgraphics-theme-42.05&quot;,
+      &quot;pname&quot;: &quot;distcc-masq-gcc-15.2.0&quot;,
+      &quot;pname&quot;: &quot;docbook-sgml-3.1&quot;,
+      &quot;pname&quot;: &quot;docbook-sgml-4.1&quot;,
+      &quot;pname&quot;: &quot;dracula-2020-07-02&quot;,
+      &quot;pname&quot;: &quot;drawio-headless-29.0.3&quot;,
+      &quot;pname&quot;: &quot;eclipse-plugin-antlr-runtime-4.5.3&quot;,
+      &quot;pname&quot;: &quot;eclipse-plugin-antlr-runtime-4.7.1&quot;,
+      &quot;pname&quot;: &quot;ecm-7.0.6&quot;,
+      &quot;pname&quot;: &quot;exact-audio-copy-1.8.0&quot;,
+      &quot;pname&quot;: &quot;faust2alqt-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2alsa-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2csound-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2firefox-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2jack-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2jackrust-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2jaqt-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2ladspa-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2lv2-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2sc.py-2.83.1&quot;,
+      &quot;pname&quot;: &quot;faust2sndfile-2.83.1&quot;,
+      &quot;pname&quot;: &quot;fcitx5-with-addons-5.1.16&quot;,
+      &quot;pname&quot;: &quot;flare-1.14&quot;,
+      &quot;pname&quot;: &quot;fluentd-1.18.0&quot;,
+      &quot;pname&quot;: &quot;foreman-0.87.2&quot;,
+      &quot;pname&quot;: &quot;frogatto-unstable-2023-02-27&quot;,
+      &quot;pname&quot;: &quot;geany-with-vte-2.1&quot;,
+      &quot;pname&quot;: &quot;gear-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;gemset-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;gimp-with-plugins-2.10.38&quot;,
+      &quot;pname&quot;: &quot;gimp-with-plugins-3.0.6&quot;,
+      &quot;pname&quot;: &quot;git_fame-3.2.19&quot;,
+      &quot;pname&quot;: &quot;gitweb-2.52.0&quot;,
+      &quot;pname&quot;: &quot;glibc-iconv-2.42&quot;,
+      &quot;pname&quot;: &quot;glibc-multi-2.42-47&quot;,
+      &quot;pname&quot;: &quot;glob2-0.9.4.4&quot;,
+      &quot;pname&quot;: &quot;gradient-grey-2018-10-20&quot;,
+      &quot;pname&quot;: &quot;helm-3.19.1&quot;,
+      &quot;pname&quot;: &quot;hiera-eyaml-4.3.0&quot;,
+      &quot;pname&quot;: &quot;homesick-1.1.6&quot;,
+      &quot;pname&quot;: &quot;html-proofer-5.0.8&quot;,
+      &quot;pname&quot;: &quot;hxnodejs-6.9.0&quot;,
+      &quot;pname&quot;: &quot;ibus-with-plugins-1.5.33&quot;,
+      &quot;pname&quot;: &quot;idris-1.3.4&quot;,
+      &quot;pname&quot;: &quot;idris-with-packages-1.3.4&quot;,
+      &quot;pname&quot;: &quot;indi-full-2.1.6&quot;,
+      &quot;pname&quot;: &quot;indi-full-nonfree-2.1.6&quot;,
+      &quot;pname&quot;: &quot;indi-with-drivers-2.1.6&quot;,
+      &quot;pname&quot;: &quot;inkscape-with-extensions-1.4.3&quot;,
+      &quot;pname&quot;: &quot;ironhand-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;jolly-bastion-theme-47.04&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-5.10.248&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-5.15.198&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.1.161&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.12.66&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.12.67&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.18.6&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.18.7&quot;,
+      &quot;pname&quot;: &quot;jool-4.1.14-6.6.121&quot;,
+      &quot;pname&quot;: &quot;kakoune-2025.06.03&quot;,
+      &quot;pname&quot;: &quot;keeagent-0.12.0&quot;,
+      &quot;pname&quot;: &quot;keepass-charactercopy-1.0.0&quot;,
+      &quot;pname&quot;: &quot;keepasshttp-1.8.4.2&quot;,
+      &quot;pname&quot;: &quot;keepass-keetraytotp-0.108.0&quot;,
+      &quot;pname&quot;: &quot;keepass-qrcodeview-1.0.4&quot;,
+      &quot;pname&quot;: &quot;keepassrpc-1.16.0&quot;,
+      &quot;pname&quot;: &quot;klibc-2.0.14&quot;,
+      &quot;pname&quot;: &quot;legends-browser-1.19.2&quot;,
+      &quot;pname&quot;: &quot;libidn2-2.3.8&quot;,
+      &quot;pname&quot;: &quot;libxml2+py-2.15.1&quot;,
+      &quot;pname&quot;: &quot;license_finder-7.0.1&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-18.1.8&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-19.1.7&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-20.1.8&quot;,
+      &quot;pname&quot;: &quot;llvm-binutils-21.1.8&quot;,
+      &quot;pname&quot;: &quot;matrix-synapse-wrapped-1.145.0&quot;,
+      &quot;pname&quot;: &quot;mayday-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;moonscape-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;mosaic-blue-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;mpv-with-scripts-0.41.0&quot;,
+      &quot;pname&quot;: &quot;msp430-newlib-4.5.0.20241231&quot;,
+      &quot;pname&quot;: &quot;nemo-with-extensions-6.6.3&quot;,
+      &quot;pname&quot;: &quot;net-tools-1003.1-2008&quot;,
+      &quot;pname&quot;: &quot;nineish-2019-12-04&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-frappe-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-frappe-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-latte-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-latte-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-macchiato-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-macchiato-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-mocha-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-catppuccin-mocha-alt-2025-01-27&quot;,
+      &quot;pname&quot;: &quot;nineish-dark-gray-2020-07-02&quot;,
+      &quot;pname&quot;: &quot;nineish-dark-gray-2021-07-20&quot;,
+      &quot;pname&quot;: &quot;nineish-dark-light-2021-07-20&quot;,
+      &quot;pname&quot;: &quot;nix-generate-from-cpan-3&quot;,
+      &quot;pname&quot;: &quot;nix-index-0.1.9&quot;,
+      &quot;pname&quot;: &quot;nixops-2.0.0-unstable-2025-12-28&quot;,
+      &quot;pname&quot;: &quot;obsidian-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;ocaml5.3.0-uucp-17.0.0&quot;,
+      &quot;pname&quot;: &quot;ocaml5.3.0-vg-0.9.5&quot;,
+      &quot;pname&quot;: &quot;ocaml5.4.0-uucp-17.0.0&quot;,
+      &quot;pname&quot;: &quot;ocaml5.4.0-vg-0.9.5&quot;,
+      &quot;pname&quot;: &quot;open-watcom-bin-1.9&quot;,
+      &quot;pname&quot;: &quot;open-watcom-v2-0-unstable-2025-11-15&quot;,
+      &quot;pname&quot;: &quot;otpkeyprov-2.6&quot;,
+      &quot;pname&quot;: &quot;phoebus-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;plikd-1.3.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-14.20&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-15.15&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-16.11&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-17.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-plperl-18.1&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-14.20&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-15.15&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-16.11&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-17.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-plpython3-18.1&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-14.20&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-15.15&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-16.11&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-17.7&quot;,
+      &quot;pname&quot;: &quot;postgresql-pltcl-18.1&quot;,
+      &quot;pname&quot;: &quot;postgrey-1.37&quot;,
+      &quot;pname&quot;: &quot;powerline-symbols-2.8.4&quot;,
+      &quot;pname&quot;: &quot;procps-1003.1-2008&quot;,
+      &quot;pname&quot;: &quot;python3.13-subunit-1.4.5&quot;,
+      &quot;pname&quot;: &quot;python3.14-subunit-1.4.5&quot;,
+      &quot;pname&quot;: &quot;python3-3.13.11-llm-0.28&quot;,
+      &quot;pname&quot;: &quot;rally-ho-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;recursive-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;retroarch-with-cores-1.22.2&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-carddav-4.4.6&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-contextmenu-3.3.1&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-custom_from-1.6.6&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-persistent_login-5.3.0&quot;,
+      &quot;pname&quot;: &quot;roundcube-plugin-thunderbird_labels-1.6.0&quot;,
+      &quot;pname&quot;: &quot;run-npush-0.7&quot;,
+      &quot;pname&quot;: &quot;scope-lite-0.2.0&quot;,
+      &quot;pname&quot;: &quot;service-wrapper-19.04&quot;,
+      &quot;pname&quot;: &quot;signwriting-1.1.4&quot;,
+      &quot;pname&quot;: &quot;simple-blue-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;simple-dark-gray-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;simple-dark-gray-2018-08-28&quot;,
+      &quot;pname&quot;: &quot;simple-dark-gray-bootloader-2018-08-28&quot;,
+      &quot;pname&quot;: &quot;simple-light-gray-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;simple-red-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;stripes-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;stripes-logo-2016-02-19&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-5.10.248&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-5.15.198&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.1.161&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.12.66&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.12.67&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.18.6&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.18.7&quot;,
+      &quot;pname&quot;: &quot;system76-io-module-1.0.4-6.6.121&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-5.10.248&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-5.15.198&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.1.161&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.12.66&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.12.67&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.18.6&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.18.7&quot;,
+      &quot;pname&quot;: &quot;system76-module-1.0.17-6.6.121&quot;,
+      &quot;pname&quot;: &quot;systemtap-5.4&quot;,
+      &quot;pname&quot;: &quot;taffer-theme-47.04&quot;,
+      &quot;pname&quot;: &quot;teamocil-1.4.2&quot;,
+      &quot;pname&quot;: &quot;tectonic-wrapped-0.15.0&quot;,
+      &quot;pname&quot;: &quot;tergel-theme-47.01&quot;,
+      &quot;pname&quot;: &quot;travis-1.9.1&quot;,
+      &quot;pname&quot;: &quot;tsm-client-8.1.27.1&quot;,
+      &quot;pname&quot;: &quot;unicode-emoji-17.0.0&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-5.10.248&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-5.15.198&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.1.161&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.12.67&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.18.7&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-6.6.121&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-hardened-6.12.66&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-lqx-6.18.6&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-xanmod-6.12.66&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-xanmod-6.18.6&quot;,
+      &quot;pname&quot;: &quot;usbip-linux-zen-6.18.6&quot;,
+      &quot;pname&quot;: &quot;util-linux-1003.1-2008&quot;,
+      &quot;pname&quot;: &quot;vdr-epgtableid0-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-hello-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdrift-unstable-2021-09-05-with-data-1446&quot;,
+      &quot;pname&quot;: &quot;vdr-osddemo-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-pictures-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-servicedemo-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-skincurses-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-status-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-svdrpdemo-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vdr-with-plugins-2.6.9&quot;,
+      &quot;pname&quot;: &quot;vettlingr-theme-47.05&quot;,
+      &quot;pname&quot;: &quot;vscode-with-extensions-1.108.1&quot;,
+      &quot;pname&quot;: &quot;wanderlust-theme-47.04&quot;,
+      &quot;pname&quot;: &quot;waterfall-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;watersplash-2022-04-19&quot;,
+      &quot;pname&quot;: &quot;wayfire-wrapped-0.10.1&quot;,</code></pre>
+<p>At least <code>flare</code> is in the list. I think most of these require a similar
+fix.</p>
+<h2 id="parting-words">Parting words</h2>
+<p><code>nixpkgs</code> now exposes slight less mangled data to <code>repology.org</code> for version
+comparison. Unfortunately <code>nixpkgs</code> itself is not fully switched to
+<code>pname</code> / <code>version</code> everywhere. And thus a small set of data is now lost.
+It should be easy to find and to restore those with a fix similar to
+<a href="https://github.com/NixOS/nixpkgs/pull/483476"><code>flare</code></a>.</p>
+<p>Have fun!</p>]]></summary>
+</entry>
+<entry>
     <title>zellij terminal emulator</title>
     <link href="https://trofi.github.io/posts/344-zellij-terminal-emulator.html" />
     <id>https://trofi.github.io/posts/344-zellij-terminal-emulator.html</id>
@@ -4655,153 +5169,6 @@ I found about 50 <code>gcc</code> bugs and even fixed at least
 <p><code>NixOS</code> still works fine for me. I did not do as much as I managed to
 last year. But looking back the list looks impressive.</p>
 <p>Give <code>NixOS</code> a go if you did not yet :)</p>]]></summary>
-</entry>
-<entry>
-    <title>nixpkgs bootstrap files update</title>
-    <link href="http://trofi.github.io/posts/315-nixpkgs-bootstrap-files-update.html" />
-    <id>http://trofi.github.io/posts/315-nixpkgs-bootstrap-files-update.html</id>
-    <published>2024-05-26T00:00:00Z</published>
-    <updated>2024-05-26T00:00:00Z</updated>
-    <summary type="html"><![CDATA[<h2 id="tldr">Tl;DR</h2>
-<p><code>nixpkgs</code> now has up to date <code>bootstrapFiles</code> at least for <code>i686-linux</code>
-and <code>x86_64-linux</code>. Moreover, we now have an easy procedure to update the
-binaries! Instructions are hiding in
-<a href="https://github.com/NixOS/nixpkgs/blob/master/maintainers/scripts/bootstrap-files/README.md#how-to-request-the-bootstrap-seed-update"><code>maintainers/scripts/bootstrap-files/README.md</code></a>.
-For example, the
-<a href="https://github.com/NixOS/nixpkgs/pull/288866"><code>PR#288866</code></a> to update
-<code>i686-unknown-linux-gnu</code> was generated as:</p>
-<pre><code>$ maintainers/scripts/bootstrap-files/refresh-tarballs.bash \
-    --commit \
-    --targets=x86_64-unknown-linux-gnu
-
-$ git push my-fork staging:bootstrapFiles-x86_64-unknown-linux-gnu-update</code></pre>
-<p>This work paves the way for more frequent updates of the existing
-bootstrap files and simplifies the procedure of introducing support for
-new targets into <code>nixpkgs</code>.
-As a nice side-effect <code>x86_64-linux</code> bootstrap does not depend on <code>i686</code>
-<code>busybox</code> binary any more and uses <code>x86_64</code> binary instead:</p>
-<img src="https://trofi.github.io/posts.data.inline/315-nixpkgs-bootstrap-files-update/fig-0.gv.svg" />
-<p>This means that updating <code>i686-linux</code> bootstrap files alone does not
-trigger the rebuild of <code>x86_64-linux</code> world any more.</p>
-<h2 id="more-words">More words</h2>
-<h3 id="intro">Intro</h3>
-<p>About two years ago <a href="https://trofi.github.io/posts/240-nixpkgs-bootstrap-intro.html">I noticed</a>
-that <code>nixpkgs</code> has quite old initial seed binaries used to bootstrap the
-rest of the system.
-Normally the version of bootstrap files does not matter as once bootstrap
-finishes the original files are not referenced any more. There are a few
-annoying exceptions that people stumbled from time to time. One of them
-was stale <code>libgcc.so</code>.</p>
-<p>Stale binaries also cause build failures from time to time. One
-example failure is discussed in the
-<a href="https://trofi.github.io/posts/275-nixpkgs-bootstrap-deep-dive.html">bootstrap deep dive</a> post,
-another example is a <a href="https://github.com/NixOS/nixpkgs/pull/229898#issuecomment-1589179355">stale <code>gnumake</code></a>
-failure. There are a lot more. They usually get workarounds somewhere
-else in <code>nixpkgs</code> but almost never in the bootstrap files as they are
-harder to update.</p>
-<p>These failures are not always easy to debug (or workaround). I
-occasionally suggested updating the bootstrap binaries as I expected it
-to be a trivial operation for people who did those initially.</p>
-<p>I asked a few times on infra Matrix channel if bootstrap files could be
-updated as part of a release preparation and did not get anywhere.</p>
-<p>At some point Bernardo visited me in person and explained the details of
-what it takes to upload the binaries and what the requirements for the
-new binaries are nowadays. In essence there are two requirements:</p>
-<ol type="1">
-<li>The binaries should be built by <a href="https://hydra.nixos.org" class="uri">https://hydra.nixos.org</a> to make
-sure that binaries come from a somewhat trusted location and others
-can replicate the same binaries from source.</li>
-<li>The binaries must be uploaded to <a href="https://tarballs.nixos.org" class="uri">https://tarballs.nixos.org</a> by
-someone someone has the permissions to do it.</li>
-</ol>
-<p>Sounds trivial?</p>
-<p>At some point I encountered complete failure of <code>i686-linux</code> bootstrap
-on my filesystem due to
-<a href="https://trofi.github.io/posts/297-32-bit-file-API-strikes-back.html">64-bit <code>inode</code> values</a> on my
-<code>/nix/store</code>.</p>
-<p>I filed an <a href="https://github.com/NixOS/nixpkgs/issues/253713"><code>Issue#253713</code></a>
-to request automated periodic bootstrap files updates. I also listed a
-few examples where periodic refresh would fix the problems people
-encounter hoping that somebody will consider it bad enough and upload
-the binaries.</p>
-<h3 id="a-light-in-the-tunnel">A light in the tunnel</h3>
-<p>Alas just filing an issue did not magically fix things.
-I noticed that recently <code>riscv64-linux</code> bootstrap files were updated in
-<a href="https://github.com/NixOS/nixpkgs/pull/282517"><code>PR#2826517</code></a> and I took it
-as an opportunity to explore the mechanism and automate the whole <code>PR</code>
-preparation as the first step.
-The procedure looked trivial: you follow a few hydra links and put them
-into the <code>.nix</code> file.</p>
-<h3 id="annoying-details">Annoying details</h3>
-<p>I hoped for a script to be 2-3 <code>curl</code> calls. But there are always those
-pesky details that get in your way.</p>
-<h4 id="job-names">Job names</h4>
-<p>Some targets (like <code>risc-v</code> or <code>powerpc64</code>) don’t yet have a native
-build support on <code>hydra</code> (lack of hardware). And yet we have bootstrap
-files for those: they are cross-compiled.</p>
-<p>Hydra job name and even job results format were different between native
-and cross-builds:</p>
-<ul>
-<li>native targets used only <code>.dist</code> style builds</li>
-<li>cross-targets had <code>.bootstrapTools</code> style builds</li>
-</ul>
-<p>Those were easy to fix by exposing builds unconditionally with
-<a href="https://github.com/NixOS/nixpkgs/pull/284090"><code>PR#284090</code></a>. And drop
-unused <code>.dist</code> indirection with
-<a href="https://github.com/NixOS/nixpkgs/pull/301639"><code>PR#301639</code></a> suggested by
-Alyssa.</p>
-<h4 id="nixpkgs-file-inconsistency-darwin"><code>nixpkgs</code> file inconsistency (<code>darwin</code>)</h4>
-<p>Once I had a glance at <code>darwin</code> bootstrap jobs I noticed it puts files
-into slightly different location. I unified it with
-<a href="https://github.com/NixOS/nixpkgs/pull/284628"><code>PR#284628</code></a> hoping that
-somebody else will finish the <code>darwin</code> part. And help did come from
-<code>annalee</code> in <a href="https://github.com/NixOS/nixpkgs/pull/295557"><code>PR#295557</code></a>.</p>
-<h4 id="actual-re-generator">Actual re-generator</h4>
-<p>Once enough things were in place I hacked up a shell script that fetches
-needed files and generates <code>.nix</code> files with enough contents as
-<a href="https://github.com/NixOS/nixpkgs/pull/284541"><code>PR#284541</code></a>. The script
-ended up being almost 300 lines long!</p>
-<p>As a first test I tried it on <code>musl</code> targets as they were not using
-the binaries from <code>tarballs.nixos.org</code> and that felt like an urgent issue.
-The <a href="https://github.com/NixOS/nixpkgs/pull/285906"><code>PR#285906</code></a> dealt with
-<code>x86_64-unknown-linux-musl</code> bootstrap files.</p>
-<h4 id="cross-case">cross-case</h4>
-<p>Updating existing files is slightly easier than bringing it a completely
-new set of binaries. How do you deal with the new files?
-Having dealt with changes above I could finally answer that question
-with some confidence:</p>
-<ul>
-<li>add a new target to <code>lib/systems/examples.nix</code>, make sure it can build
-basic things like <code>pkgsCross.$target.hello</code></li>
-<li>add <code>bootstrapFiles</code> build entry to
-<code>pkgs/stdenv/linux/make-bootstrap-tools-cross.nix</code>, wait for <code>hydra</code>
-to build binaries for you</li>
-<li>add your new target to <code>maintainers/scripts/bootstrap-files/refresh-tarballs.bash</code>
-your in <code>CROSS_TARGETS=()</code> list and run the script.</li>
-<li>send the resulting <code>PR</code> requesting binaries upload as described in
-<code>maintainers/scripts/bootstrap-files/README.md</code></li>
-</ul>
-<p><a href="https://github.com/NixOS/nixpkgs/pull/314823"><code>PR#314823</code></a> should
-document the same procedure in <code>nixpkgs</code>.</p>
-<h2 id="parting-words">Parting words</h2>
-<p>I managed to update bootstrap files for <code>i686-linux</code> and <code>x86_64-linux</code>!
-It immediately got the following benefits:</p>
-<ul>
-<li>fixed <code>i686-linux</code> bootstrap on filesystems with 64-bit <code>inodes</code></li>
-<li>untangled <code>x86_64-linux</code> bootstrap from <code>i686</code> <code>busybox</code></li>
-<li>switched <code>musl</code> bootstrap files to <code>hydra</code>-built files hosted on
-<code>tarballs.nixos.org</code>.</li>
-<li>documented a way to introduce new target into <code>nixpkgs</code> via
-cross-compiled bootstrap files.</li>
-</ul>
-<p>Next steps:</p>
-<ul>
-<li>update <code>aarch64-linux</code> bootstrap files (trivial)</li>
-<li>update other cross-targets (trivial)</li>
-<li>work with release engineering team to periodically update the binaries
-on a defined cadence (moderate)</li>
-</ul>
-<p>Have fun!</p>]]></summary>
 </entry>
 
 </feed>
