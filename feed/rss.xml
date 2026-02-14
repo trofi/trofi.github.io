@@ -7,8 +7,250 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Sun, 25 Jan 2026 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Sat, 14 Feb 2026 00:00:00 UT</lastBuildDate>
         <item>
+    <title>sequoia pgp</title>
+    <link>https://trofi.github.io/posts/346-sequoia-pgp.html</link>
+    <description><![CDATA[<h2 id="tldr">TL;DR</h2>
+<p>If you are a <code>PGP</code> newbie (like me) then consider reading
+<a href="https://book.sequoia-pgp.org/"><code>sq user documentation</code></a> book! It gave
+me an idea of how to use the <code>sq</code> tool and how <code>PGP</code> concepts map to it.
+The book also has a “Background” section that I missed so much to get a
+better grasp of <code>PGP</code> model.</p>
+<h2 id="story-mode">Story mode</h2>
+<p>I created my first <code>PGP</code> key in 2008:</p>
+<pre><code>$ gpg --list-public-keys slyich@gmail.com
+pub   dsa1024/0x71A1EE76611FF3AA 2008-10-18 [SC] [revoked: 2018-07-04]
+      9929AD151B96AF651958D35871A1EE76611FF3AA
+uid                   [ revoked] Sergei Trofimovich &lt;slyfox@...&gt;
+uid                   [ revoked] Sergei Trofimovich &lt;st@...&gt;
+uid                   [ revoked] Sergei Trofimovich &lt;slyfox@...&gt;
+uid                   [ revoked] Sergei Trofimovich &lt;slyich@...&gt;
+uid                   [ revoked] Sergei Trofimovich &lt;slyfox@...&gt;
+uid                   [ revoked] Sergei Trofimovich &lt;siarheit@...&gt;
+
+pub   rsa4096/0x44FE231F3F3926E4 2018-07-03 [SC] [expires: 2027-08-18]
+      62197C11C7C25A61C448E95644FE231F3F3926E4
+uid                   [ultimate] Sergei Trofimovich &lt;slyich@...&gt;
+sub   rsa4096/0xBA6C2FC245B4DF2C 2018-07-03 [E] [expires: 2027-08-18]
+sub   rsa4096/0xED5E45E06F2AC293 2018-07-03 [S] [expires: 2027-08-18]</code></pre>
+<p>You could tell I had no idea how to use it then even by looking at the
+key! No subkeys, long list of attached identities some of which were
+stale, I revoked <code>DSA-1024</code> key years after algorithm was officially
+declared weak.</p>
+<p>Looking back into the mail history I suspect I started using <code>PGP</code>
+after Mikhail’s suggestion. Mikhail always introduced me to the new
+fancy things he recently found. Be it <code>SoftICE</code>, <code>Gmail</code> beta, <code>XMPP</code>,
+<code>Wave</code>, <code>GitHub</code> and infinite list of other things I already forgot.</p>
+<p>Fast forward into 2018 <code>Gentoo</code> updated <a href="https://www.gentoo.org/glep/glep-0063.html"><code>GLEP 63</code></a>
+and started requiring all the devs to have an <code>RSA</code> key, use keys with
+expiration dates and discourage <code>DSA</code> key usage. This made my <code>2008</code> key
+invalid. I had to generate a new key and picked <code>RSA-4096</code>. I either did
+not follow an equivalent of
+<a href="https://wiki.gentoo.org/wiki/Project:Infrastructure/Generating_GLEP_63_based_OpenPGP_keys">modern guide</a>
+or it did not exist at the time. As a result I got very slow commit
+signing experience :)</p>
+<p>Even 10 years after I started using <code>PGP</code> I had almost no mental model
+of what a key vs a subkey is. How both relate to private key (or keys?).
+How does Web of Trust work. How to make
+sure you don’t export to much to the keyservers. Why editing the
+expiration date does not change the key itself.
+All I read at the time was
+<a href="https://www.gnupg.org/gph/en/manual.html">The GNU Privacy Handbook</a>
+from 1999. From what I understand it was not updated since.</p>
+<p>I used <code>gnupg</code> for key management and occasional file decryption. Email
+clients had a decent <code>PGP</code> UI integration to be easily usable. But many
+non-tech users were confused to see signature attaches and tried to
+download and unpack it. I stopped using email signing by default.</p>
+<p>I felt that <code>gnupg</code> as a tool was not very user friendly: it has a ton
+of options and interactive questions that I have no idea how to answer
+confidently.</p>
+<p>Recent <a href="https://lwn.net/Articles/1055053/"><code>Fedora</code> and <code>GPG</code> 2.5</a> <code>LWN</code>
+article from 2026 tricked me into looking at <code>Sequoia PGP</code>. Having heard
+a bit of <code>LibrePGP</code> vs <code>OpenPGP</code> story it made me wonder: would <code>sq</code> tool
+allow me to get a bit better mental model of basic <code>PGP</code> concepts and
+ability to introspect keys and messages?</p>
+<h2 id="trying-out-sq">Trying out <code>sq</code></h2>
+<p>I read <a href="https://book.sequoia-pgp.org/"><code>sq user documentation</code></a> and I
+strongly recommend reading it to get both the idea of <code>PGP</code> basics and
+<code>sq</code> specifics on how to do trivial things!</p>
+<p>Here is what <code>sq</code> has to say about my (private) <code>PGP</code> keys:</p>
+<pre><code>$ sq key list
+ - Backend softkeys has no keys.
+
+ - 62197C11C7C25A61C448E95644FE231F3F3926E4
+   - user IDs:
+     - Sergei Trofimovich &lt;slyich@...&gt; (authenticated)
+     - Sergei Trofimovich &lt;slyfox@...&gt; (UNAUTHENTICATED) revoked
+   - created 2018-07-03 08:06:04 UTC
+   - will expire 2027-08-18T20:45:35Z
+   - usable for signing and decryption
+   - @gpg-agent/default: available, locked
+
+   - B6E7C10B37726D7DF059BFE7BA6C2FC245B4DF2C
+     - created 2018-07-03 08:06:04 UTC
+     - will expire 2027-08-18T20:45:44Z
+     - usable for signing and decryption
+     - @gpg-agent/default: available, locked
+   - FA0D7526A27870BE3842498DED5E45E06F2AC293
+     - created 2018-07-03 19:19:15 UTC
+     - will expire 2027-08-18T20:46:23Z
+     - usable for signing and decryption
+     - @gpg-agent/default: available, locked
+
+ - 9929AD151B96AF651958D35871A1EE76611FF3AA
+   - user IDs:
+     - Sergei Trofimovich &lt;siarheit@...&gt; (UNAUTHENTICATED)
+     - Sergei Trofimovich &lt;slyfox@...&gt; (UNAUTHENTICATED)
+     - Sergei Trofimovich &lt;slyfox@...&gt; (UNAUTHENTICATED)
+     - Sergei Trofimovich &lt;slyfox@...&gt; (UNAUTHENTICATED)
+     - Sergei Trofimovich &lt;slyich@...&gt; (UNAUTHENTICATED)
+     - Sergei Trofimovich &lt;st@...&gt; (UNAUTHENTICATED)
+   - created 2008-10-18 10:28:05 UTC
+   - revoked on 2018-07-04 19:35:27 UTC, Key is superseded: Migrated to new more secure key 62197C11C7C25A61C448E95644FE231F3F3926E4
+   - not valid: Policy rejected asymmetric algorithm: DSA1024 is not considered secure since 2014-02-01T00:00:00Z
+   - usable for signing
+   - @gpg-agent/default: available, locked
+
+   - BD21D77765C9B8A655EAC11B8F20BA89A99E563C
+     - created 2008-10-18 10:28:05 UTC
+     - usable for decryption
+     - @gpg-agent/default: available, locked</code></pre>
+<p>This command shown me outright which identities I revoked in my current
+key and they were wrong! (I fixed it since). If nothing else that was a
+nice side-effect of trying <code>sq</code>.</p>
+<p>I find this verbose output slightly more readable at least as a
+first-time user. It shows a bit more detail on advertised algorithms in
+the keys, violated security policies for outdated algorithms.</p>
+<h2 id="other-random-bits">Other random bits</h2>
+<p><code>sq network search</code> allows for a key lookup and gets keys into the cache
+without any explicit assignment of trustworthiness to them.</p>
+<p><code>sq pki link add</code> and <code>sq pki authenticate</code> allow for a lighter-weight
+way of tracking the key authenticity locally without the need to export
+your relation to other IDs.</p>
+<p>I’ll not spend too much time here, but the book mentions nice things
+like implementation bits of <code>WKD</code> and <code>DANE</code> to support <code>PGP</code>
+infrastructure.</p>
+<h2 id="introspection-sq-introspect-and-sq-dump">Introspection: <code>sq introspect</code> and <code>sq dump</code></h2>
+<p><code>sq inspect</code> is a nice tool to explore the <code>PGP</code> keys and <code>PGP</code> messages.</p>
+<p>Encrypting the message:</p>
+<pre><code>$ sq encrypt --signer-email=slyich@gmail.com --for-email slyich@gmail.com foo --output foo.pgp
+Composing a message...
+
+ - encrypted for Sergei Trofimovich &lt;slyich@gmail.com&gt; (authenticated)
+   - using 62197C11C7C25A61C448E95644FE231F3F3926E4
+
+ - signed by Sergei Trofimovich &lt;slyich@gmail.com&gt; (authenticated)
+   - using 62197C11C7C25A61C448E95644FE231F3F3926E4</code></pre>
+<p>Exploring the content:</p>
+<pre><code>$ sq inspect foo.pgp
+foo.pgp: Encrypted OpenPGP Message.
+
+      Recipient: BA6C2FC245B4DF2C
+        Associated certificate:
+          62197C11C7C25A61C448E95644FE231F3F3926E4
+          Sergei Trofimovich &lt;slyich@gmail.com&gt; (authenticated)</code></pre>
+<p>I think the equivalent <code>gpg</code> command is <code>gpg --list-packets</code>:</p>
+<pre><code>$ gpg --list-packets foo.pgp
+gpg: encrypted with rsa4096 key, ID 0xBA6C2FC245B4DF2C, created 2018-07-03
+      &quot;Sergei Trofimovich &lt;slyich@gmail.com&gt;&quot;
+
+&lt;asks for password&gt;
+
+gpg: using &quot;0xED5E45E06F2AC293&quot; as default secret key for signing
+# off=0 ctb=c1 tag=1 hlen=3 plen=523 new-ctb
+:pubkey enc packet: version 3, algo 1, keyid BA6C2FC245B4DF2C
+        data: [4088 bits]
+# off=526 ctb=d2 tag=18 hlen=3 plen=729 new-ctb
+:encrypted data packet:
+        length: 729
+        mdc_method: 2
+# off=548 ctb=c4 tag=4 hlen=2 plen=13 new-ctb
+:onepass_sig packet: keyid 44FE231F3F3926E4
+        version 3, sigclass 0x00, digest 10, pubkey 1, last=1
+# off=563 ctb=cb tag=11 hlen=2 plen=10 new-ctb
+:literal data packet:
+        mode b (62), created 0, name=&quot;&quot;,
+        raw data: 4 bytes
+# off=575 ctb=c2 tag=2 hlen=3 plen=658 new-ctb
+:signature packet: algo 1, keyid 44FE231F3F3926E4
+        version 4, created 1771059670, md5len 0, sigclass 0x00
+        digest algo 10, begin of digest f2 08
+        critical hashed subpkt 2 len 4 (sig created 2026-02-14)
+        hashed subpkt 16 len 8 (issuer key ID 44FE231F3F3926E4)
+        hashed subpkt 20 len 70 (notation: salt@notations.sequoia-pgp.org=[not human readable])
+        hashed subpkt 33 len 21 (issuer fpr v4 62197C11C7C25A61C448E95644FE231F3F3926E4)
+        hashed subpkt 35 len 21 (?)
+        data: [4096 bits]</code></pre>
+<p>It’s a lot more verbose than <code>sq inspect</code> (that’s nice!). But is it
+obvious what algorithm was used to encrypt the message? One probably
+needs to know algorithm numbers like <code>algo 1</code> or <code>digest algo 10</code>.</p>
+<p>An <code>sq</code> equivalent would be <code>sq packet</code> invocation:</p>
+<pre><code>$ sq packet dump foo.pgp
+Public-Key Encrypted Session Key Packet, new CTB, 523 bytes
+    Version: 3
+    Recipient: BA6C2FC245B4DF2C
+    Pk algo: RSA
+
+Sym. Encrypted and Integrity Protected Data Packet, new CTB, 729 bytes
+│   Version: 1
+│   Session key: 477E1CA59418C21B6D95AB78B129EED8A53888447159D1660232F3EE03E151B9
+│   Symmetric algo: AES-256
+│   Decryption successful
+│
+├── One-Pass Signature Packet, new CTB, 13 bytes
+│       Version: 3
+│       Type: Binary
+│       Pk algo: RSA
+│       Hash algo: SHA512
+│       Issuer: 44FE231F3F3926E4
+│       Last: true
+│
+├── Literal Data Packet, new CTB, 10 bytes
+│       Format: Binary data
+│       Content: &quot;foo\n&quot;
+│
+├── Signature Packet, new CTB, 658 bytes
+│       Version: 4
+│       Type: Binary
+│       Pk algo: RSA
+│       Hash algo: SHA512
+│       Hashed area:
+│         Signature creation time: 2026-02-14 09:01:10 UTC (critical)
+│         Issuer: 44FE231F3F3926E4
+│           Sergei Trofimovich &lt;slyich@gmail.com&gt; (authenticated)
+│         Notation: salt@notations.sequoia-pgp.org
+│           00000000  25 33 44 74 e7 b8 1a 28  1c b1 56 bd f0 02 4e 02
+│           00000010  26 fe dd 1f c8 8c ab 11  9d 18 f3 7b bd 39 0c ad
+│         Issuer Fingerprint: 62197C11C7C25A61C448E95644FE231F3F3926E4
+│           Sergei Trofimovich &lt;slyich@gmail.com&gt; (authenticated)
+│         Intended Recipient: 62197C11C7C25A61C448E95644FE231F3F3926E4
+│       Digest prefix: F208
+│       Level: 0 (signature over data)
+│
+└── Modification Detection Code Packet, new CTB, 20 bytes
+        Digest: 1A14AA0FFDCB56E6BD64E005BA088EF591344F8D
+        Computed digest: 1A14AA0FFDCB56E6BD64E005BA088EF591344F8D
+        Valid: true</code></pre>
+<p>Here it’s slightly more obvious that session key was encrypted with
+<code>RSA</code>, data was encrypted with <code>AES-256</code> and was signed with <code>SHA-512</code>.</p>
+<p><code>sq key export</code> (private) and <code>sq cert export</code> (public) are a nice
+complement to <code>sq inspect</code> and <code>sq packet dump</code> to get the idea what’s
+in the keys.</p>
+<h2 id="parting-words">Parting words</h2>
+<p>I found <code>sq</code> UI quite usable to rekindle some <code>PGP</code> interest in me. I
+even managed to fix messed up list of revoked identities on the current
+key.</p>
+<p>I don’t use anything advanced like smart cards to store keys or
+detached offline certification key and I suspect <code>sq</code> has some
+limitations there. But at least now I do understand what those things
+are and how they are useful!</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Sat, 14 Feb 2026 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/346-sequoia-pgp.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>nixpkgs and repology changes</title>
     <link>https://trofi.github.io/posts/345-nixpkgs-and-repology-changes.html</link>
     <description><![CDATA[<h2 id="tldr-nixpkgs-changed-the-way-it-exports-data-to-repology-and-many-packages-need-fixing">Tl;DR: <code>nixpkgs</code> changed the way it exports data to <code>repology</code> and many packages need fixing</h2>
@@ -5065,106 +5307,6 @@ result as a short term workaround.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Sun, 16 Jun 2024 00:00:00 UT</pubDate>
     <guid>http://trofi.github.io/posts/317-gcc-simd-intrinsics-bug.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>Three years on NixOS</title>
-    <link>http://trofi.github.io/posts/316-three-years-on-nixos.html</link>
-    <description><![CDATA[<p>This year I decided to shift yearly updates on my <code>NixOS</code> endeavors
-(<a href="https://trofi.github.io/posts/290-two-years-on-nixos.html">2023 instance</a>). This time
-the occasion is <a href="https://nixos.org/blog/announcements/2024/nixos-2405/"><code>NixOS 24.05 release</code></a>.</p>
-<h2 id="system-maintenance">System maintenance</h2>
-<p>Looking at the <code>git log</code> for <code>/etc/nixos</code> for the desktop system I see
-the following things happening over the past year:</p>
-<ul>
-<li>follow <code>fonts.fonts</code> to <code>fonts.packages</code> rename (added in <a href="https://github.com/NixOS/nixpkgs/pull/244332"><code>PR#244332</code></a>)</li>
-<li>follow <code>pipewire</code> migration to <code>extraConfig</code> (added in
-<a href="https://github.com/NixOS/nixpkgs/pull/282377"><code>PR#282377</code></a>).</li>
-<li>follow <code>programs.gnupg.agent.pinentryFlavor</code> to
-<code>programs.gnupg.agent.pinentryPackage</code> migration (added in
-<a href="https://github.com/NixOS/nixpkgs/pull/133542"><code>PR#133542</code></a>).</li>
-<li>follow the rename from <code>nix.unstable</code> to <code>nix.latest</code> (added in
-<a href="https://github.com/NixOS/nixpkgs/pull/305951"><code>PR#305951</code></a>).</li>
-</ul>
-<p>All four were trivial to tweak and did not cause much confusion.</p>
-<p>Similar to previous year I did not have any problems related to package
-build failures for any on <code>nixos-unstable</code>. Again, probably because I
-tested <code>staging</code> time to time.</p>
-<p>This time I had two non-trivial problems in upstream packages:</p>
-<ul>
-<li>problematic <code>firefox</code> update broke <code>meet</code> video streaming. It was
-triggered by the use of <code>--with-system-libvpx</code> option in <code>nixpkgs</code>. That
-was one of the cases where I had the luxury of bisecting the whole
-system to pinpoint the bad component:
-<a href="https://github.com/NixOS/nixpkgs/pull/283010#issuecomment-1925703583" class="uri">https://github.com/NixOS/nixpkgs/pull/283010#issuecomment-1925703583</a>.
-Local revert until the fix was shipped was trivial.</li>
-<li>problematic unstable <code>6.8</code> kernel upgrade caused kernel panic in
-<code>eevdf</code> scheduler. Was fixed upstream in
-<a href="https://lore.kernel.org/lkml/ZicOSiEWHJJcahi%2F@yujie-X299/t/" class="uri">https://lore.kernel.org/lkml/ZicOSiEWHJJcahi%2F@yujie-X299/t/</a> around
-<code>6.9</code> kernel. The crashes were nasty as scheduler crash locks up the
-machine and does not print anything when it happens. Luckily
-<code>systemd</code> recovered crash log from <code>EFI</code> <code>nvram</code> and it was clear
-from the backtrace that it’s a bug related to scheduling kernel
-subsystem.</li>
-</ul>
-<h2 id="community-support">Community support</h2>
-<p><code>NixOS</code> community remains to be a friendly place that welcomes
-newcomers, experiments, and day-to-day maintenance work. This year
-<code>NixOS Foundation</code> received some heat for how it governs some aspects of
-the community. <code>NixOS Foundation</code> proposed a
-<a href="https://discourse.nixos.org/t/nixos-foundation-board-giving-power-to-the-community/44552">few major changes</a>
-on how it will operate in future.</p>
-<p>The most important (and hardest organizationally) change I did was to
-document and exercise the procedure of updating
-<a href="https://trofi.github.io/posts/315-nixpkgs-bootstrap-files-update.html">bootstrap binaries</a> in
-<code>nixpkgs</code>.</p>
-<p>My fanciest contribution was
-<a href="https://trofi.github.io/posts/309-listing-all-nixpkgs-packages.html">my failed attempt</a> at
-listing “all” the package attributes available in <code>nixpkgs</code>. While I was
-not able to list all the attributes initially I managed to derive about
-60 fixes to <code>nixpkgs</code> (all linked in the article) to make future listing
-smoother. Tl:DR; of the fixes is: dynamic typing is hard.</p>
-<p>The most unusual <code>nixpkgs</code> contribution was to find
-<a href="https://trofi.github.io/posts/292-nix-language-nondeterminism-example.html">the non-determinism</a>
-in <code>nix expression language</code> itself. It’s not something I expected to
-encounter in real code. Alas.</p>
-<p>The trickiest from technical standpoint was the fix for
-<a href="https://trofi.github.io/posts/293-mysterious-patchelf-linkage-bug.html">parallel strip breakage</a>.
-<a href="https://trofi.github.io/posts/302-Ofast-and-ffast-math-non-local-effects.html"><code>-Ofast</code></a> and
-<a href="https://trofi.github.io/posts/310-a-libpam-bug.html"><code>libpam</code></a> bugs were also fun.</p>
-<p>The most satisfying was to
-<a href="https://trofi.github.io/posts/298-unexpected-runtime-dependencies-in-nixpkgs.html">reduce the runtime closure</a>
-for many packages that use <code>__FILE__</code> just for debug messages.</p>
-<p>Surprisingly I managed to get about 800 commits into <code>nixpkgs</code> this year.
-About ~90 of them is fixes to get compatibility with <code>gcc-13</code>. About 60
-are evaluation fixes mentioned above. About 400 of them are various
-package version updates.</p>
-<p>I still read some of Matrix channels but I mostly skim through
-<a href="https://discourse.nixos.org/">discourse</a> as I have even less free time
-than last year.</p>
-<h2 id="home-server-experience">Home server experience</h2>
-<p>I did not have to adapt anything for the past year. I switched from
-<code>apache</code> to <code>nginx</code> as an <code>httpd</code> without any issues. And that’s about
-it. Things Just Work.</p>
-<h2 id="local-experiments">Local experiments</h2>
-<p>As an experiment I gave <a href="https://hyprland.org/"><code>hyprland</code></a> a short try.
-I had to switch back to <code>sway</code>. I had two issues with
-<code>hyprland</code>. New applications are visibly changing layout a few times
-before they settle on final window size (I could not get used to it, so
-flickery). And configuration language quirks (I frequently missed commas
-where empty arguments are required).</p>
-<p>I also did a bit of fresh <code>gcc</code> testing. This time frame also coincided
-with <code>gcc-14</code> development and release cycle. <code>nixpkgs</code> ended up being a
-reasonable vehicle to play with <code>gcc-14</code>. The
-<a href="https://trofi.github.io/posts/311-gcc-14-bug-pile-4.html">last bug pile report</a> tells me that
-I found about 50 <code>gcc</code> bugs and even fixed at least
-<a href="https://trofi.github.io/posts/301-another-gcc-profiling-bug.html">one non-trivial one</a>.</p>
-<h2 id="parting-words">Parting words</h2>
-<p><code>NixOS</code> still works fine for me. I did not do as much as I managed to
-last year. But looking back the list looks impressive.</p>
-<p>Give <code>NixOS</code> a go if you did not yet :)</p>]]></description>
-    <pubDate>Sun, 02 Jun 2024 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/316-three-years-on-nixos.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 
