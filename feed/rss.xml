@@ -7,8 +7,88 @@
         <description><![CDATA[trofi's blog]]></description>
         <atom:link href="https://trofi.github.io/feed/rss.xml" rel="self"
                    type="application/rss+xml" />
-        <lastBuildDate>Thu, 23 Apr 2026 00:00:00 UT</lastBuildDate>
+        <lastBuildDate>Mon, 04 May 2026 00:00:00 UT</lastBuildDate>
         <item>
+    <title>Zero Hydra Failures towards 26.05 NixOS release</title>
+    <link>https://trofi.github.io/posts/349-Zero-Hydra-Failures-towards-26.05-NixOS-release.html</link>
+    <description><![CDATA[<p><code>NixOS-26.05</code> is around the corner!
+<a href="https://github.com/NixOS/nixpkgs/issues/503391">The schedule</a> says it
+should happen around 25 May.</p>
+<p>Today the release process entered <code>ZHF</code> phase. There most packages with
+build failures are expected to be addresses by the release date.
+<a href="https://github.com/NixOS/nixpkgs/issues/516381" class="uri">https://github.com/NixOS/nixpkgs/issues/516381</a> contains
+detailed step-by-step to identify interesting packages.</p>
+<p>This time <code>nixpkgs</code> is full of build failures related to <code>gcc-15</code>
+changes (<code>-std=gnu23</code> switch).</p>
+<h2 id="an-example-package-fix">An example package fix</h2>
+<p>I usually try to fix at least one package during <code>ZHF</code>. Let’s do it
+again.</p>
+<p>I picked <code>ior</code> package. <a href="https://hydra.nixos.org/job/nixpkgs/unstable/ior.x86_64-linux"><code>hydra</code> says</a>
+it is broken since January 2026. Most recent <a href="https://hydra.nixos.org/build/327774029" class="uri">https://hydra.nixos.org/build/327774029</a>
+build failure has the build log:</p>
+<pre><code>  CC       libaiori_a-option.o
+option.c: In function 'option_parse_token':
+option.c:325:19: error: too many arguments to function 'fp'; expected 0, have 1
+  325 |                   fp(arg);
+      |                   ^~ ~~~
+make[3]: *** [Makefile:1281: libaiori_a-option.o] Error 1</code></pre>
+<p>Looks like a typical <code>gcc-15</code> failure. Trying to reproduce it locally:</p>
+<pre><code>$ git clone --depth 1 https://github.com/NixOS/nixpkgs
+$ cd nixpkgs
+$ nix build --no-link -f. ior -L
+...
+ior&gt; option.c:325:19: error: too many arguments to function 'fp'; expected 0, have 1
+ior&gt;   325 |                   fp(arg);
+ior&gt;       |                   ^~ ~~~
+ior&gt; make[3]: *** [Makefile:1281: libaiori_a-option.o] Error 1</code></pre>
+<p>Fails just the same! Before trying to fix it ourselves let’s see if
+upstream already happens to have a fix. I looked at the history of our
+failed <code>option.c</code> file at <a href="https://github.com/hpc/ior/commits/main/src/option.c" class="uri">https://github.com/hpc/ior/commits/main/src/option.c</a>
+and I was lucky! <a href="https://github.com/hpc/ior/pull/525" class="uri">https://github.com/hpc/ior/pull/525</a> is the committed
+fix for our issue!</p>
+<p>I applied it locally as:</p>
+<pre class="diff"><code>--- a/pkgs/by-name/io/ior/package.nix
++++ b/pkgs/by-name/io/ior/package.nix
+@@ -2,6 +2,7 @@
+   lib,
+   stdenv,
+   fetchFromGitHub,
++  fetchpatch,
+   mpi,
+   perl,
+   autoreconfHook,
+@@ -19,6 +20,16 @@ stdenv.mkDerivation (finalAttrs: {
+     hash = &quot;sha256-WsfJWHHfkiHZ+rPk6ck6mDErTXwt6Dhgm+yqOtw4Fvo=&quot;;
+   };
+ 
++  patches = [
++    # Fix gcc-15 build:
++    #   https://github.com/hpc/ior/pull/525
++    (fetchpatch {
++      name = &quot;gcc-15.patch&quot;;
++      url = &quot;https://github.com/hpc/ior/commit/526c5ad06695a91a27163c520ce3305109f50bef.patch&quot;;
++      hash = &quot;sha256-HvbRMt2EcuO7kxLL9qKpozpNKEOmWuHkKQTSUhfU7/w=&quot;;
++    })
++  ];
++
+   nativeBuildInputs = [
+     autoreconfHook
+     pkg-config</code></pre>
+<p>Tested the build:</p>
+<pre><code>$ nix build --no-link -f. ior -L
+...
+&lt;all good&gt;</code></pre>
+<p>And proposed the fix as <a href="https://github.com/NixOS/nixpkgs/pull/516449" class="uri">https://github.com/NixOS/nixpkgs/pull/516449</a>.</p>
+<h2 id="parting-words">Parting Words</h2>
+<p>If you never contributed to <code>nixpkgs</code> and are wondering how hard it is
+do give <code>ZHF</code> a try! Chances are you can quickly grab a broken package
+and make it work.</p>
+<p>Have fun!</p>]]></description>
+    <pubDate>Mon, 04 May 2026 00:00:00 UT</pubDate>
+    <guid>https://trofi.github.io/posts/349-Zero-Hydra-Failures-towards-26.05-NixOS-release.html</guid>
+    <dc:creator>Sergei Trofimovich</dc:creator>
+</item>
+<item>
     <title>gcc-16 bugs</title>
     <link>https://trofi.github.io/posts/348-gcc-16-bug-pile.html</link>
     <description><![CDATA[<p>Almost exactly a year passed since my previous
@@ -4797,439 +4877,6 @@ site-local links should automatically become <code>https://</code> links.</p>
 <p>Have fun!</p>]]></description>
     <pubDate>Sat, 06 Jul 2024 00:00:00 UT</pubDate>
     <guid>https://trofi.github.io/posts/320-blog-tweaks.html</guid>
-    <dc:creator>Sergei Trofimovich</dc:creator>
-</item>
-<item>
-    <title>probabilities are hard</title>
-    <link>http://trofi.github.io/posts/319-probabilities-are-hard.html</link>
-    <description><![CDATA[<h2 id="make---shuffle-background"><code>make --shuffle</code> background</h2>
-<p><a href="https://trofi.github.io/posts/238-new-make-shuffle-mode.html">A while ago</a> I added <code>--shuffle</code>
-mode to <code>GNU make</code> to shake out missing dependencies in build rules of
-<code>make</code>-based build systems. It managed to find
-<a href="https://trofi.github.io/posts/249-an-update-on-make-shuffle.html">a few bugs</a> since.</p>
-<h2 id="the-shuffling-algorithm">the shuffling algorithm</h2>
-<p>The core function of <code>--shuffle</code> is to generate one random permutation
-of prerequisites for a target. I did not try to implement anything
-special. I searched for “random shuffle” and got
-<a href="https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle">Fisher–Yates shuffle</a>
-link from <code>wikipedia</code>, skimmed the page and came up with this algorithm:</p>
-<pre class="c"><code>/* Shuffle array elements using RAND().  */
-static void
-random_shuffle_array (void **a, size_t len)
-{
-  size_t i;
-  for (i = 0; i &lt; len; i++)
-    {
-      void *t;
-
-      /* Pick random element and swap. */
-      unsigned int j = rand () % len;
-      if (i == j)
-        continue;
-
-      /* Swap. */
-      t = a[i];
-      a[i] = a[j];
-      a[j] = t;
-    }
-}</code></pre>
-<p>The diagram of a single step looks this way:</p>
-<img src="https://trofi.github.io/posts.data.inline/319-probabilities-are-hard/fig-0.gv.svg" />
-<p>The implementation looked so natural: we attempt to shuffle each element
-with another element chosen randomly using equal probability (assuming
-<code>rand () % len</code> is unbiased). At least it seemed to produce random
-results.</p>
-<p><strong>Quiz question</strong>: do you see the bug in this implementation?</p>
-<p>This version was shipped in <code>make-4.4.1</code>.
-I ran <code>make</code> from <code>git</code> against <code>nixpkgs</code> and discovered a ton of
-parallelism bugs. I could not be happier than that. I never got to
-actual testing the quality of permutation probabilities.</p>
-<h2 id="bias-in-initial-implementation">bias in initial implementation</h2>
-<p>Artem Klimov had a closer look at it and discovered a bug in the
-algorithm above! The algorithm has a common implementation error for
-Fisher–Yates
-<a href="https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#Implementation_errors">documented</a>
-on the very page I looked at before /o\. Artem demonstrated problems of
-permutation quality on the following trivial <code>Makefile</code>:</p>
-<pre class="makefile"><code>all: test1 test2 test3 test4 test5 test6 test7 test8;
-
-test%:
-	mkdir -p tests
-	echo $@ &gt; tests/$@
-
-test8:
-	# no mkdir
-	echo 'override' &gt; tests/$@</code></pre>
-<p>This test was supposed to fail <code>12.5%</code> of the time in <code>--shuffle</code> mode:
-only when <code>test8</code> is scheduled as the first to execute. Alas the test
-when ran over thousands runs failed with <code>10.1%</code> probability. That is
-<code>2%</code> too low.</p>
-<p>Artem also provided a fixed version of the shuffle implementation:</p>
-<pre class="c"><code>static void
-random_shuffle_array (void **a, size_t len)
-{
-  size_t i;
-  for (i = len - 1; i &gt;= 1; i--)
-    {
-      void *t;
-
-      /* Pick random element and swap. */
-      unsigned int j = make_rand () % (i + 1);
-
-      /* Swap. */
-      t = a[i];
-      a[i] = a[j];
-      a[j] = t;
-    }
-}</code></pre>
-<p>The diagram of a single step looks this way:</p>
-<img src="https://trofi.github.io/posts.data.inline/319-probabilities-are-hard/fig-1.gv.svg" />
-<p>Note how this version makes sure that shuffled indices (“gray” color)
-never gets considered for future shuffle iterations.</p>
-<p>At least for me it’s more obvious to see why this algorithm does not
-introduce any biases. But then again I did not suspect problems in the
-previous one either. I realized I don’t have a good intuition on why the
-initial algorithm manages to produce biases. Where does bias come from
-if we pick the target element with equal probability from all the
-elements available?</p>
-<h1 id="a-simple-test">a simple test</h1>
-<p>To get the idea how the bias looks like I wrote a tiny program:</p>
-<pre class="c"><code>// $ cat a.c
-#include &lt;stdio.h&gt;
-#include &lt;stdlib.h&gt;
-#include &lt;string.h&gt;
-#include &lt;time.h&gt;
-
-#define LEN 3
-static int a[LEN];
-
-static void random_shuffle_array (void) {
-  for (size_t i = 0; i &lt; LEN; i++) {
-      unsigned int j = rand () % LEN;
-      int t = a[i]; a[i] = a[j]; a[j] = t;
-    }
-}
-
-static void random_shuffle_array_fixed (void) {
-  for (size_t i = LEN - 1; i &gt;= 1; i--) {
-      unsigned int j = rand () % (i + 1);
-      int t = a[i]; a[i] = a[j]; a[j] = t;
-    }
-}
-
-static void do_test(const char * name, void(*shuffler)(void)) {
-    size_t hist[LEN][LEN];
-    memset(hist, 0, sizeof(hist));
-
-    size_t niters = 10000000;
-
-    printf(&quot;%s shuffle probability over %zu iterations:\n&quot;, name, niters);
-    for (size_t iter = 0; iter &lt; niters; ++iter) {
-        // Initialize array `a` with { `0`,  ..., `LEN - 1` }.
-        for (size_t i = 0; i &lt; LEN; ++i) a[i] = i;
-        shuffler ();
-        for (size_t i = 0; i &lt; LEN; ++i) hist[i][a[i]] += 1;
-    }
-
-    int prec_digits = 3; /* 0.??? */
-    int cell_width = 3 + prec_digits; /* &quot; 0.???&quot; */
-
-    printf(&quot;%*s  &quot;, cell_width, &quot;&quot;);
-    for (size_t j = 0; j &lt; LEN; ++j)
-        printf(&quot;%*zu&quot;, cell_width, j);
-    puts(&quot;&quot;);
-
-    for (size_t i = 0; i &lt; LEN; ++i) {
-        printf(&quot;%*zu |&quot;, cell_width, i);
-        for (size_t j = 0; j &lt; LEN; ++j)
-            printf(&quot; %.*f&quot;, prec_digits, (double)(hist[i][j]) / (double)(niters));
-        puts(&quot;&quot;);
-    }
-}
-
-int main() {
-    srand(time(NULL));
-    do_test(&quot;broken&quot;, &amp;random_shuffle_array);
-    puts(&quot;&quot;);
-    do_test(&quot;fixed&quot;, &amp;random_shuffle_array_fixed);
-}</code></pre>
-<p>Here the program implement both current (broken) and new (fixed) shuffle
-implementations. The histogram is collected over 10 million runs.
-Then it prints a probability of each element to be found at a location.
-We shuffle an array of <code>LEN = 3</code> elements: <code>{ 0, 1, 2, }</code>.
-Here is the output of the program:</p>
-<pre><code>$ gcc a.c -o a -O2 -Wall &amp;&amp; ./a
-broken shuffle probability over 10000000 iterations:
-             0     1     2
-     0 | 0.333 0.370 0.296
-     1 | 0.333 0.297 0.370
-     2 | 0.334 0.333 0.333
-
-fixed shuffle probability over 10000000 iterations:
-             0     1     2
-     0 | 0.333 0.333 0.334
-     1 | 0.333 0.334 0.333
-     2 | 0.333 0.333 0.333</code></pre>
-<p>Here the program tells us that:</p>
-<ul>
-<li>broken version of the shuffle moves element <code>0</code> to <code>1</code> position <code>37%</code> of the time</li>
-<li>broken version moves element <code>0</code> to <code>2</code> position <code>29.6%</code> of the time</li>
-<li>fixed version is much closed to uniform distribution and has roughly
-<code>33.3%</code> <code>0-&gt;1</code> and <code>0-&gt;2</code> probabilities</li>
-</ul>
-<p>The same data above in plots:</p>
-<img src="https://trofi.github.io/posts.data.inline/319-probabilities-are-hard/fig-2.gp.svg" />
-<h2 id="a-bit-of-arithmetic">a bit of arithmetic</h2>
-<p>To get a bit better understanding of the bias let’s get exact probability
-value for each element move for 3-element array.</p>
-<h3 id="broken-version">broken version</h3>
-<p>To recap the implementation we are looking at here is:</p>
-<pre class="c"><code>void random_shuffle_array (void) {
-  for (size_t i = 0; i &lt; LEN; i++) {
-      unsigned int j = rand () % LEN;
-      int t = a[i]; a[i] = a[j]; a[j] = t;
-    }
-}</code></pre>
-<p>Let’s start from broken shuffle with <code>1/(N+1)</code> shuffle probability.</p>
-<p>Our initial array state is <code>{ 0, 1, 2, }</code> with probability <code>1/1</code>
-(or <code>100%</code>) for each already assigned value:</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>1/1</code></li>
-<li>value <code>1</code>: <code>0/1</code></li>
-<li>value <code>2</code>: <code>0/1</code></li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>0/1</code></li>
-<li>value <code>1</code>: <code>1/1</code></li>
-<li>value <code>2</code>: <code>0/1</code></li>
-</ul></li>
-<li>probability at index <code>2</code>:
-<ul>
-<li>value <code>0</code>: <code>0/1</code></li>
-<li>value <code>1</code>: <code>0/1</code></li>
-<li>value <code>2</code>: <code>1/1</code></li>
-</ul></li>
-</ul>
-<p>On each iteration <code>i</code> we perform the actions below:</p>
-<ul>
-<li>at <code>i</code> position: <code>1/3</code> probability of swapping any of the possible elements</li>
-<li>at non-<code>i</code> positions: <code>2/3</code> probability of keeping and old element (and <code>1/3</code>
-probability of absorbing value at <code>i</code> position mentioned in the previous bullet)</li>
-</ul>
-<p>Thus after first shuffle step at <code>i=0</code> our probability state will be:</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>1/3</code> (was <code>1.0</code>)</li>
-<li>value <code>1</code>: <code>1/3</code> (was <code>0.0</code>)</li>
-<li>value <code>2</code>: <code>1/3</code> (was <code>0.0</code>)</li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>1/3</code> (was <code>0.0</code>)</li>
-<li>value <code>1</code>: <code>2/3</code> (was <code>1.0</code>)</li>
-<li>value <code>2</code>: <code>0/3</code> (was <code>0.0</code>)</li>
-</ul></li>
-<li>probability at index <code>2</code>:
-<ul>
-<li>value <code>0</code>: <code>1/3</code> (was <code>0.0</code>)</li>
-<li>value <code>1</code>: <code>0/3</code> (was <code>0.0</code>)</li>
-<li>value <code>2</code>: <code>2/3</code> (was <code>1.0</code>)</li>
-</ul></li>
-</ul>
-<p>So far so good: element <code>0</code> has even probability among all 3 elements,
-and elements <code>1</code> and <code>2</code> decreased their initial probabilities from <code>1/1</code>
-down to <code>2/3</code>.</p>
-<p>Let’s trace through next <code>i=1</code> step. After that the updated state will be:</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>3/9</code> (was <code>1/3</code>)</li>
-<li>value <code>1</code>: <code>4/9</code> (was <code>1/3</code>)</li>
-<li>value <code>2</code>: <code>2/9</code> (was <code>1/3</code>)</li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>3/9</code> (was <code>1/3</code>)</li>
-<li>value <code>1</code>: <code>3/9</code> (was <code>2/3</code>)</li>
-<li>value <code>2</code>: <code>3/9</code> (was <code>0/3</code>)</li>
-</ul></li>
-<li>probability at index <code>2</code>:
-<ul>
-<li>value <code>0</code>: <code>3/9</code> (was <code>1/3</code>)</li>
-<li>value <code>1</code>: <code>2/9</code> (was <code>0/3</code>)</li>
-<li>value <code>2</code>: <code>4/9</code> (was <code>2/3</code>)</li>
-</ul></li>
-</ul>
-<p>Again, magically current (<code>i=1</code>) element got perfect balance. Zero
-probabilities are gone by now.</p>
-<p>Final <code>i=2</code> step yields this:</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>9/27</code> (was <code>3/9</code>)</li>
-<li>value <code>1</code>: <code>10/27</code> (was <code>4/9</code>)</li>
-<li>value <code>2</code>: <code>8/27</code> (was <code>2/9</code>)</li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>9/27</code> (was <code>3/9</code>)</li>
-<li>value <code>1</code>: <code>8/27</code> (was <code>3/9</code>)</li>
-<li>value <code>2</code>: <code>10/27</code> (was <code>3/9</code>)</li>
-</ul></li>
-<li>probability at index <code>2</code>:
-<ul>
-<li>value <code>0</code>: <code>9/27</code> (was <code>3/9</code>)</li>
-<li>value <code>1</code>: <code>9/27</code> (was <code>2/9</code>)</li>
-<li>value <code>2</code>: <code>9/27</code> (was <code>4/9</code>)</li>
-</ul></li>
-</ul>
-<p>The same state sequence in diagrams:</p>
-<img src="https://trofi.github.io/posts.data.inline/319-probabilities-are-hard/fig-3.gv.svg" />
-<p>Note that final probabilities differ slightly: <code>8/27</code>, <code>9/27</code> and <code>10/27</code>
-are probabilities where all should have been <code>9/27</code> (or <code>1/3</code>). This
-matches observed values above!</p>
-<p>The bias comes from the fact that each shuffle step affects probabilities
-of all cells, not just immediately picked cells for a particular shuffle.
-That was very hard to grasp for me just by glancing at the algorithm!</p>
-<h3 id="fixed-version">Fixed version</h3>
-<p>To recap the implementation we are looking at here is:</p>
-<pre class="c"><code>void random_shuffle_array_fixed (void) {
-  for (size_t i = LEN - 1; i &gt;= 1; i--) {
-      unsigned int j = rand () % (i + 1);
-      int t = a[i]; a[i] = a[j]; a[j] = t;
-    }
-}</code></pre>
-<p>Now let’s look at a shuffle with <code>1/(i+1)</code> probability.
-Our initial state is the same <code>{ 0, 1, 2, }</code> with probabilities <code>1/1</code>:</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>1/1</code></li>
-<li>value <code>1</code>: <code>0/1</code></li>
-<li>value <code>2</code>: <code>0/1</code></li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>0/1</code></li>
-<li>value <code>1</code>: <code>1/1</code></li>
-<li>value <code>2</code>: <code>0/1</code></li>
-</ul></li>
-<li>probability at index <code>2</code>:
-<ul>
-<li>value <code>0</code>: <code>0/1</code></li>
-<li>value <code>1</code>: <code>0/1</code></li>
-<li>value <code>2</code>: <code>1/1</code></li>
-</ul></li>
-</ul>
-<p>As the algorithm iterated over the array backwards we start from <code>i=2</code>
-(<code>N=3</code>).</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>2/3</code> (was <code>1/1</code>)</li>
-<li>value <code>1</code>: <code>0/3</code> (was <code>0/1</code>)</li>
-<li>value <code>2</code>: <code>1/3</code> (was <code>0/1</code>)</li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>0/3</code> (was <code>0/1</code>)</li>
-<li>value <code>1</code>: <code>2/3</code> (was <code>1/1</code>)</li>
-<li>value <code>2</code>: <code>1/3</code> (was <code>0/1</code>)</li>
-</ul></li>
-<li>probability at index <code>2</code>:
-<ul>
-<li>value <code>0</code>: <code>1/3</code> (was <code>0/1</code>)</li>
-<li>value <code>1</code>: <code>1/3</code> (was <code>0/1</code>)</li>
-<li>value <code>2</code>: <code>1/3</code> (was <code>1/1</code>)</li>
-</ul></li>
-</ul>
-<p>As expected the probabilities are the mirror image of the first step of
-the broken implementation.</p>
-<p>The next step though is a bit different: <code>i=1</code> (<code>N=2</code>). It effectively
-averages probabilities at index <code>0</code> and index <code>1</code>.</p>
-<ul>
-<li>probability at index <code>0</code>:
-<ul>
-<li>value <code>0</code>: <code>1/3</code> (was <code>2/3</code>)</li>
-<li>value <code>1</code>: <code>1/3</code> (was <code>0/3</code>)</li>
-<li>value <code>2</code>: <code>1/3</code> (was <code>1/3</code>)</li>
-</ul></li>
-<li>probability at index <code>1</code>:
-<ul>
-<li>value <code>0</code>: <code>1/3</code> (was <code>0/3</code>)</li>
-<li>value <code>1</code>: <code>1/3</code> (was <code>2/3</code>)</li>
-<li>value <code>2</code>: <code>1/3</code> (was <code>1/3</code>)</li>
-</ul></li>
-<li>probability at index <code>2</code> (unchanged):
-<ul>
-<li>value <code>0</code>: <code>1/3</code></li>
-<li>value <code>1</code>: <code>1/3</code></li>
-<li>value <code>2</code>: <code>1/3</code></li>
-</ul></li>
-</ul>
-<p>Or the same in diagrams:</p>
-<img src="https://trofi.github.io/posts.data.inline/319-probabilities-are-hard/fig-4.gv.svg" />
-<p>The series are a lot simpler than the broken version: on each step
-handled element always ends up with identical expected probabilities.
-Its so much simpler!</p>
-<h2 id="element-bonus">30-element bonus</h2>
-<p>Let’s look at the probability table for an array of 30-elements. The
-only change I did for the program above is to change <code>LEN</code> from <code>3</code> to
-<code>30</code>:</p>
-<img src="https://trofi.github.io/posts.data.inline/319-probabilities-are-hard/fig-5.gp.svg" />
-<p>This plot shows a curious <code>i == j</code> cut off line where probability changes
-drastically:</p>
-<ul>
-<li><code>15-&gt;15</code> (or any <code>i-&gt;i</code>) shuffle probability is lowest and is about <code>2.8%</code></li>
-<li><code>15-&gt;16</code> (or any <code>i-&gt;i+1</code>) shuffle probability is highest and is about <code>4.0%</code></li>
-</ul>
-<h2 id="make---shuffle-bias-fix"><code>make --shuffle</code> bias fix</h2>
-<p>I posted Artem’s fix upstream for inclusion as
-<a href="https://mail.gnu.org/archive/html/bug-make/2024-06/msg00008.html">this email</a>:</p>
-<pre class="diff"><code>--- a/src/shuffle.c
-+++ b/src/shuffle.c
-@@ -104,12 +104,16 @@ static void
- random_shuffle_array (void **a, size_t len)
- {
-   size_t i;
--  for (i = 0; i &lt; len; i++)
-+
-+  if (len &lt;= 1)
-+    return;
-+
-+  for (i = len - 1; i &gt;= 1; i--)
-     {
-       void *t;
-
-       /* Pick random element and swap. */
--      unsigned int j = make_rand () % len;
-+      unsigned int j = make_rand () % (i + 1);
-       if (i == j)
-         continue;
-</code></pre>
-<h2 id="parting-words">parting words</h2>
-<p>Artem Klimov found, fixed and explained the bias in <code>make --shuffle</code>
-implementation. Thank you, Artem!</p>
-<p>Probabilities are hard! I managed to get wrong seemingly very simple
-algorithm. The bias is not too bad: <code>make --shuffle</code> is still able to
-produce all possible permutations of the targets. But some of them are
-slightly less frequent than the others.</p>
-<p>The bias has a curious structure:</p>
-<ul>
-<li>least likely permutations candidate is <code>i-&gt;i</code> “identity” shuffle</li>
-<li>most likely permutation candidate is <code>i-&gt;i+1</code> “right shift” shuffle</li>
-</ul>
-<p>At least the initial implementation was not completely broken and still
-was able to generate all permutations.</p>
-<p>With luck <a href="https://mail.gnu.org/archive/html/bug-make/2024-06/msg00008.html">the fix</a>
-will be accepted upstream and we will get more fair <code>--shuffle</code> mode.</p>
-<p>Have fun!</p>]]></description>
-    <pubDate>Sun, 23 Jun 2024 00:00:00 UT</pubDate>
-    <guid>http://trofi.github.io/posts/319-probabilities-are-hard.html</guid>
     <dc:creator>Sergei Trofimovich</dc:creator>
 </item>
 

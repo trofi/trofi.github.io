@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Zero Hydra Failures towards 26.05 NixOS release</title>
+        <link rel="stylesheet" type="text/css" href="../css/default.css" />
+        <link rel="stylesheet" type="text/css" href="../css/code.css" />
+        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
+
+        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
+        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+    </head>
+    <body>
+        <div id="navigation">
+            <a href="../">home</a>
+            <a href="../blog.html">blog</a>
+            <a href="../log.html">log</a>
+            <a href="../feed/atom.xml">atom</a>
+            <a href="../feed/rss.xml">rss</a>
+            <a href="../about.html">about</a>
+            <a href="../contact.html">contact</a>
+        </div>
+
+        <div id="content">
+            <h1>Zero Hydra Failures towards 26.05 NixOS release</h1>
+            
+                <div class="info">May  4, 2026</div>
+            
+
+            <p><code>NixOS-26.05</code> is around the corner!
+<a href="https://github.com/NixOS/nixpkgs/issues/503391">The schedule</a> says it
+should happen around 25 May.</p>
+<p>Today the release process entered <code>ZHF</code> phase. There most packages with
+build failures are expected to be addresses by the release date.
+<a href="https://github.com/NixOS/nixpkgs/issues/516381" class="uri">https://github.com/NixOS/nixpkgs/issues/516381</a> contains
+detailed step-by-step to identify interesting packages.</p>
+<p>This time <code>nixpkgs</code> is full of build failures related to <code>gcc-15</code>
+changes (<code>-std=gnu23</code> switch).</p>
+<h2 id="an-example-package-fix">An example package fix</h2>
+<p>I usually try to fix at least one package during <code>ZHF</code>. Let’s do it
+again.</p>
+<p>I picked <code>ior</code> package. <a href="https://hydra.nixos.org/job/nixpkgs/unstable/ior.x86_64-linux"><code>hydra</code> says</a>
+it is broken since January 2026. Most recent <a href="https://hydra.nixos.org/build/327774029" class="uri">https://hydra.nixos.org/build/327774029</a>
+build failure has the build log:</p>
+<pre><code>  CC       libaiori_a-option.o
+option.c: In function 'option_parse_token':
+option.c:325:19: error: too many arguments to function 'fp'; expected 0, have 1
+  325 |                   fp(arg);
+      |                   ^~ ~~~
+make[3]: *** [Makefile:1281: libaiori_a-option.o] Error 1</code></pre>
+<p>Looks like a typical <code>gcc-15</code> failure. Trying to reproduce it locally:</p>
+<pre><code>$ git clone --depth 1 https://github.com/NixOS/nixpkgs
+$ cd nixpkgs
+$ nix build --no-link -f. ior -L
+...
+ior&gt; option.c:325:19: error: too many arguments to function 'fp'; expected 0, have 1
+ior&gt;   325 |                   fp(arg);
+ior&gt;       |                   ^~ ~~~
+ior&gt; make[3]: *** [Makefile:1281: libaiori_a-option.o] Error 1</code></pre>
+<p>Fails just the same! Before trying to fix it ourselves let’s see if
+upstream already happens to have a fix. I looked at the history of our
+failed <code>option.c</code> file at <a href="https://github.com/hpc/ior/commits/main/src/option.c" class="uri">https://github.com/hpc/ior/commits/main/src/option.c</a>
+and I was lucky! <a href="https://github.com/hpc/ior/pull/525" class="uri">https://github.com/hpc/ior/pull/525</a> is the committed
+fix for our issue!</p>
+<p>I applied it locally as:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/pkgs/by-name/io/ior/package.nix</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/pkgs/by-name/io/ior/package.nix</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2,6 +2,7 @@</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>   lib,</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>   stdenv,</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>   fetchFromGitHub,</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  fetchpatch,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>   mpi,</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>   perl,</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>   autoreconfHook,</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -19,6 +20,16 @@ stdenv.mkDerivation (finalAttrs: {</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>     hash = &quot;sha256-WsfJWHHfkiHZ+rPk6ck6mDErTXwt6Dhgm+yqOtw4Fvo=&quot;;</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>   };</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a> </span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="va">+  patches = [</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="va">+    # Fix gcc-15 build:</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="va">+    #   https://github.com/hpc/ior/pull/525</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="va">+    (fetchpatch {</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="va">+      name = &quot;gcc-15.patch&quot;;</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="va">+      url = &quot;https://github.com/hpc/ior/commit/526c5ad06695a91a27163c520ce3305109f50bef.patch&quot;;</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="va">+      hash = &quot;sha256-HvbRMt2EcuO7kxLL9qKpozpNKEOmWuHkKQTSUhfU7/w=&quot;;</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="va">+    })</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a><span class="va">+  ];</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>   nativeBuildInputs = [</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>     autoreconfHook</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>     pkg-config</span></code></pre></div>
+<p>Tested the build:</p>
+<pre><code>$ nix build --no-link -f. ior -L
+...
+&lt;all good&gt;</code></pre>
+<p>And proposed the fix as <a href="https://github.com/NixOS/nixpkgs/pull/516449" class="uri">https://github.com/NixOS/nixpkgs/pull/516449</a>.</p>
+<h2 id="parting-words">Parting Words</h2>
+<p>If you never contributed to <code>nixpkgs</code> and are wondering how hard it is
+do give <code>ZHF</code> a try! Chances are you can quickly grab a broken package
+and make it work.</p>
+<p>Have fun!</p>
+        </div>
+    </body>
+</html>
