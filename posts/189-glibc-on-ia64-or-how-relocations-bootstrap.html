@@ -1,62 +1,39 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>glibc on ia64 or how relocations bootstrap</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>glibc on ia64 or how relocations bootstrap</h1>
-            
-                <div class="info">December 27, 2015</div>
-            
-
-            <p>It was a rainy evening on <code>#gentoo-ia64</code> and suddenly</p>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>glibc on ia64 or how relocations bootstrap</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>glibc on ia64 or how relocations bootstrap</h1><div class="info">December 27, 2015</div><p>It was a rainy evening on <code>#gentoo-ia64</code> and suddenly</p>
 <pre><code>00:40 &lt; undersys&gt; trying out glibc 2.21 on my ia64 box
 00:41 &lt; undersys&gt; all compiles fine, gets to preinstall test and fails
 00:41 &lt; undersys&gt; &quot;simple run test (/usr/bin/cal) failed&quot; wat :C
 ... &lt;some trials and errors, still fails&gt;
 16:53 &lt; undersys&gt; /usr/portage/sys-libs/glibc/files/eblits/pkg_preinst.eblit:
           line 24: 17141 Segmentation fault
-              LC_ALL=C ./ld-*.so --library-path . ${x} &gt; /dev/null</code></pre>
+              LC_ALL=C ./ld-*.so --library-path . ${x} &gt; /dev/null
+</code></pre>
 <p>Brendan tried hard to get <code>glibc</code> building on <code>ia64</code> by picking
 various <code>gcc</code> versions (<code>4.7</code>, <code>4.8</code>, <code>4.9</code>) but no luck. Late
 stage of <code>libc</code> sanity check suggested resulting <code>glibc</code> is completely
 busted. Bug is known for a while as a
 <a href="https://bugs.gentoo.org/show_bug.cgi?id=503838">#503838</a>.</p>
-<h2 id="the-problem">the problem</h2>
-<p>I’ve tried to reproduce crash on one of <code>ia64</code> boxes:</p>
+<h2>the problem</h2>
+<p>I've tried to reproduce crash on one of <code>ia64</code> boxes:</p>
 <pre><code>$ emerge -v1 =glibc-2.22-r1
 ...
 &gt;&gt;&gt; Installing (1 of 1) sys-libs/glibc-2.22-r1
  * Defaulting /etc/host.conf:multi to on
 /bound/portage/sys-libs/glibc/files/eblits/pkg_preinst.eblit: line 24:
-  6623 Segmentation fault      (core dumped) LC_ALL=C ./ld-*.so --library-path . ${x} &gt; /dev/null</code></pre>
+  6623 Segmentation fault      (core dumped) LC_ALL=C ./ld-*.so --library-path . ${x} &gt; /dev/null
+</code></pre>
 <p>Got the same thing!
-I think I’ve seen the same crash before but never bothered finding the
+I think I've seen the same crash before but never bothered finding the
 actual cause of <code>glibc</code> failure. I always ignored it and kept using
 old <code>glibc</code> as I usually was up to something else when visited
 <code>ia64</code> (likely <code>GHC</code> binary rebuild).
 But not this time :)</p>
-<h2 id="reproducing">reproducing</h2>
+<h2>reproducing</h2>
 <p>The crash happened in <code>pkg_preinst</code> phase after a successful attempt
 to build the package:</p>
 <pre><code>* ERROR: sys-libs/glibc-2.22-r1 failed (preinst phase):
@@ -71,39 +48,42 @@ to build the package:</p>
 * The specific snippet of code:
 *              LC_ALL=C \
 *              ./ld-*.so --library-path . ${x} &gt; /dev/null \
-*                      || die &quot;simple run test (${x}) failed&quot;</code></pre>
+*                      || die &quot;simple run test (${x}) failed&quot;
+</code></pre>
 <p><code>sys-libs/glibc/files/eblits/pkg_preinst.eblit</code> tries to run the
 following code:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="bu">pushd</span> ../../image/lib <span class="co"># 'make install' places freshly built glibc here</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> x <span class="kw">in</span> cal date env free ls true uname uptime <span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>     <span class="va">x</span><span class="op">=</span><span class="va">$(</span><span class="bu">type</span> <span class="at">-p</span> <span class="va">${x})</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>     <span class="va">LC_ALL</span><span class="op">=</span>C <span class="dt">\</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>       <span class="ex">./ld-*.so</span> <span class="at">--library-path</span> . <span class="va">${x}</span> <span class="op">&gt;</span> /dev/null <span class="dt">\</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>         <span class="kw">||</span> <span class="ex">die</span> <span class="st">&quot;simple run test (</span><span class="va">${x}</span><span class="st">) failed&quot;</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span></code></pre></div>
-<p>This code snippet picks commonly installed programs from user’s system
+<pre><code class="language-bash">pushd ../../image/lib # 'make install' places freshly built glibc here
+
+for x in cal date env free ls true uname uptime ; do
+     x=$(type -p ${x})
+     LC_ALL=C \
+       ./ld-*.so --library-path . ${x} &gt; /dev/null \
+         || die &quot;simple run test (${x}) failed&quot;
+done
+</code></pre>
+<p>This code snippet picks commonly installed programs from user's system
 and tries to run them under freshly built dynamic interpreter (as
 opposed to default <code>/lib/ld-linux-ia64.so.2</code>). And new interpreter
 mysteriously crashes.</p>
 <p>We can try to reproduce crash right from a build directory:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> pwd</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">/var/tmp/portage/sys-libs/glibc-2.22-r1/work/build-ia64-ia64-unknown-linux-gnu-nptl</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> elf/ld.so <span class="at">--library-path</span> ../../image/lib /usr/bin/cal</span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Segmentation</span> fault <span class="er">(</span><span class="ex">core</span> dumped<span class="kw">)</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> readelf <span class="at">-a</span> /usr/bin/cal <span class="kw">|</span> <span class="fu">grep</span> interpreter</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="ex">[Requesting</span> program interpreter: /lib/ld-linux-ia64.so.2]</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> /lib/ld-linux-ia64.so.2 <span class="at">--library-path</span> ../image/lib /usr/bin/cal</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    <span class="ex">December</span> 2015</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="ex">Su</span> Mo Tu We Th Fr Sa</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>       <span class="ex">1</span>  2  3  4  5</span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a> <span class="ex">6</span>  7  8  9 10 11 12</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="ex">13</span> 14 15 16 17 18 19</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="ex">20</span> 21 22 23 24 25 26</span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="ex">27</span> 28 29 30 31</span></code></pre></div>
-<p>Old <code>ld.so</code> still works, the new one doesn’t.</p>
-<h1 id="nailing-down-the-location">nailing down the location</h1>
+<pre><code class="language-bash">$ pwd
+/var/tmp/portage/sys-libs/glibc-2.22-r1/work/build-ia64-ia64-unknown-linux-gnu-nptl
+$ elf/ld.so --library-path ../../image/lib /usr/bin/cal
+Segmentation fault (core dumped)
+
+$ readelf -a /usr/bin/cal | grep interpreter
+[Requesting program interpreter: /lib/ld-linux-ia64.so.2]
+$ /lib/ld-linux-ia64.so.2 --library-path ../image/lib /usr/bin/cal
+    December 2015
+Su Mo Tu We Th Fr Sa
+       1  2  3  4  5
+ 6  7  8  9 10 11 12
+13 14 15 16 17 18 19
+20 21 22 23 24 25 26
+27 28 29 30 31
+</code></pre>
+<p>Old <code>ld.so</code> still works, the new one doesn't.</p>
+<h1>nailing down the location</h1>
 <p>Next step is to drop down into <code>gdb</code> and look at the crash:</p>
 <pre><code># gdb -q --args elf/ld.so --library-path ../image/lib /usr/bin/cal
 (gdb) run
@@ -127,8 +107,9 @@ Program received signal SIGSEGV, Segmentation fault.
 (gdb) bt
 #0  0x200000080000b1f1 in elf_get_dynamic_info (temp=0x0, l=0x2000000800052ef8 &lt;_rtld_local+2456&gt;) at get-dynamic-info.h:70
 #1  _dl_start (arg=0x60000fffffffb2a0) at rtld.c:382
-#2  0x2000000800001a50 in _start ()</code></pre>
-<p><code>gdb</code> shows the exact line number where crash happens, that’s good. I
+#2  0x2000000800001a50 in _start ()
+</code></pre>
+<p><code>gdb</code> shows the exact line number where crash happens, that's good. I
 tried to check disassembly to see if anything obvious stands up.</p>
 <pre><code>(gdb) disassemble
 Dump of assembler code for function _dl_start:
@@ -160,11 +141,12 @@ Dump of assembler code for function _dl_start:
     0x200000080000b730 &lt;+3888&gt;:  [MIB]       nop.m 0x0
     0x200000080000b731 &lt;+3889&gt;:              cmp.eq p7,p6=0,r14
     0x200000080000b732 &lt;+3890&gt;:              br.few 0x200000080000a940 &lt;_dl_start+320&gt;;;
-End of assembler dump.</code></pre>
+End of assembler dump.
+</code></pre>
 <p>All in all <code>_dl_start</code> disassembly was 720 lines long (15 pages of
 code). I was not able to easily find where <code>r15</code> register assignment
 happened. Basically I had no idea what I was looking at :)</p>
-<p>First off it’s worth understanding why disassembly shows us
+<p>First off it's worth understanding why disassembly shows us
 <code>_dl_start()</code> and not <code>elf_get_dynamic_info()</code>.</p>
 <p>Here is the annotated backtrace (click on the links! They are fun):</p>
 <ul>
@@ -191,107 +173,114 @@ dynamically linked program starts like that on <code>ia64</code>):</p>
 <li>the module-base register <code>gp</code> (also known as <code>r1</code>) is being
 computed</li>
 <li>control is passed to <code>_dl_start()</code></li>
-</ul></li>
+</ul>
+</li>
 <li><code>_dl_start</code> is <code>C</code> code entry point where <code>ld.so</code> own <code>ELF</code>
 header is being parsed:
 <ul>
-<li><p><code>bootstrap_map</code> (dynamic linker context) is being initialized as:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> ElfW<span class="op">(</span>Addr<span class="op">)</span> _dl_start <span class="op">(</span><span class="dt">void</span> <span class="op">*</span>arg<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">#include </span><span class="im">&quot;dynamic-link.h&quot;</span><span class="pp"> </span><span class="co">/* includes defintion of elf_get_dynamic_info() */</span></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    __builtin_memset <span class="op">(</span>bootstrap_map<span class="op">.</span>l_info<span class="op">,</span> <span class="ch">'</span><span class="sc">\0</span><span class="ch">'</span><span class="op">,</span> <span class="kw">sizeof</span> <span class="op">(</span>bootstrap_map<span class="op">.</span>l_info<span class="op">));</span></span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    bootstrap_map<span class="op">.</span>l_addr <span class="op">=</span> elf_machine_load_address <span class="op">();</span></span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    bootstrap_map<span class="op">.</span>l_ld <span class="op">=</span> <span class="op">(</span><span class="dt">void</span> <span class="op">*)</span> bootstrap_map<span class="op">.</span>l_addr <span class="op">+</span> elf_machine_dynamic <span class="op">();</span></span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    elf_get_dynamic_info <span class="op">(&amp;</span>bootstrap_map<span class="op">,</span> NULL<span class="op">);</span> <span class="co">/* crash happens here */</span></span>
-<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div></li>
-</ul></li>
+<li>
+<p><code>bootstrap_map</code> (dynamic linker context) is being initialized as:</p>
+<pre><code class="language-c">static ElfW(Addr) _dl_start (void *arg) {
+    ...
+    #include &quot;dynamic-link.h&quot; /* includes defintion of elf_get_dynamic_info() */
+    ...
+    __builtin_memset (bootstrap_map.l_info, '\0', sizeof (bootstrap_map.l_info));
+    bootstrap_map.l_addr = elf_machine_load_address ();
+    bootstrap_map.l_ld = (void *) bootstrap_map.l_addr + elf_machine_dynamic ();
+
+    elf_get_dynamic_info (&amp;bootstrap_map, NULL); /* crash happens here */
+    ...
+}
+</code></pre>
+</li>
+</ul>
+</li>
 </ul>
 <p>Thus the <code>elf_get_dynamic_info()</code> is a local inline function:</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">auto</span> <span class="kw">inline</span> <span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> always_inline<span class="op">))</span></span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>temp<span class="op">)</span> <span class="op">{</span> <span class="op">...</span></span></code></pre></div>
-<p>That’s it. The reason of unreadable <code>_dl_start</code> is excessive
+<pre><code class="language-c">auto inline void __attribute__ ((unused, always_inline))
+elf_get_dynamic_info (struct link_map *l, ElfW(Dyn) *temp) { ...
+</code></pre>
+<p>That's it. The reason of unreadable <code>_dl_start</code> is excessive
 inlining.</p>
 <p>I undid the inline damage to make disassembly slightly more readable.
 Basically changed <code>inline</code> to <code>noiline</code> and moved out exact code bit
 that crashed to yet another <code>noinline</code> function
 <code>elf_get_dynamic_info_addr_tag</code>:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- ../glibc-2.22/elf/get-dynamic-info.h.orig   2015-12-27 12:29:22.468333779 +0000</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ ../glibc-2.22/elf/get-dynamic-info.h        2015-12-27 12:33:43.124279949 +0000</span></span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,100 +1,113 @@</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a> #include &lt;assert.h&gt;</span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a> #include &lt;libc-internal.h&gt;</span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="va">+#ifndef RESOLVE_MAP</span></span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="va">+static</span></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="va">+#else</span></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="va">+auto</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="va">+#endif</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="va">+void __attribute__ ((unused, noinline))</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="va">+elf_get_dynamic_info_addr_tag (struct link_map *l, ElfW(Dyn) *dyn)</span></span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="va">+{</span></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="va">+  ElfW(Dyn) **info = l-&gt;l_info;</span></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a><span class="va">+  info[DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM</span></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a><span class="va">+       + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM] = dyn;</span></span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a><span class="va">+}</span></span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a> #ifndef RESOLVE_MAP</span>
-<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a> static</span>
-<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a> #else</span>
-<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a> auto</span>
-<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a><span class="st">-inline void __attribute__ ((unused, always_inline))</span></span>
-<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a><span class="va">+void __attribute__ ((unused, noinline))</span></span>
-<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a> elf_get_dynamic_info (struct link_map *l, ElfW(Dyn) *temp)</span>
-<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a> {</span>
-<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>   ElfW(Dyn) *dyn = l-&gt;l_ld;</span>
-<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>   ElfW(Dyn) **info;</span>
-<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a> #if __ELF_NATIVE_CLASS == 32</span>
-<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>   typedef Elf32_Word d_tag_utype;</span>
-<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a> #elif __ELF_NATIVE_CLASS == 64</span>
-<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>   typedef Elf64_Xword d_tag_utype;</span>
-<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a> #ifndef RTLD_BOOTSTRAP</span>
-<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a>   if (dyn == NULL)</span>
-<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a>     return;</span>
-<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a>   info = l-&gt;l_info;</span>
-<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a>   while (dyn-&gt;d_tag != DT_NULL)</span>
-<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a>     {</span>
-<span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a>       if ((d_tag_utype) dyn-&gt;d_tag &lt; DT_NUM)</span>
-<span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a>        info[dyn-&gt;d_tag] = dyn;</span>
-<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>       else if (dyn-&gt;d_tag &gt;= DT_LOPROC &amp;&amp;</span>
-<span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a>               dyn-&gt;d_tag &lt; DT_LOPROC + DT_THISPROCNUM)</span>
-<span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a>        {</span>
-<span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a>          /* This does not violate the array bounds of l-&gt;l_info, but</span>
-<span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a>             gcc 4.6 on sparc somehow does not see this.  */</span>
-<span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>          DIAG_PUSH_NEEDS_COMMENT;</span>
-<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a>          DIAG_IGNORE_NEEDS_COMMENT (4.6,</span>
-<span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a>                                     &quot;-Warray-bounds&quot;);</span>
-<span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a>          info[dyn-&gt;d_tag - DT_LOPROC + DT_NUM] = dyn;</span>
-<span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a>          DIAG_POP_NEEDS_COMMENT;</span>
-<span id="cb10-59"><a href="#cb10-59" aria-hidden="true" tabindex="-1"></a>        }</span>
-<span id="cb10-60"><a href="#cb10-60" aria-hidden="true" tabindex="-1"></a>       else if ((d_tag_utype) DT_VERSIONTAGIDX (dyn-&gt;d_tag) &lt; DT_VERSIONTAGNUM)</span>
-<span id="cb10-61"><a href="#cb10-61" aria-hidden="true" tabindex="-1"></a>        info[VERSYMIDX (dyn-&gt;d_tag)] = dyn;</span>
-<span id="cb10-62"><a href="#cb10-62" aria-hidden="true" tabindex="-1"></a>       else if ((d_tag_utype) DT_EXTRATAGIDX (dyn-&gt;d_tag) &lt; DT_EXTRANUM)</span>
-<span id="cb10-63"><a href="#cb10-63" aria-hidden="true" tabindex="-1"></a>        info[DT_EXTRATAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM</span>
-<span id="cb10-64"><a href="#cb10-64" aria-hidden="true" tabindex="-1"></a>             + DT_VERSIONTAGNUM] = dyn;</span>
-<span id="cb10-65"><a href="#cb10-65" aria-hidden="true" tabindex="-1"></a>       else if ((d_tag_utype) DT_VALTAGIDX (dyn-&gt;d_tag) &lt; DT_VALNUM)</span>
-<span id="cb10-66"><a href="#cb10-66" aria-hidden="true" tabindex="-1"></a>        info[DT_VALTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM</span>
-<span id="cb10-67"><a href="#cb10-67" aria-hidden="true" tabindex="-1"></a>             + DT_VERSIONTAGNUM + DT_EXTRANUM] = dyn;</span>
-<span id="cb10-68"><a href="#cb10-68" aria-hidden="true" tabindex="-1"></a>       else if ((d_tag_utype) DT_ADDRTAGIDX (dyn-&gt;d_tag) &lt; DT_ADDRNUM)</span>
-<span id="cb10-69"><a href="#cb10-69" aria-hidden="true" tabindex="-1"></a><span class="st">-       info[DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM</span></span>
-<span id="cb10-70"><a href="#cb10-70" aria-hidden="true" tabindex="-1"></a><span class="st">-            + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM] = dyn;</span></span>
-<span id="cb10-71"><a href="#cb10-71" aria-hidden="true" tabindex="-1"></a><span class="va">+       elf_get_dynamic_info_addr_tag (l, dyn);</span></span>
-<span id="cb10-72"><a href="#cb10-72" aria-hidden="true" tabindex="-1"></a>       ++dyn;</span>
-<span id="cb10-73"><a href="#cb10-73" aria-hidden="true" tabindex="-1"></a>     }</span></code></pre></div>
-<p>That way I’ve got the following crash dump:</p>
+<pre><code class="language-diff">--- ../glibc-2.22/elf/get-dynamic-info.h.orig   2015-12-27 12:29:22.468333779 +0000
++++ ../glibc-2.22/elf/get-dynamic-info.h        2015-12-27 12:33:43.124279949 +0000
+@@ -1,100 +1,113 @@
+ #include &lt;assert.h&gt;
+ #include &lt;libc-internal.h&gt;
+
++#ifndef RESOLVE_MAP
++static
++#else
++auto
++#endif
++void __attribute__ ((unused, noinline))
++elf_get_dynamic_info_addr_tag (struct link_map *l, ElfW(Dyn) *dyn)
++{
++  ElfW(Dyn) **info = l-&gt;l_info;
++
++  info[DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
++       + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM] = dyn;
++}
++
+ #ifndef RESOLVE_MAP
+ static
+ #else
+ auto
+ #endif
+-inline void __attribute__ ((unused, always_inline))
++void __attribute__ ((unused, noinline))
+ elf_get_dynamic_info (struct link_map *l, ElfW(Dyn) *temp)
+ {
+   ElfW(Dyn) *dyn = l-&gt;l_ld;
+   ElfW(Dyn) **info;
+ #if __ELF_NATIVE_CLASS == 32
+   typedef Elf32_Word d_tag_utype;
+ #elif __ELF_NATIVE_CLASS == 64
+   typedef Elf64_Xword d_tag_utype;
+ #endif
+
+ #ifndef RTLD_BOOTSTRAP
+   if (dyn == NULL)
+     return;
+ #endif
+
+   info = l-&gt;l_info;
+
+   while (dyn-&gt;d_tag != DT_NULL)
+     {
+       if ((d_tag_utype) dyn-&gt;d_tag &lt; DT_NUM)
+        info[dyn-&gt;d_tag] = dyn;
+       else if (dyn-&gt;d_tag &gt;= DT_LOPROC &amp;&amp;
+               dyn-&gt;d_tag &lt; DT_LOPROC + DT_THISPROCNUM)
+        {
+          /* This does not violate the array bounds of l-&gt;l_info, but
+             gcc 4.6 on sparc somehow does not see this.  */
+          DIAG_PUSH_NEEDS_COMMENT;
+          DIAG_IGNORE_NEEDS_COMMENT (4.6,
+                                     &quot;-Warray-bounds&quot;);
+          info[dyn-&gt;d_tag - DT_LOPROC + DT_NUM] = dyn;
+          DIAG_POP_NEEDS_COMMENT;
+        }
+       else if ((d_tag_utype) DT_VERSIONTAGIDX (dyn-&gt;d_tag) &lt; DT_VERSIONTAGNUM)
+        info[VERSYMIDX (dyn-&gt;d_tag)] = dyn;
+       else if ((d_tag_utype) DT_EXTRATAGIDX (dyn-&gt;d_tag) &lt; DT_EXTRANUM)
+        info[DT_EXTRATAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
+             + DT_VERSIONTAGNUM] = dyn;
+       else if ((d_tag_utype) DT_VALTAGIDX (dyn-&gt;d_tag) &lt; DT_VALNUM)
+        info[DT_VALTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
+             + DT_VERSIONTAGNUM + DT_EXTRANUM] = dyn;
+       else if ((d_tag_utype) DT_ADDRTAGIDX (dyn-&gt;d_tag) &lt; DT_ADDRNUM)
+-       info[DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
+-            + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM] = dyn;
++       elf_get_dynamic_info_addr_tag (l, dyn);
+       ++dyn;
+     }
+</code></pre>
+<p>That way I've got the following crash dump:</p>
 <pre><code># gdb -q --args elf/ld.so --library-path ../image/lib /usr/bin/cal
 Reading symbols from elf/ld.so...done.
 (gdb) run
@@ -322,54 +311,59 @@ Dump of assembler code for function elf_get_dynamic_info_addr_tag:
 =&gt; 0x200000080000a8b0 &lt;+48&gt;:    [MIB]       st8 [r14]=r32
    0x200000080000a8b1 &lt;+49&gt;:                nop.i 0x0
    0x200000080000a8b2 &lt;+50&gt;:                br.ret.sptk.many b0;;
-End of assembler dump.</code></pre>
+End of assembler dump.
+</code></pre>
 <p>12 instructions (4 of which are <code>nop</code> of sorts) is more manageable.</p>
 <p>More readable but still is completely unclear. <code>r32</code> is the only used
 input register here (<code>r33</code> would be the second) while
 <code>elf_get_dynamic_info_addr_tag()</code> clearly has two arguments:</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span></code></pre></div>
+<pre><code class="language-c">void __attribute__ ((unused, noinline))
+elf_get_dynamic_info_addr_tag (struct link_map *l, ElfW(Dyn) *dyn)
+</code></pre>
 <p>At this point I started looking at what exactly crashing code is
 supposed to do.</p>
-<h2 id="the-first-workaround">the first workaround</h2>
+<h2>the first workaround</h2>
 <p><code>_rtld_local</code> is a whole linker context (<a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l146">defined
 here</a>)
 of type <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=sysdeps/generic/ldsodefs.h;h=a8caf47bc378d3ec1ba2e4cd0219503faeeb5e76;hb=HEAD#l268"><code>struct rtld_global</code></a>
 (slightly simplified):</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> rtld_global</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> link_namespaces</span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">....</span></span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> _dl_ns<span class="op">[</span>DL_NNS<span class="op">];</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> link_map _dl_rtld_map<span class="op">;</span></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> link_map</span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>  ElfW<span class="op">(</span>Addr<span class="op">)</span> l_addr<span class="op">;</span>          <span class="co">/* Difference between the address in the ELF</span></span>
-<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a><span class="co">                                 file and the addresses in memory.  */</span></span>
-<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>  <span class="dt">char</span> <span class="op">*</span>l_name<span class="op">;</span>               <span class="co">/* Absolute file name object was found in.  */</span></span>
-<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>  ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>l_ld<span class="op">;</span>            <span class="co">/* Dynamic section of the shared object.  */</span></span>
-<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> link_map <span class="op">*</span>l_next<span class="op">,</span> <span class="op">*</span>l_prev<span class="op">;</span> <span class="co">/* Chain of loaded objects.  */</span></span>
-<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span></span>
-<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>  ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>l_info<span class="op">[</span>DT_NUM <span class="op">+</span> DT_THISPROCNUM <span class="op">+</span> DT_VERSIONTAGNUM</span>
-<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>                    <span class="op">+</span> DT_EXTRANUM <span class="op">+</span> DT_VALNUM <span class="op">+</span> DT_ADDRNUM<span class="op">];</span></span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>  <span class="op">...</span></span>
-<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">struct rtld_global
+{
+    struct link_namespaces
+    {
+    ....
+    } _dl_ns[DL_NNS];
+    ...
+    struct link_map _dl_rtld_map;
+    ...
+};
+...
+struct link_map
+{
+  ElfW(Addr) l_addr;          /* Difference between the address in the ELF
+                                 file and the addresses in memory.  */
+  char *l_name;               /* Absolute file name object was found in.  */
+  ElfW(Dyn) *l_ld;            /* Dynamic section of the shared object.  */
+  struct link_map *l_next, *l_prev; /* Chain of loaded objects.  */
+  ...
+  ElfW(Dyn) *l_info[DT_NUM + DT_THISPROCNUM + DT_VERSIONTAGNUM
+                    + DT_EXTRANUM + DT_VALNUM + DT_ADDRNUM];
+  ...
+}
+</code></pre>
 <p>The code crashed when tried to fill in
 <code>_rtld_local._dl_rtld_map.l_info</code> global variable. <code>ld.so</code> even
 succeeded at previous step (inspecting values right after crash):</p>
 <pre><code>(gdb) print _rtld_local._dl_rtld_map.l_info 
 $4 = {0x0 &lt;repeats 14 times&gt;, 0x200000080004e4a0, 0x0 &lt;repeats 62 times&gt;}
 (gdb) print _rtld_local._dl_rtld_map.l_info[14]-&gt;d_tag
-$3 = 14 # DT_SONAME</code></pre>
+$3 = 14 # DT_SONAME
+</code></pre>
 <p>but was not able to handle current section type:</p>
 <pre><code>(gdb) (gdb) print dyn-&gt;d_tag 
-$5 = 1879047925 # 0x6ffffef5</code></pre>
-<p>Looking at <code>/usr/include/elf.h</code> it’s a section of <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/elf.h;h=fbadda4377aae9ede65ac2fcc795fbbd79d1a78c;hb=HEAD#l767"><code>DT_GNU_HASH</code>
+$5 = 1879047925 # 0x6ffffef5
+</code></pre>
+<p>Looking at <code>/usr/include/elf.h</code> it's a section of <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/elf.h;h=fbadda4377aae9ede65ac2fcc795fbbd79d1a78c;hb=HEAD#l767"><code>DT_GNU_HASH</code>
 type</a>.</p>
 <p>What kinds of dynamic sections does <code>ld.so</code> have?</p>
 <pre><code># readelf -d elf/ld.so
@@ -395,7 +389,8 @@ Dynamic section at offset 0x3e4a0 contains 21 entries:
  0x000000006ffffffb (FLAGS_1)            Flags: NOW
  0x000000006ffffff0 (VERSYM)             0xc88
  0x000000006ffffff9 (RELACOUNT)          17
- 0x0000000000000000 (NULL)               0x0</code></pre>
+ 0x0000000000000000 (NULL)               0x0
+</code></pre>
 <p><code>ld.so</code> managed to load <code>SONAME</code> (first) section and failed at
 <code>GNU_HASH</code> (second). What if we drop <code>GHU_HASH</code> from <code>ld.so</code>
 image? Tried to relink it with default <code>sysv</code> hash style.
@@ -414,7 +409,8 @@ The default command to link <code>ld.so</code> is:</p>
     elf/librtld.os \
     -Wl,--version-script=ld.map \
     -Wl,-soname=ld-linux-ia64.so.2 \
-    -Wl,-defsym=_begin=0</code></pre>
+    -Wl,-defsym=_begin=0
+</code></pre>
 <p>I changed <code>-Wl,--hash-style=gnu</code> to <code>-Wl,--hash-style=sysv</code>:</p>
 <pre><code># ia64-unknown-linux-gnu-gcc \
     -Wl,-O1 -Wl,--as-needed \
@@ -430,7 +426,8 @@ The default command to link <code>ld.so</code> is:</p>
     elf/librtld.os \
     -Wl,--version-script=ld.map \
     -Wl,-soname=ld-linux-ia64.so.2 \
-    -Wl,-defsym=_begin=0</code></pre>
+    -Wl,-defsym=_begin=0
+</code></pre>
 <p>And behold! Resulting <code>ld.so</code> can load simple binaries:</p>
 <pre><code># elf/ld.so.new --library-path ../image/lib /usr/bin/cal
     December 2015
@@ -442,114 +439,120 @@ Su Mo Tu We Th Fr Sa
 27 28 29 30 31
 
 # readelf -d /usr/bin/cal | grep GNU_HASH
-  0x000000006ffffef5 (GNU_HASH)           0x4000000000000270</code></pre>
+  0x000000006ffffef5 (GNU_HASH)           0x4000000000000270
+</code></pre>
 <p>Even if these binaries contain <code>GNU_HASH</code> themselves. That is
 unexpected.</p>
 <p>Thus the first workaround to get working <code>glibc</code> working on <code>ia64</code>
 is by tweaking <code>LDFLAGS</code>:</p>
-<pre><code>LDFLAGS=&quot;-Wl,--hash-style=sysv&quot; emerge -av sys-libs/glibc</code></pre>
-<h1 id="down-the-rabbit-hole">down the rabbit hole</h1>
+<pre><code>LDFLAGS=&quot;-Wl,--hash-style=sysv&quot; emerge -av sys-libs/glibc
+</code></pre>
+<h1>down the rabbit hole</h1>
 <p>But why does <code>SIGSEGV</code> happen in the first place? Who is at fault
 here? The primary suspects are <code>gcc</code>, <code>glibc</code> and <code>binutils</code>.</p>
 <p>What is the difference between <code>SONAME</code> and <code>GNU_HASH</code> sections? All
 the faulty code does is storing pointer to <code>ElfW(Dyn)</code>:</p>
-<div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">**</span>info <span class="op">=</span> l<span class="op">-&gt;</span>l_info<span class="op">;</span></span>
-<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  info<span class="op">[</span>DT_ADDRTAGIDX <span class="op">(</span>dyn<span class="op">-&gt;</span>d_tag<span class="op">)</span> <span class="op">+</span> DT_NUM <span class="op">+</span> DT_THISPROCNUM</span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>       <span class="op">+</span> DT_VERSIONTAGNUM <span class="op">+</span> DT_EXTRANUM <span class="op">+</span> DT_VALNUM<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">void __attribute__ ((unused, noinline))
+elf_get_dynamic_info_addr_tag (struct link_map *l, ElfW(Dyn) *dyn)
+{
+  ElfW(Dyn) **info = l-&gt;l_info;
+
+  info[DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
+       + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM] = dyn;
+}
+</code></pre>
 <p>I spent some time trying to write simple example to reproduce the crash.
 No matter how hard I tried all samples work just fine. The best
 approximation is:</p>
-<div class="sourceCode" id="cb22"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> dyn_t <span class="op">{</span></span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> d_tag<span class="op">;</span></span>
-<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> foo<span class="op">;</span></span>
-<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> g_t <span class="op">{</span></span>
-<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> b<span class="op">[</span><span class="dv">307</span><span class="op">];</span></span>
-<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> a<span class="op">[</span><span class="dv">8</span><span class="op">];</span></span>
-<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> dyn_t <span class="op">*</span>p<span class="op">[</span><span class="dv">77</span><span class="op">];</span></span>
-<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> g_t _l __attribute__ <span class="op">((</span>visibility <span class="op">(</span><span class="st">&quot;hidden&quot;</span><span class="op">),</span> section <span class="op">(</span><span class="st">&quot;.sdata&quot;</span><span class="op">)));</span></span>
-<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>f<span class="op">(</span><span class="kw">struct</span> g_t <span class="op">*</span> g<span class="op">,</span> <span class="kw">struct</span> dyn_t <span class="op">*</span> dyn<span class="op">)</span></span>
-<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>  <span class="kw">struct</span> dyn_t <span class="op">**</span>info <span class="op">=</span> g<span class="op">-&gt;</span>p<span class="op">;</span></span>
-<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>  info<span class="op">[(</span><span class="bn">0x6ffffeff</span> <span class="op">-</span> dyn<span class="op">-&gt;</span>d_tag<span class="op">)</span> <span class="op">+</span> <span class="dv">66</span><span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
-<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a>foo <span class="op">(</span><span class="kw">struct</span> dyn_t <span class="op">*</span> dyn<span class="op">)</span></span>
-<span id="cb22-26"><a href="#cb22-26" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb22-27"><a href="#cb22-27" aria-hidden="true" tabindex="-1"></a>  f<span class="op">(&amp;</span>_l<span class="op">,</span> dyn<span class="op">);</span></span>
-<span id="cb22-28"><a href="#cb22-28" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb22-29"><a href="#cb22-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-30"><a href="#cb22-30" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> __attribute__ <span class="op">((</span>noinline<span class="op">))</span></span>
-<span id="cb22-31"><a href="#cb22-31" aria-hidden="true" tabindex="-1"></a>main<span class="op">(</span><span class="dt">int</span> argc<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb22-32"><a href="#cb22-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> dyn_t d <span class="op">=</span> <span class="op">{</span> argc <span class="op">+</span> <span class="dv">66</span> <span class="op">};</span></span>
-<span id="cb22-33"><a href="#cb22-33" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-34"><a href="#cb22-34" aria-hidden="true" tabindex="-1"></a>    foo <span class="op">(&amp;</span>d<span class="op">);</span></span>
-<span id="cb22-35"><a href="#cb22-35" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-36"><a href="#cb22-36" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> _l<span class="op">.</span>p<span class="op">[</span><span class="dv">0</span><span class="op">]</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb22-37"><a href="#cb22-37" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+
+struct dyn_t {
+    long d_tag;
+    long foo;
+};
+
+struct g_t {
+    long b[307];
+    long a[8];
+    struct dyn_t *p[77];
+};
+
+struct g_t _l __attribute__ ((visibility (&quot;hidden&quot;), section (&quot;.sdata&quot;)));
+
+static void __attribute__ ((unused, noinline))
+f(struct g_t * g, struct dyn_t * dyn)
+{
+  struct dyn_t **info = g-&gt;p;
+
+  info[(0x6ffffeff - dyn-&gt;d_tag) + 66] = dyn;
+}
+
+void __attribute__ ((unused, noinline))
+foo (struct dyn_t * dyn)
+{
+  f(&amp;_l, dyn);
+}
+
+int __attribute__ ((noinline))
+main(int argc) {
+    struct dyn_t d = { argc + 66 };
+
+    foo (&amp;d);
+
+    return _l.p[0] != 0;
+}
+</code></pre>
 <p>When built as <code>-O2 -fPIC</code> it generates very similar <code>asm</code> for function
 <code>f</code> (immediate around <code>addl r14</code> is the only deviation):</p>
-<div class="sourceCode" id="cb23"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>$ objdump <span class="op">-</span>r <span class="op">-</span>d a</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>...</span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>&lt;f<span class="op">.</span>constprop<span class="op">.</span><span class="dv">0</span><span class="op">&gt;:</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>       0b 70 00 40 18 10       [MMI<span class="op">]</span>       ld8 <span class="kw">r14</span><span class="op">=[</span>r32<span class="op">]</span><span class="co">;;     # read dyn-&gt;d_tag</span></span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>       f0 <span class="dv">70</span> <span class="dv">00</span> <span class="dv">24</span> <span class="dv">40</span> c0                   shladd <span class="kw">r15</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span>r0 <span class="op">#</span> multiply dyn<span class="op">-&gt;</span>d_tag by <span class="dv">8</span></span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>       c1 ed d7 <span class="fl">9</span><span class="bn">f</span>                         addl <span class="kw">r14</span><span class="op">=-</span><span class="dv">1316</span><span class="op">,</span>r1<span class="co">;; # ?</span></span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>       0b 70 00 1c 18 10       [MMI<span class="op">]</span>       ld8 <span class="kw">r14</span><span class="op">=[</span><span class="kw">r14</span><span class="op">]</span><span class="co">;;     # ??</span></span>
-<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>       e0 <span class="dv">00</span> <span class="dv">3</span><span class="er">b</span> <span class="dv">0</span><span class="er">e</span> <span class="dv">42</span> <span class="dv">00</span>                   adds <span class="kw">r14</span><span class="op">=</span><span class="dv">992</span><span class="op">,</span><span class="kw">r14</span>    <span class="op">#</span> <span class="op">???</span></span>
-<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>       00 00 04 00                         <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span><span class="co">;;</span></span>
-<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>       09 00 00 00 01 00       [MMI<span class="op">]</span>       nop<span class="op">.</span>m <span class="bn">0x0</span></span>
-<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>       e0 <span class="dv">70</span> <span class="dv">3</span><span class="er">c</span> <span class="dv">0</span><span class="er">a</span> <span class="dv">40</span> <span class="dv">00</span>                   sub <span class="kw">r14</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="kw">r15</span>     <span class="op">#</span> compute pointer in info<span class="op">[]</span></span>
-<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>       00 00 04 00                         <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span><span class="co">;;</span></span>
-<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>       11 00 80 1c 98 11       [MIB<span class="op">]</span>       st8 <span class="op">[</span><span class="kw">r14</span><span class="op">]=</span>r32       <span class="op">#</span> perform store</span>
-<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>       00 00 00 02 00 80                   <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span></span>
-<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>       08 00 84 00                         br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0<span class="co">;;</span></span>
-<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>...</span></code></pre></div>
+<pre><code class="language-asm">$ objdump -r -d a
+...
+&lt;f.constprop.0&gt;:
+       0b 70 00 40 18 10       [MMI]       ld8 r14=[r32];;     # read dyn-&gt;d_tag
+       f0 70 00 24 40 c0                   shladd r15=r14,3,r0 # multiply dyn-&gt;d_tag by 8
+       c1 ed d7 9f                         addl r14=-1316,r1;; # ?
+       0b 70 00 1c 18 10       [MMI]       ld8 r14=[r14];;     # ??
+       e0 00 3b 0e 42 00                   adds r14=992,r14    # ???
+       00 00 04 00                         nop.i 0x0;;
+       09 00 00 00 01 00       [MMI]       nop.m 0x0
+       e0 70 3c 0a 40 00                   sub r14=r14,r15     # compute pointer in info[]
+       00 00 04 00                         nop.i 0x0;;
+       11 00 80 1c 98 11       [MIB]       st8 [r14]=r32       # perform store
+       00 00 00 02 00 80                   nop.i 0x0
+       08 00 84 00                         br.ret.sptk.many b0;;
+...
+</code></pre>
 <p><code>gcc</code> dump is slightly more readable:</p>
-<div class="sourceCode" id="cb24"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>$ ia64<span class="op">-</span>unknown<span class="op">-</span>linux<span class="op">-</span>gnu<span class="op">-</span>gcc <span class="op">-</span>O2 <span class="op">-</span>S a<span class="op">.</span>c <span class="op">-</span>o a<span class="op">.</span>S</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>...</span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="fu">f.constprop.0:</span></span>
-<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    .prologue</span>
-<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    .body</span>
-<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    .mmi</span>
-<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r14</span> <span class="op">=</span> <span class="op">[</span>r32<span class="op">]</span></span>
-<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    shladd <span class="kw">r15</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="dv">3</span><span class="op">,</span> r0</span>
-<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>    addl <span class="kw">r14</span> <span class="op">=</span> <span class="fu">@</span><span class="er">l</span>toffx<span class="op">(</span>_l<span class="op">#+</span><span class="dv">15032385536</span><span class="op">),</span> r1</span>
-<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>    .mmi</span>
-<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>    ld8<span class="op">.</span>mov <span class="kw">r14</span> <span class="op">=</span> <span class="op">[</span><span class="kw">r14</span><span class="op">],</span> _l<span class="op">#+</span><span class="dv">15032385536</span></span>
-<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>    adds <span class="kw">r14</span> <span class="op">=</span> <span class="dv">992</span><span class="op">,</span> <span class="kw">r14</span></span>
-<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
-<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a>    .mmi</span>
-<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
-<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a>    <span class="bu">sub</span> <span class="kw">r14</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="kw">r15</span></span>
-<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
-<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a>    .mib</span>
-<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a>    st8 <span class="op">[</span><span class="kw">r14</span><span class="op">]</span> <span class="op">=</span> r32</span>
-<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
-<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many <span class="dt">rp</span></span>
-<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>.endp f<span class="op">.</span>constprop<span class="op">.</span><span class="dv">0</span><span class="op">#</span></span></code></pre></div>
+<pre><code class="language-asm">$ ia64-unknown-linux-gnu-gcc -O2 -S a.c -o a.S
+...
+f.constprop.0:
+    .prologue
+    .body
+    .mmi
+    ld8 r14 = [r32]
+    ;;
+    shladd r15 = r14, 3, r0
+    addl r14 = @ltoffx(_l#+15032385536), r1
+    ;;
+    .mmi
+    ld8.mov r14 = [r14], _l#+15032385536
+    ;;
+    adds r14 = 992, r14
+    nop 0
+    ;;
+    .mmi
+    nop 0
+    sub r14 = r14, r15
+    nop 0
+    ;;
+    .mib
+    st8 [r14] = r32
+    nop 0
+    br.ret.sptk.many rp
+.endp f.constprop.0#
+</code></pre>
 <p>At line <code>adds r14 = 992, r14</code> register <code>r14</code> should contain absolute
 address of <code>_l#+15032385536+992</code>. But where that huge number comes
-from, why we don’t see it in <code>objdump</code>?</p>
+from, why we don't see it in <code>objdump</code>?</p>
 <p>The magic is in <code>ld8.mov r14 = [r14], _l#+15032385536</code> line. It
 instructs assembly to load this (absolute) address somewhere from
 <code>ltoffx(_l#+15032385536) + r1</code> (aka <code>-1316 + r1</code>).</p>
@@ -587,10 +590,11 @@ $1 = (void *) 0x3800527e0
 0000000526b0  00000000006f R_IA64_REL64LSB                      3800527e0
 
 # objdump -R elf/ld.so | fgrep 3800527e0
-00000000000526b0 REL64LSB          *ABS*+0x00000003800527e0</code></pre>
+00000000000526b0 REL64LSB          *ABS*+0x00000003800527e0
+</code></pre>
 <p>This actually is an absolute relocation (contains absolute address). I
 did not expect such things to be present in <code>PIC</code> mode. Such
-relocations work for normal binaries but don’t for <code>ld.so</code> for a
+relocations work for normal binaries but don't for <code>ld.so</code> for a
 simple reason: <code>ld.so</code> did not adjust any relocations yet.</p>
 <p><code>ld.so</code> own section info is read at
 <a href="https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/rtld.c;h=52160dfde6be42eba000c4e8136de0d190617270;hb=HEAD#l382">rtld.c:382</a>
@@ -599,31 +603,34 @@ and relocations are applied later at
 <p><code>SONAME</code> section does not use <code>R_IA64_REL64LSB</code> relocation while
 <code>GNU_HASH</code> does. It explains the crash but does not explain why
 generated code is different.</p>
-<h2 id="the-cause">the cause</h2>
+<h2>the cause</h2>
 <p>The answer is in the method how <code>gcc</code> optimises the following code:</p>
-<div class="sourceCode" id="cb26"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(&amp;</span>_rtld_local<span class="op">.</span>_dl_rtld_map<span class="op">,</span> NULL<span class="op">);</span></span></code></pre></div>
+<pre><code class="language-c">elf_get_dynamic_info_addr_tag (&amp;_rtld_local._dl_rtld_map, NULL);
+</code></pre>
 <p>Here is a lot of constants to expand:</p>
-<div class="sourceCode" id="cb27"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">**</span>info <span class="op">=</span> l<span class="op">-&gt;</span>l_info<span class="op">;</span></span>
-<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  info<span class="op">[</span>DT_ADDRTAGIDX <span class="op">(</span>dyn<span class="op">-&gt;</span>d_tag<span class="op">)</span> <span class="op">+</span> DT_NUM <span class="op">+</span> DT_THISPROCNUM</span>
-<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>       <span class="op">+</span> DT_VERSIONTAGNUM <span class="op">+</span> DT_EXTRANUM <span class="op">+</span> DT_VALNUM<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
-<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="co">// or</span></span>
-<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>  <span class="co">// info[(0x6ffffeff - dyn-&gt;d_tag) + 66] = dyn;</span></span>
-<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">void __attribute__ ((unused, noinline))
+elf_get_dynamic_info_addr_tag (struct link_map *l, ElfW(Dyn) *dyn)
+{
+  ElfW(Dyn) **info = l-&gt;l_info;
+
+  info[DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
+       + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM] = dyn;
+  // or
+  // info[(0x6ffffeff - dyn-&gt;d_tag) + 66] = dyn;
+}
+</code></pre>
 <p><code>gcc</code> infers that <code>elf_get_dynamic_info_addr_tag()</code> gets a constant
-<code>_rtld_local._dl_rtld_map</code> (aka <code>_rtld_local+2456</code>) as it’s
+<code>_rtld_local._dl_rtld_map</code> (aka <code>_rtld_local+2456</code>) as it's
 first argument <code>l</code> and specialises function into 1-argument variant:</p>
-<div class="sourceCode" id="cb28"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag_constprop <span class="op">(</span>ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>  <span class="co">// p is of type __attribute__ ((section (&quot;.sdata&quot;)))</span></span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">const</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">**</span> p <span class="op">=</span> <span class="op">&amp;</span>_rtld_local<span class="op">.</span>_dl_rtld_map<span class="op">.</span>l_info<span class="op">[</span><span class="bn">0x6ffffeff</span> <span class="op">+</span> <span class="dv">66</span><span class="op">];</span></span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>  p<span class="op">[-</span>dyn<span class="op">-&gt;</span>d_tag<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">void __attribute__ ((unused, noinline))
+elf_get_dynamic_info_addr_tag_constprop (ElfW(Dyn) *dyn)
+{
+  // p is of type __attribute__ ((section (&quot;.sdata&quot;)))
+  static const ElfW(Dyn) ** p = &amp;_rtld_local._dl_rtld_map.l_info[0x6ffffeff + 66];
+
+  p[-dyn-&gt;d_tag] = dyn;
+}
+</code></pre>
 <p>To compile that code <code>gcc</code> infers the following facts about <code>p</code>:</p>
 <ul>
 <li>offset from <code>_rtld_local</code> to <code>p</code> exceeds 22-bit value (limit of
@@ -633,76 +640,96 @@ there</li>
 </ul>
 <p>The workaround to avoid <code>.got</code> reload is simple (but fragile): force
 <code>gcc</code> to compute final offset first:</p>
-<div class="sourceCode" id="cb29"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> __attribute__ <span class="op">((</span>unused<span class="op">,</span> noinline<span class="op">))</span></span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>elf_get_dynamic_info_addr_tag <span class="op">(</span><span class="kw">struct</span> link_map <span class="op">*</span>l<span class="op">,</span> ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">*</span>dyn<span class="op">)</span></span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>  ElfW<span class="op">(</span>Dyn<span class="op">)</span> <span class="op">**</span>info <span class="op">=</span> l<span class="op">-&gt;</span>l_info<span class="op">;</span></span>
-<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">long</span> o <span class="op">=</span> DT_ADDRTAGIDX <span class="op">(</span>dyn<span class="op">-&gt;</span>d_tag<span class="op">)</span> <span class="op">+</span> DT_NUM <span class="op">+</span> DT_THISPROCNUM</span>
-<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>         <span class="op">+</span> DT_VERSIONTAGNUM <span class="op">+</span> DT_EXTRANUM <span class="op">+</span> DT_VALNUM<span class="op">;</span></span>
-<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  info<span class="op">[</span>o<span class="op">]</span> <span class="op">=</span> dyn<span class="op">;</span></span>
-<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>I’ve tried it on a toy example first. Hack made <code>gcc</code> avoid
+<pre><code class="language-c">void __attribute__ ((unused, noinline))
+elf_get_dynamic_info_addr_tag (struct link_map *l, ElfW(Dyn) *dyn)
+{
+  ElfW(Dyn) **info = l-&gt;l_info;
+
+  long o = DT_ADDRTAGIDX (dyn-&gt;d_tag) + DT_NUM + DT_THISPROCNUM
+         + DT_VERSIONTAGNUM + DT_EXTRANUM + DT_VALNUM;
+
+  info[o] = dyn;
+}
+</code></pre>
+<p>I've tried it on a toy example first. Hack made <code>gcc</code> avoid
 <code>ltoffx</code> and use small <code>gprel</code> offset:</p>
-<div class="sourceCode" id="cb30"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="fu">f.constprop.0:</span></span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>    .prologue</span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>    .body</span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>    .mlx</span>
-<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>    ld8 <span class="kw">r15</span> <span class="op">=</span> <span class="op">[</span>r32<span class="op">]</span></span>
-<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>    movl <span class="kw">r14</span> <span class="op">=</span> <span class="dv">1879048001</span></span>
-<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>    .mii</span>
-<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>    <span class="bu">sub</span> <span class="kw">r14</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="kw">r15</span></span>
-<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>    addl <span class="kw">r15</span> <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>_l<span class="op">#+</span><span class="dv">2520</span><span class="op">),</span> gp</span>
-<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>    shladd <span class="kw">r14</span> <span class="op">=</span> <span class="kw">r14</span><span class="op">,</span> <span class="dv">3</span><span class="op">,</span> <span class="kw">r15</span></span>
-<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">;;</span></span>
-<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a>    .mib</span>
-<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a>    st8 <span class="op">[</span><span class="kw">r14</span><span class="op">]</span> <span class="op">=</span> r32</span>
-<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a>    <span class="bu">nop</span> <span class="dv">0</span></span>
-<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a>    br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many <span class="dt">rp</span></span></code></pre></div>
+<pre><code class="language-asm">f.constprop.0:
+    .prologue
+    .body
+    .mlx
+    ld8 r15 = [r32]
+    movl r14 = 1879048001
+    ;;
+    .mii
+    sub r14 = r14, r15
+    addl r15 = @gprel(_l#+2520), gp
+    ;;
+    shladd r14 = r14, 3, r15
+    ;;
+    .mib
+    st8 [r14] = r32
+    nop 0
+    br.ret.sptk.many rp
+</code></pre>
 <p>or the same in final binary:</p>
-<div class="sourceCode" id="cb31"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>&lt;f<span class="op">.</span>constprop<span class="op">.</span><span class="dv">0</span><span class="op">&gt;:</span></span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>   05 78 00 40 18 d0       <span class="op">[</span>MLX<span class="op">]</span>       ld8 <span class="kw">r15</span><span class="op">=[</span>r32<span class="op">]</span></span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>   6f 00 00 00 00 c0                   movl <span class="kw">r14</span><span class="op">=</span><span class="bn">0x6fffff41</span><span class="co">;;</span></span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>   11 f4 fb <span class="dv">67</span> </span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>   03 70 38 1e 05 20       [MII<span class="op">]</span>       sub <span class="kw">r14</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="kw">r15</span></span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>   f0 <span class="dv">60</span> <span class="dv">07</span> <span class="dv">12</span> <span class="dv">48</span> c0                   addl <span class="kw">r15</span><span class="op">=</span><span class="dv">1260</span><span class="op">,</span>r1<span class="co">;;</span></span>
-<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>   e1 <span class="dv">78</span> <span class="dv">48</span> <span class="dv">80</span>                         shladd <span class="kw">r14</span><span class="op">=</span><span class="kw">r14</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span><span class="kw">r15</span><span class="co">;;</span></span>
-<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>   11 00 80 1c 98 11       [MIB<span class="op">]</span>       st8 <span class="op">[</span><span class="kw">r14</span><span class="op">]=</span>r32</span>
-<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>   00 00 00 02 00 80                   <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span></span>
-<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>   08 00 84 00                         br<span class="op">.</span>ret<span class="op">.</span>sptk<span class="op">.</span>many b0<span class="co">;;</span></span>
-<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>   08 00 00 00 01 00       [MMI<span class="op">]</span>       nop<span class="op">.</span>m <span class="bn">0x0</span></span>
-<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>   00 00 00 02 00 00                   <span class="bu">nop</span><span class="op">.</span>m <span class="bn">0x0</span></span>
-<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>   00 00 04 00                         <span class="bu">nop</span><span class="op">.</span>i <span class="bn">0x0</span></span></code></pre></div>
+<pre><code class="language-asm">&lt;f.constprop.0&gt;:
+   05 78 00 40 18 d0       [MLX]       ld8 r15=[r32]
+   6f 00 00 00 00 c0                   movl r14=0x6fffff41;;
+   11 f4 fb 67 
+   03 70 38 1e 05 20       [MII]       sub r14=r14,r15
+   f0 60 07 12 48 c0                   addl r15=1260,r1;;
+   e1 78 48 80                         shladd r14=r14,3,r15;;
+   11 00 80 1c 98 11       [MIB]       st8 [r14]=r32
+   00 00 00 02 00 80                   nop.i 0x0
+   08 00 84 00                         br.ret.sptk.many b0;;
+   08 00 00 00 01 00       [MMI]       nop.m 0x0
+   00 00 00 02 00 00                   nop.m 0x0
+   00 00 04 00                         nop.i 0x0
+</code></pre>
 <p>No memory loads, only a single store \o/.</p>
 <p>A workaround is sent to <code>libc</code>-alpha ML <a href="https://sourceware.org/ml/libc-alpha/2015-12/msg00556.html">for
 review</a>.</p>
-<h2 id="wrapping-up">wrapping up</h2>
+<h2>wrapping up</h2>
 <p>Random observations:</p>
 <ul>
-<li><p><code>LDFLAGS=-Wl,--hash-style=sysv</code> is a simple way to get modern
-<code>glibc</code> work on <code>ia64</code></p></li>
-<li><p>uninlining things did not make bug disappear</p></li>
-<li><p>dynamic linkers are simple yet delicate at bootstrap phase when no
-relocations are adjusted</p></li>
-<li><p>bug does not happen on <code>-O1</code> optimization level (triggered by
-<code>-fipa-cp</code> knob)</p></li>
-<li><p>the workaround is weak and can break at any time in future</p></li>
-<li><p>perhaps <code>gcc</code> could be smarter to use <code>MLX</code> instruction to embed
+<li>
+<p><code>LDFLAGS=-Wl,--hash-style=sysv</code> is a simple way to get modern
+<code>glibc</code> work on <code>ia64</code></p>
+</li>
+<li>
+<p>uninlining things did not make bug disappear</p>
+</li>
+<li>
+<p>dynamic linkers are simple yet delicate at bootstrap phase when no
+relocations are adjusted</p>
+</li>
+<li>
+<p>bug does not happen on <code>-O1</code> optimization level (triggered by
+<code>-fipa-cp</code> knob)</p>
+</li>
+<li>
+<p>the workaround is weak and can break at any time in future</p>
+</li>
+<li>
+<p>perhaps <code>gcc</code> could be smarter to use <code>MLX</code> instruction to embed
 large offset:</p>
-<div class="sourceCode" id="cb32"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>movl r32 <span class="op">=</span> <span class="fu">@</span><span class="er">g</span>prel<span class="op">(</span>_l<span class="op">#+</span><span class="dv">15032385536</span><span class="op">)</span></span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="bu">add</span>  r32 <span class="op">=</span> r32<span class="op">,</span> gp</span></code></pre></div>
-<p>But separate section for <code>_l</code> makes things more complicated.</p></li>
-<li><p>it took me a day to get <code>-Wl,--hash-style=sysv</code> workaround and 6
-days to figure out why it works</p></li>
-<li><p><code>ld.so</code> uses <code>ELF</code> relocations extensively and sets them up in C
-code</p></li>
-<li><p><code>gdb</code> output is misleading for specialised functions (the argument
-order is flipped)</p></li>
+<pre><code class="language-asm">movl r32 = @gprel(_l#+15032385536)
+add  r32 = r32, gp
+</code></pre>
+<p>But separate section for <code>_l</code> makes things more complicated.</p>
+</li>
+<li>
+<p>it took me a day to get <code>-Wl,--hash-style=sysv</code> workaround and 6
+days to figure out why it works</p>
+</li>
+<li>
+<p><code>ld.so</code> uses <code>ELF</code> relocations extensively and sets them up in C
+code</p>
+</li>
+<li>
+<p><code>gdb</code> output is misleading for specialised functions (the argument
+order is flipped)</p>
+</li>
 </ul>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

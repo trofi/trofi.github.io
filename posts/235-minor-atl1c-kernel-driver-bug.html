@@ -1,37 +1,12 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Minor atl1c kernel driver bug</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>Minor atl1c kernel driver bug</h1>
-            
-                <div class="info">January 22, 2022</div>
-            
-
-            <p>This weekend I converted my last physical non-<code>NixOS</code> machine to <code>NixOS</code>.
-I was postponing it for a while as it’s an internet facing machine that
-was installed in 2009. I’d prefer smaller downtime if reasonably
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Minor atl1c kernel driver bug</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>Minor atl1c kernel driver bug</h1><div class="info">January 22, 2022</div><p>This weekend I converted my last physical non-<code>NixOS</code> machine to <code>NixOS</code>.
+I was postponing it for a while as it's an internet facing machine that
+was installed in 2009. I'd prefer smaller downtime if reasonably
 possible. It does not have that many services: <code>sshd</code>, <code>https</code>
 serving a few static files, <code>IPv6</code> tunnel and a local CI builder.
 This device has <code>1Gbit/s</code> Ethernet card supported by <code>atl1c</code> <code>linux</code>
@@ -42,108 +17,116 @@ kernel threads with suspicious <code>%d</code> names:</p>
 $ top  # atl1c host
 ...
 621 root 20 0 0 0 0 S 11.0 0.0 0:05.01 napi/eth%d-385
-622 root 20 0 0 0 0 S  5.6 0.0 0:02.64 napi/eth%d-386</code></pre>
+622 root 20 0 0 0 0 S  5.6 0.0 0:02.64 napi/eth%d-386
+</code></pre>
 <p>These look like a format string without applied substitution.</p>
 <p>I spent some time looking at <code>linux.git</code> and got nowhere. After that I
 reported the bug to
 <a href="https://lore.kernel.org/netdev/YewoxYh2jNBnanUM@lunn.ch/T/"><code>netdev@</code> ML</a>
 and instantly got the patch from Andrew to try:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/drivers/net/ethernet/atheros/atl1c/atl1c_main.c</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/drivers/net/ethernet/atheros/atl1c/atl1c_main.c</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2706,6 +2706,15 @@ static int atl1c_probe(struct pci_dev *pdev, const struct pci_device_id *ent)</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>        goto err_alloc_etherdev;</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="va">+   if (rtnl_lock_killable()) {</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="va">+       err = -EINTR;</span></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="va">+       goto err_init_netdev;</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="va">+   }</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="va">+   err = dev_alloc_name(netdev, netdev-&gt;name);</span></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="va">+   rtnl_unlock();</span></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="va">+   if (err &lt; 0)</span></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="va">+       goto err_init_netdev;</span></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    err = atl1c_init_netdev(netdev, pdev);</span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    if (err) {</span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>        dev_err(&amp;pdev-&gt;dev, &quot;init netdevice failed\n&quot;);</span></code></pre></div>
-<h2 id="nixos-kernel-patching-nano-howto">NixOS kernel patching nano howto</h2>
+<pre><code class="language-diff">--- a/drivers/net/ethernet/atheros/atl1c/atl1c_main.c
++++ b/drivers/net/ethernet/atheros/atl1c/atl1c_main.c
+@@ -2706,6 +2706,15 @@ static int atl1c_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+        goto err_alloc_etherdev;
+    }
+
++   if (rtnl_lock_killable()) {
++       err = -EINTR;
++       goto err_init_netdev;
++   }
++   err = dev_alloc_name(netdev, netdev-&gt;name);
++   rtnl_unlock();
++   if (err &lt; 0)
++       goto err_init_netdev;
++
+    err = atl1c_init_netdev(netdev, pdev);
+    if (err) {
+        dev_err(&amp;pdev-&gt;dev, &quot;init netdevice failed\n&quot;);
+</code></pre>
+<h2>NixOS kernel patching nano howto</h2>
 <p>What is the simplest way to try it out on a live system? I gave
 <a href="https://nixos.wiki/wiki/Linux_kernel#Custom_configuration">boot.kernelPatches</a>
 mechanism a try:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># in /etc/nixos/configuration.nix</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span> <span class="va">config</span><span class="op">,</span> <span class="va">pkgs</span><span class="op">,</span> <span class="op">...</span> <span class="op">}</span>: <span class="op">{</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">boot</span>.<span class="va">kernelPatches</span> = [</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    ({ <span class="va">name</span> = &quot;<span class="va">atl1c-netdev</span>&quot;; <span class="va">patch</span> = ./<span class="va">atl1c-netdev</span>.<span class="va">patch</span>; <span class="op">}</span>)</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  ];</span></code></pre></div>
+<pre><code class="language-nix"># in /etc/nixos/configuration.nix
+{ config, pkgs, ... }: {
+...
+  boot.kernelPatches = [
+    ({ name = &quot;atl1c-netdev&quot;; patch = ./atl1c-netdev.patch; })
+  ];
+</code></pre>
 <p>This change applies extra local patches to current kernel. Building
 patched kernel for the next boot:</p>
 <pre><code># nixos-rebuild boot
 ...
-# systemctl reboot</code></pre>
+# systemctl reboot
+</code></pre>
 <p>Checking thread names after reboot:</p>
 <pre><code># ping -f 172.16.0.1  # ran on remote host
 $ top  # atl1c host
 ...
 613 root 20 0 0 0 0 S 11.0 0.0 0:07.46 napi/eth0-385
-614 root 20 0 0 0 0 R  5.3 0.0 0:03.96 napi/eth0-386</code></pre>
+614 root 20 0 0 0 0 R  5.3 0.0 0:03.96 napi/eth0-386
+</code></pre>
 <p>The patch made things better!</p>
-<h2 id="testing-in-a-vm-before-giving-it-a-go-on-real-device">Testing in a VM before giving it a go on real device</h2>
-<p>It’s not very useful for this specific case as we are testing changes
+<h2>Testing in a VM before giving it a go on real device</h2>
+<p>It's not very useful for this specific case as we are testing changes
 to a hardware driver without emulation available. But for many other
 kernel changes before booting into a brand new kernel we could use
 <code>qemu</code> to have a smoke test for new functionality.
-I do it all the time when I poke at kernel’s VM subsystem.
+I do it all the time when I poke at kernel's VM subsystem.
 You can even boot up your full system up to desktop environment:</p>
 <pre><code>$ nixos-rebuild build-vm
 ...
 Done.  The virtual machine can be started by running /nix/store/bnl5jjic2rpbxc8p7y92znyzzp1xz59i-nixos-vm/bin/run-nz-vm
-$ /nix/store/bnl5jjic2rpbxc8p7y92znyzzp1xz59i-nixos-vm/bin/run-nz-vm</code></pre>
+$ /nix/store/bnl5jjic2rpbxc8p7y92znyzzp1xz59i-nixos-vm/bin/run-nz-vm
+</code></pre>
 <p>On my desktop this boots up my <code>i3</code> desktop in a second. After a
 session shutdown disk image takes only <code>8MB</code> of space:</p>
 <pre><code>$ ls -lh
 total 8.5M
 -rw-r--r-- 1 slyfox users 8.5M Jan 22 20:24 nz.qcow2
-lrwxrwxrwx 1 slyfox users   52 Jan 22 20:22 result -&gt; /nix/store/bnl5jjic2rpbxc8p7y92znyzzp1xz59i-nixos-vm</code></pre>
+lrwxrwxrwx 1 slyfox users   52 Jan 22 20:22 result -&gt; /nix/store/bnl5jjic2rpbxc8p7y92znyzzp1xz59i-nixos-vm
+</code></pre>
 <p>It was instructive for me to have a peek at what the <code>run-nz-vm</code>
 script actually does:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">#! /nix/store/pbfraw351mksnkp2ni9c4rkc9cpp89iv-bash-5.1-p12/bin/bash</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="va">NIX_DISK_IMAGE</span><span class="op">=</span><span class="va">$(</span><span class="fu">readlink</span> <span class="at">-f</span> <span class="st">&quot;</span><span class="va">${NIX_DISK_IMAGE</span><span class="op">:-</span>./nz.qcow2<span class="va">}</span><span class="st">&quot;</span><span class="va">)</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="ot">! </span><span class="bu">test</span> <span class="at">-e</span> <span class="st">&quot;</span><span class="va">$NIX_DISK_IMAGE</span><span class="st">&quot;</span><span class="kw">;</span> <span class="cf">then</span></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="ex">/nix/store/k48rmda1r7is6v2n0jdpfmaax74l8lbq-qemu-host-cpu-only-6.1.0/bin/qemu-img</span> create <span class="at">-f</span> qcow2 <span class="st">&quot;</span><span class="va">$NIX_DISK_IMAGE</span><span class="st">&quot;</span> <span class="dt">\</span></span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>       1024M</span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Create a directory for storing temporary data of the running VM.</span></span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="bu">[</span> <span class="ot">-z</span> <span class="st">&quot;</span><span class="va">$TMPDIR</span><span class="st">&quot;</span> <span class="bu">]</span> <span class="kw">||</span> <span class="bu">[</span> <span class="ot">-z</span> <span class="st">&quot;</span><span class="va">$USE_TMPDIR</span><span class="st">&quot;</span> <span class="bu">]</span><span class="kw">;</span> <span class="cf">then</span></span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="va">TMPDIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">mktemp</span> <span class="at">-d</span> nix-vm.XXXXXXXXXX <span class="at">--tmpdir</span><span class="va">)</span></span>
-<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="cf">fi</span></span>
-<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="co"># Create a directory for exchanging data with the VM.</span></span>
-<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">&quot;</span><span class="va">$TMPDIR</span><span class="st">/xchg&quot;</span></span>
-<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> <span class="st">&quot;</span><span class="va">$TMPDIR</span><span class="st">&quot;</span></span>
-<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Start QEMU.</span></span>
-<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="bu">exec</span> /nix/store/k48rmda1r7is6v2n0jdpfmaax74l8lbq-qemu-host-cpu-only-6.1.0/bin/qemu-kvm <span class="at">-cpu</span> qemu64 <span class="dt">\</span></span>
-<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>    <span class="at">-name</span> nz <span class="dt">\</span></span>
-<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>    <span class="at">-m</span> 1024 <span class="dt">\</span></span>
-<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>    <span class="at">-smp</span> 1 <span class="dt">\</span></span>
-<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>    <span class="at">-device</span> virtio-rng-pci <span class="dt">\</span></span>
-<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>    <span class="at">-net</span> nic,netdev=user.0,model=virtio <span class="at">-netdev</span> user,id=user.0,<span class="st">&quot;</span><span class="va">$QEMU_NET_OPTS</span><span class="st">&quot;</span> <span class="dt">\</span></span>
-<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>    <span class="at">-virtfs</span> local,path=/nix/store,security_model=none,mount_tag=nix-store <span class="dt">\</span></span>
-<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>    <span class="at">-virtfs</span> local,path=<span class="st">&quot;</span><span class="va">${SHARED_DIR</span><span class="op">:-</span><span class="va">$TMPDIR</span>/xchg<span class="va">}</span><span class="st">&quot;</span>,security_model=none,mount_tag=shared <span class="dt">\</span></span>
-<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>    <span class="at">-virtfs</span> local,path=<span class="st">&quot;</span><span class="va">$TMPDIR</span><span class="st">&quot;</span>/xchg,security_model=none,mount_tag=xchg <span class="dt">\</span></span>
-<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>    <span class="at">-drive</span> cache=writeback,file=<span class="st">&quot;</span><span class="va">$NIX_DISK_IMAGE</span><span class="st">&quot;</span>,id=drive1,if=none,index=1,werror=report <span class="at">-device</span> virtio-blk-pci,drive=drive1 <span class="dt">\</span></span>
-<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>    <span class="at">-device</span> virtio-keyboard <span class="dt">\</span></span>
-<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>    <span class="at">-usb</span> <span class="dt">\</span></span>
-<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>    <span class="at">-device</span> usb-tablet,bus=usb-bus.0 <span class="dt">\</span></span>
-<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>    <span class="at">-kernel</span> /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/kernel <span class="dt">\</span></span>
-<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>    <span class="at">-initrd</span> /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/initrd <span class="dt">\</span></span>
-<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>    <span class="at">-append</span> <span class="st">&quot;</span><span class="va">$(</span><span class="fu">cat</span> /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/kernel-params<span class="va">)</span><span class="st"> init=/nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/init regInfo=/nix/store/n3phlr6zmr84gfmm03pq9hfi8p1i51qy-closure-info/registration console=ttyS0,115200n8 console=tty0 </span><span class="va">$QEMU_KERNEL_PARAMS</span><span class="st">&quot;</span> <span class="dt">\</span></span>
-<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>    <span class="va">$QEMU_OPTS</span> <span class="dt">\</span></span>
-<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;</span><span class="va">$@</span><span class="st">&quot;</span></span></code></pre></div>
+<pre><code class="language-bash">#! /nix/store/pbfraw351mksnkp2ni9c4rkc9cpp89iv-bash-5.1-p12/bin/bash
+NIX_DISK_IMAGE=$(readlink -f &quot;${NIX_DISK_IMAGE:-./nz.qcow2}&quot;)
+if ! test -e &quot;$NIX_DISK_IMAGE&quot;; then
+    /nix/store/k48rmda1r7is6v2n0jdpfmaax74l8lbq-qemu-host-cpu-only-6.1.0/bin/qemu-img create -f qcow2 &quot;$NIX_DISK_IMAGE&quot; \
+       1024M
+fi
+# Create a directory for storing temporary data of the running VM.
+if [ -z &quot;$TMPDIR&quot; ] || [ -z &quot;$USE_TMPDIR&quot; ]; then
+    TMPDIR=$(mktemp -d nix-vm.XXXXXXXXXX --tmpdir)
+fi
+# Create a directory for exchanging data with the VM.
+mkdir -p &quot;$TMPDIR/xchg&quot;
+cd &quot;$TMPDIR&quot;
+# Start QEMU.
+exec /nix/store/k48rmda1r7is6v2n0jdpfmaax74l8lbq-qemu-host-cpu-only-6.1.0/bin/qemu-kvm -cpu qemu64 \
+    -name nz \
+    -m 1024 \
+    -smp 1 \
+    -device virtio-rng-pci \
+    -net nic,netdev=user.0,model=virtio -netdev user,id=user.0,&quot;$QEMU_NET_OPTS&quot; \
+    -virtfs local,path=/nix/store,security_model=none,mount_tag=nix-store \
+    -virtfs local,path=&quot;${SHARED_DIR:-$TMPDIR/xchg}&quot;,security_model=none,mount_tag=shared \
+    -virtfs local,path=&quot;$TMPDIR&quot;/xchg,security_model=none,mount_tag=xchg \
+    -drive cache=writeback,file=&quot;$NIX_DISK_IMAGE&quot;,id=drive1,if=none,index=1,werror=report -device virtio-blk-pci,drive=drive1 \
+    -device virtio-keyboard \
+    -usb \
+    -device usb-tablet,bus=usb-bus.0 \
+    -kernel /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/kernel \
+    -initrd /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/initrd \
+    -append &quot;$(cat /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/kernel-params) init=/nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/init regInfo=/nix/store/n3phlr6zmr84gfmm03pq9hfi8p1i51qy-closure-info/registration console=ttyS0,115200n8 console=tty0 $QEMU_KERNEL_PARAMS&quot; \
+    $QEMU_OPTS \
+    &quot;$@&quot;
+</code></pre>
 <p>Here the script creates <code>nz.qcow2</code> disk in <code>qcow2</code> format of <code>1GB</code>
 size max. But even that space is not populated! The whole of
 <code>/nix/store</code> gets exported via <code>virtfs</code> which allows not to copy
 most of packages into a VM at all! Do we even have a root device here?
-Let’s peek at <code>initrd</code> contents:</p>
+Let's peek at <code>initrd</code> contents:</p>
 <pre><code>$ cat /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/initrd | file -
 /dev/stdin: Zstandard compressed data (v0.8+), Dictionary ID: None
 $ cat /nix/store/0cqyh4p5jr4dklzvh97b3ip9ky52596l-nixos-system-nz-22.05pre346004.5aaed40d22f/initrd | zstd -d | file -
@@ -173,7 +156,8 @@ nix/store/...-link-units
 nix/store/...-attr-2.5.1
 nix/store/...-initrd-fsinfo
 nix/store/...-coreutils-9.0
-nix/store/...-initrd-kmod-blacklist-ubuntu</code></pre>
+nix/store/...-initrd-kmod-blacklist-ubuntu
+</code></pre>
 <p>Here we see that <code>initramfs</code> already has a bit (actually, <code>40MB</code> due
 to <code>glibc</code>) of <code>/nix/store</code> embedded in to support <code>init</code> top-level
 script. <code>init</code> is a big but straightforward script. It does a few
@@ -183,7 +167,7 @@ things:</p>
 <code>NixOS</code> directory structure on it.</li>
 <li>mounts root device into <code>$target</code> (it supports discovery of ISO,
 standard <code>NixOS</code>, conversions from other distributions, aka
-“lustrations”). One of the steps here is to mount passed in <code>virtfs</code>
+&quot;lustrations&quot;). One of the steps here is to mount passed in <code>virtfs</code>
 as a <code>$target/nix/store</code>. And make it writable by overlaying
 <code>tmpfs</code> on top. For live ISO images this allows you to upgrade live
 image in-memory before installing it on disk.</li>
@@ -208,10 +192,9 @@ $ find /tmp/r/
 /tmp/r/etc/binfmt.d/nixos.conf
 /tmp/r/etc/nscd.conf
 /tmp/r/etc/ssh
-...</code></pre>
+...
+</code></pre>
 <p>If you plan to work on boot loader changes you can build a VM with boot
 loader as <code>nixos-rebuild build-vm-with-bootloader</code>.</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

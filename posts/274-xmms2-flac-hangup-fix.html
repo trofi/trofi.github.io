@@ -1,40 +1,16 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>xmms2 FLAC hangup fix</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>xmms2 FLAC hangup fix</h1>
-            
-                <div class="info">December 30, 2022</div>
-            
-
-            <p>Over past few months I noticed that <code>xmms2</code> started getting stuck on some
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>xmms2 FLAC hangup fix</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>xmms2 FLAC hangup fix</h1><div class="info">December 30, 2022</div><p>Over past few months I noticed that <code>xmms2</code> started getting stuck on some
 songs in my playlist. The typical symptom is lack of sound after the
 song finished. There was no (expected!) switch to the next song. Instead,
 existing playlist entry went to out-of-duration playtime report:</p>
 <pre><code>$ xmms2 status
-Playing: Artist - Song: 25:06 of 08:01</code></pre>
+Playing: Artist - Song: 25:06 of 08:01
+</code></pre>
 <p>In this case <code>08:01</code> is the song length and <code>25:06</code> is the offset within
 that song (should never be more than <code>08:01</code> in this case).</p>
 <p>When <code>xmms2</code> was in this state CPU load was still low as if it played
@@ -49,7 +25,7 @@ somewhere.</p>
 find was a 3 minutes 57 seconds long sample. Not too long, but long
 enough to avoid whole system bisection.</p>
 <p>Instead, I ran <code>./xmms2d --verbose</code> and started playing the sample
-problematic. Once it was over 4 minutes <code>xmms2</code>’s debug logs started
+problematic. Once it was over 4 minutes <code>xmms2</code>'s debug logs started
 growing rapidly with error like:</p>
 <pre><code>11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_LOST_SYNC
 11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_BAD_HEADER
@@ -59,7 +35,8 @@ growing rapidly with error like:</p>
 11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_LOST_SYNC
 11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_BAD_HEADER
 ...
-11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_FRAME_CRC_MISMATCH</code></pre>
+11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_FRAME_CRC_MISMATCH
+</code></pre>
 <p>That was a good enough hint that <code>FLAC</code> decoding state machine did not
 feel well. Glancing at <code>xiph/flac</code> issue tracker I found seemingly
 similar <a href="https://github.com/xiph/flac/issues/487">Issue #487</a>. There
@@ -68,7 +45,7 @@ validation. The report also provides numerous commands to validate and
 re-encode <code>.flac</code> files using <code>flac</code> command. Very handy!</p>
 <p>Unfortunately my files all passed <code>flac -t</code> validation and did not
 complain about internal inconsistencies. I means I probably had a
-different problem. But that gave me a hint that maybe it’s related to
+different problem. But that gave me a hint that maybe it's related to
 <code>flac</code> library update in my system. I downgraded <code>1.4.2</code> down to <code>1.3.4</code>
 got my hangups disappeared!</p>
 <p><code>xmms2</code> internal architecture is simple: it handles data streams as
@@ -94,83 +71,86 @@ callbacks to implement <code>FLAC</code> stream decoding.</li>
 </ul>
 <p><code>xmms_flac_init()</code> attaches <code>FLAC</code> handler to a new stream. It creates
 <code>FLAC</code> decoder and defines its output stream type (like 16-bit <code>PCM</code>):</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> gboolean</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>xmms_flac_init <span class="op">(</span>xmms_xform_t <span class="op">*</span>xform<span class="op">)</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    xmms_flac_data_t <span class="op">*</span>data<span class="op">;</span></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    data <span class="op">=</span> g_new0 <span class="op">(</span>xmms_flac_data_t<span class="op">,</span> <span class="dv">1</span><span class="op">);</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    data<span class="op">-&gt;</span>flacdecoder <span class="op">=</span> FLAC__stream_decoder_new <span class="op">();</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    init_status <span class="op">=</span> FLAC__stream_decoder_init_stream <span class="op">(</span>data<span class="op">-&gt;</span>flacdecoder<span class="op">,</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_read<span class="op">,</span></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_seek<span class="op">,</span></span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_tell<span class="op">,</span></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_length<span class="op">,</span></span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_eof<span class="op">,</span></span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_write<span class="op">,</span></span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_metadata<span class="op">,</span></span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>                                                    flac_callback_error<span class="op">,</span></span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>                                                    xform<span class="op">);</span></span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="cf">if</span> <span class="op">(</span>data<span class="op">-&gt;</span>bits_per_sample <span class="op">==</span> <span class="dv">16</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        sample_fmt <span class="op">=</span> XMMS_SAMPLE_FORMAT_S16<span class="op">;</span></span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">...</span></span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    xmms_xform_outdata_type_add <span class="op">(</span>xform<span class="op">,</span></span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>                                 XMMS_STREAM_TYPE_MIMETYPE<span class="op">,</span></span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>                                 <span class="st">&quot;audio/pcm&quot;</span><span class="op">,</span></span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>                                 XMMS_STREAM_TYPE_FMT_FORMAT<span class="op">,</span></span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>                                 sample_fmt<span class="op">,</span></span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>                                 XMMS_STREAM_TYPE_FMT_CHANNELS<span class="op">,</span></span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>                                 data<span class="op">-&gt;</span>channels<span class="op">,</span></span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>                                 XMMS_STREAM_TYPE_FMT_SAMPLERATE<span class="op">,</span></span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>                                 data<span class="op">-&gt;</span>sample_rate<span class="op">,</span></span>
-<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>                                 XMMS_STREAM_TYPE_END<span class="op">);</span></span>
-<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>    data<span class="op">-&gt;</span>buffer <span class="op">=</span> g_string_new <span class="op">(</span>NULL<span class="op">);</span></span>
-<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> TRUE<span class="op">;</span></span></code></pre></div>
-<p>Many lines of code, but it’s just 2 function calls with many details
+<pre><code class="language-c">static gboolean
+xmms_flac_init (xmms_xform_t *xform)
+{
+    xmms_flac_data_t *data;
+    data = g_new0 (xmms_flac_data_t, 1);
+    data-&gt;flacdecoder = FLAC__stream_decoder_new ();
+    init_status = FLAC__stream_decoder_init_stream (data-&gt;flacdecoder,
+                                                    flac_callback_read,
+                                                    flac_callback_seek,
+                                                    flac_callback_tell,
+                                                    flac_callback_length,
+                                                    flac_callback_eof,
+                                                    flac_callback_write,
+                                                    flac_callback_metadata,
+                                                    flac_callback_error,
+                                                    xform);
+    ...
+    } else if (data-&gt;bits_per_sample == 16) {
+        sample_fmt = XMMS_SAMPLE_FORMAT_S16;
+    }
+    ...
+
+    xmms_xform_outdata_type_add (xform,
+                                 XMMS_STREAM_TYPE_MIMETYPE,
+                                 &quot;audio/pcm&quot;,
+                                 XMMS_STREAM_TYPE_FMT_FORMAT,
+                                 sample_fmt,
+                                 XMMS_STREAM_TYPE_FMT_CHANNELS,
+                                 data-&gt;channels,
+                                 XMMS_STREAM_TYPE_FMT_SAMPLERATE,
+                                 data-&gt;sample_rate,
+                                 XMMS_STREAM_TYPE_END);
+    data-&gt;buffer = g_string_new (NULL);
+    return TRUE;
+</code></pre>
+<p>Many lines of code, but it's just 2 function calls with many details
 passed around as individual function parameters. Incidentally, <code>flac</code>
 library itself has a similar API: we pass in a decoder context object
 to <code>FLAC__stream_decoder_init_stream()</code> and a bunch of callbacks to read
 input and write output.</p>
 <p>In case of our error message spam it all came from this
 <code>flac_callback_error()</code> definition:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>flac_callback_error <span class="op">(</span><span class="dt">const</span> FLAC__StreamDecoder <span class="op">*</span>flacdecoder<span class="op">,</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>                     FLAC__StreamDecoderErrorStatus status<span class="op">,</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>                     <span class="dt">void</span> <span class="op">*</span>client_data<span class="op">)</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    xmms_xform_t <span class="op">*</span>data <span class="op">=</span> <span class="op">(</span>xmms_xform_t <span class="op">*)</span> client_data<span class="op">;</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    g_return_if_fail <span class="op">(</span>flacdecoder<span class="op">);</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    g_return_if_fail <span class="op">(</span>data<span class="op">);</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    XMMS_DBG <span class="op">(</span><span class="st">&quot;</span><span class="sc">%s</span><span class="st">&quot;</span><span class="op">,</span> FLAC__StreamDecoderErrorStatusString<span class="op">[</span>status<span class="op">]);</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">static void
+flac_callback_error (const FLAC__StreamDecoder *flacdecoder,
+                     FLAC__StreamDecoderErrorStatus status,
+                     void *client_data)
+{
+    xmms_xform_t *data = (xmms_xform_t *) client_data;
+
+    g_return_if_fail (flacdecoder);
+    g_return_if_fail (data);
+
+    XMMS_DBG (&quot;%s&quot;, FLAC__StreamDecoderErrorStatusString[status]);
+}
+</code></pre>
 <p><code>11:45:35 DEBUG: ../src/plugins/flac/flac.c:341: FLAC__STREAM_DECODER_ERROR_STATUS_LOST_SYNC</code>
 error messages we saw earlier originate here.</p>
 <p><code>flac</code> plugin tried to read data from seemingly broken (or finished?)
 stream again and again. Here is the full <code>flac_callback_read</code> definition:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> FLAC__StreamDecoderReadStatus</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>flac_callback_read <span class="op">(</span><span class="dt">const</span> FLAC__StreamDecoder <span class="op">*</span>flacdecoder<span class="op">,</span> FLAC__byte buffer<span class="op">[],</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>                    <span class="dt">size_t</span> <span class="op">*</span>bytes<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>client_data<span class="op">)</span></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    xmms_xform_t <span class="op">*</span>xform <span class="op">=</span> <span class="op">(</span>xmms_xform_t <span class="op">*)</span> client_data<span class="op">;</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    xmms_error_t error<span class="op">;</span></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    gint ret<span class="op">;</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    g_return_val_if_fail <span class="op">(</span>xform<span class="op">,</span> FLAC__STREAM_DECODER_READ_STATUS_ABORT<span class="op">);</span></span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    ret <span class="op">=</span> xmms_xform_read <span class="op">(</span>xform<span class="op">,</span> <span class="op">(</span>gchar <span class="op">*)</span>buffer<span class="op">,</span> <span class="op">*</span>bytes<span class="op">,</span> <span class="op">&amp;</span>error<span class="op">);</span></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>ret <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM<span class="op">;</span></span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="cf">if</span> <span class="op">(</span>ret <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> FLAC__STREAM_DECODER_READ_STATUS_ABORT<span class="op">;</span></span>
-<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
-<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>bytes <span class="op">=</span> ret<span class="op">;</span></span>
-<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> FLAC__STREAM_DECODER_READ_STATUS_CONTINUE<span class="op">;</span></span>
-<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">static FLAC__StreamDecoderReadStatus
+flac_callback_read (const FLAC__StreamDecoder *flacdecoder, FLAC__byte buffer[],
+                    size_t *bytes, void *client_data)
+{
+    xmms_xform_t *xform = (xmms_xform_t *) client_data;
+    xmms_error_t error;
+    gint ret;
+
+    g_return_val_if_fail (xform, FLAC__STREAM_DECODER_READ_STATUS_ABORT);
+
+    ret = xmms_xform_read (xform, (gchar *)buffer, *bytes, &amp;error);
+    if (ret == 0) {
+        return FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;
+    } else if (ret &lt; 0) {
+        return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
+    } else {
+        *bytes = ret;
+        return FLAC__STREAM_DECODER_READ_STATUS_CONTINUE;
+    }
+}
+</code></pre>
 <p>Not getting too much into <code>FLAC</code> state machine can you spot anything
 suspicious about this function?</p>
 <p>The idea of this function is simple: read a few bytes from
@@ -228,14 +208,15 @@ managed to read less data than needed to <code>flac</code> library? Here is what
  *    \c FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM if and only if
  *    zero bytes were read and there is no more data to be read.
  */
-typedef FLAC__StreamDecoderReadStatus (*FLAC__StreamDecoderReadCallback)(const FLAC__StreamDecoder *decoder, FLAC__byte buffer[], size_t *bytes, void *client_data);</code></pre>
+typedef FLAC__StreamDecoderReadStatus (*FLAC__StreamDecoderReadCallback)(const FLAC__StreamDecoder *decoder, FLAC__byte buffer[], size_t *bytes, void *client_data);
+</code></pre>
 <p>While a bit verbose the documentation string even has the example
 implementation of a single callback almost identical to <code>xmms2</code>
 use case.</p>
 <p>Note: <code>*bytes</code> is unconditionally(ish) written back in the example
 above. We always signal library what we passed back regardless of
-encountered errors. It’s because <code>flac</code> knows how to skip over
-undecodable metadata. Thus, it’s a reasonable behavior to
+encountered errors. It's because <code>flac</code> knows how to skip over
+undecodable metadata. Thus, it's a reasonable behavior to
 return <code>FLAC__STREAM_DECODER_READ_STATUS_ABORT</code> and still expect more
 reads from this stream in search of decodable next frame.</p>
 <p>In comparison <code>xmms2</code> did not update <code>*bytes</code> in case of end of stream
@@ -244,33 +225,34 @@ the callback again and again getting the same <code>buffer</code> back. <code>bu
 possibly contained uninitialized contents of <code>buffer</code> as if it was just
 read them from the input stream.</p>
 <p>Once understood the fix was <a href="https://github.com/xmms2/xmms2-devel/commit/39d31d4a7ae463f3df7a09915fe61e2574f4d95f">trivial</a>:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/plugins/flac/flac.c</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/plugins/flac/flac.c</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -138,26 +138,28 @@ xmms_flac_plugin_setup (xmms_xform_plugin_t *xform_plugin)</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a> static FLAC__StreamDecoderReadStatus</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a> flac_callback_read (const FLAC__StreamDecoder *flacdecoder, FLAC__byte buffer[],</span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                     size_t *bytes, void *client_data)</span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a> {</span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>        xmms_xform_t *xform = (xmms_xform_t *) client_data;</span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>        xmms_error_t error;</span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>        gint ret;</span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>        g_return_val_if_fail (xform, FLAC__STREAM_DECODER_READ_STATUS_ABORT);</span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>        ret = xmms_xform_read (xform, (gchar *)buffer, *bytes, &amp;error);</span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>        if (ret == 0) {</span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="va">+               *bytes = 0;</span></span>
-<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a>                return FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;</span>
-<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>        } else if (ret &lt; 0) {</span>
-<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a><span class="va">+               *bytes = 0;</span></span>
-<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>                return FLAC__STREAM_DECODER_READ_STATUS_ABORT;</span>
-<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>        } else {</span>
-<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>                *bytes = ret;</span>
-<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>                return FLAC__STREAM_DECODER_READ_STATUS_CONTINUE;</span>
-<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a>        }</span>
-<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<pre><code class="language-diff">--- a/src/plugins/flac/flac.c
++++ b/src/plugins/flac/flac.c
+@@ -138,26 +138,28 @@ xmms_flac_plugin_setup (xmms_xform_plugin_t *xform_plugin)
+ static FLAC__StreamDecoderReadStatus
+ flac_callback_read (const FLAC__StreamDecoder *flacdecoder, FLAC__byte buffer[],
+                     size_t *bytes, void *client_data)
+ {
+        xmms_xform_t *xform = (xmms_xform_t *) client_data;
+        xmms_error_t error;
+        gint ret;
+
+        g_return_val_if_fail (xform, FLAC__STREAM_DECODER_READ_STATUS_ABORT);
+
+        ret = xmms_xform_read (xform, (gchar *)buffer, *bytes, &amp;error);
+        if (ret == 0) {
++               *bytes = 0;
+                return FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;
+        } else if (ret &lt; 0) {
++               *bytes = 0;
+                return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
+        } else {
+                *bytes = ret;
+                return FLAC__STREAM_DECODER_READ_STATUS_CONTINUE;
+        }
+ }
+</code></pre>
 <p>After that I saw no hangups in <code>.flac</code> files so far.</p>
-<h2 id="parting-words">Parting words</h2>
+<h2>Parting words</h2>
 <p><code>xmms2</code> plugins are usually very simple to read and implement.</p>
 <p>In case of more complex problems <code>xmms2d --verbose</code> flag is useful to
 enable <code>XMMS_DBG()</code> debugging output. If nothing else it should help
@@ -279,6 +261,4 @@ finding out exact plugins used to play a problematic file.</p>
 managed to expose long standing bug in <code>xmms2</code> code base. Luckily it was
 trivial to fix once identified.</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

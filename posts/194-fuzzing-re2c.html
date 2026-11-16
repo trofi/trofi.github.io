@@ -1,35 +1,10 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>fuzzing re2c</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>fuzzing re2c</h1>
-            
-                <div class="info">December  2, 2016</div>
-            
-
-            <p>My dearest friend maintains <a href="http://re2c.org/"><code>re2c</code></a> (The fast <code>c</code> lexer
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>fuzzing re2c</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>fuzzing re2c</h1><div class="info">December  2, 2016</div><p>My dearest friend maintains <a href="http://re2c.org/"><code>re2c</code></a> (The fast <code>c</code> lexer
 generator).</p>
 <p>Conceptually <code>re2c</code> is a simple tool: it accepts single source file in
 <code>.re</code> format and generates file in <code>.c</code> format.
@@ -38,17 +13,17 @@ It usually works fine but occasionally (mostly in development branches)
 suite</a> is meant
 to cover past errors and complex lexers seen in the wild but it does not
 help testing new features and bizarre corner cases.</p>
-<p>One day inspired with <a href="http://quickfuzz.org/"><code>QuickFuzz</code></a> I’ve decided
+<p>One day inspired with <a href="http://quickfuzz.org/"><code>QuickFuzz</code></a> I've decided
 to spend 30 minutes to write a fuzzer for <code>re2c</code>.
-I started from very simple model: we’ll support only basic set of
+I started from very simple model: we'll support only basic set of
 operations. The full list is:</p>
 <ul>
-<li><code>"a"</code></li>
-<li><code>"b"</code></li>
-<li><code>"(" ... ")"</code> (brackets)</li>
-<li><code>"*"</code> (star)</li>
+<li><code>&quot;a&quot;</code></li>
+<li><code>&quot;b&quot;</code></li>
+<li><code>&quot;(&quot; ... &quot;)&quot;</code> (brackets)</li>
+<li><code>&quot;*&quot;</code> (star)</li>
 <li>concatenation</li>
-<li><code>"|"</code> (alternative)</li>
+<li><code>&quot;|&quot;</code> (alternative)</li>
 </ul>
 <p>Haskell community has a wonderful <code>QuickCheck</code> library
 (<a href="http://www.cs.tufts.edu/~nr/cs257/archive/john-hughes/quick.pdf">paper</a>)
@@ -57,68 +32,71 @@ is to put these random instances into the file and run <code>re2c</code>
 self-validation on it. <code>-S</code> (<a href="http://re2c.org/manual/features/skeleton/skeleton.html">skeleton
 mode</a>) option
 generates a validator, not a normal lexer.</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- qc_re2c.hs</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# LANGUAGE LambdaCase #-}</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Test.QuickCheck</span> <span class="kw">as</span> <span class="dt">Q</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Test.QuickCheck.Monadic</span> <span class="kw">as</span> <span class="dt">QM</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">System.Random</span> <span class="kw">as</span> <span class="dt">SR</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">System.Process</span> <span class="kw">as</span> <span class="dt">SP</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">System.Exit</span> <span class="kw">as</span> <span class="dt">SE</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.ByteString.Char8</span> <span class="kw">as</span> <span class="dt">BS</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">E</span> <span class="ot">=</span> <span class="dt">A</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>       <span class="op">|</span> <span class="dt">B</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>       <span class="op">|</span> <span class="dt">Alt</span> <span class="dt">E</span> <span class="dt">E</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>       <span class="op">|</span> <span class="dt">Cat</span> <span class="dt">E</span> <span class="dt">E</span></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>       <span class="op">|</span> <span class="dt">Star</span> <span class="dt">E</span></span>
-<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="kw">instance</span> <span class="dt">Show</span> <span class="dt">E</span> <span class="kw">where</span></span>
-<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>  <span class="fu">show</span> <span class="ot">=</span> \<span class="kw">case</span></span>
-<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">A</span>       <span class="ot">-&gt;</span> <span class="st">&quot;\&quot;a\&quot;&quot;</span></span>
-<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    <span class="dt">B</span>       <span class="ot">-&gt;</span> <span class="st">&quot;\&quot;b\&quot;&quot;</span></span>
-<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Alt</span> l r <span class="ot">-&gt;</span> <span class="st">&quot;(&quot;</span> <span class="op">++</span> <span class="fu">show</span> l <span class="op">++</span> <span class="st">&quot;|&quot;</span> <span class="op">++</span> <span class="fu">show</span> r <span class="op">++</span> <span class="st">&quot;)&quot;</span></span>
-<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Cat</span> l r <span class="ot">-&gt;</span> <span class="st">&quot;(&quot;</span> <span class="op">++</span> <span class="fu">show</span> l <span class="op">++</span> <span class="fu">show</span> r <span class="op">++</span> <span class="st">&quot;)&quot;</span></span>
-<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Star</span> e  <span class="ot">-&gt;</span> <span class="st">&quot;(&quot;</span> <span class="op">++</span> <span class="fu">show</span> e <span class="op">++</span> <span class="st">&quot;)&quot;</span> <span class="op">++</span> <span class="st">&quot;*&quot;</span></span>
-<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a><span class="kw">instance</span> <span class="dt">Q.Arbitrary</span> <span class="dt">E</span> <span class="kw">where</span></span>
-<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>    arbitrary <span class="ot">=</span> <span class="kw">do</span> d <span class="ot">&lt;-</span> Q.choose (<span class="dv">0</span>,<span class="dv">5</span>)<span class="ot"> ::</span> <span class="dt">Q.Gen</span> <span class="dt">Int</span></span>
-<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a>                   arbitrary_d d</span>
-<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>arbitrary_d <span class="dv">0</span> <span class="ot">=</span> Q.oneof [ <span class="fu">pure</span> <span class="dt">A</span>, <span class="fu">pure</span> <span class="dt">B</span> ]</span>
-<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>arbitrary_d d <span class="ot">=</span> Q.frequency [ (<span class="dv">10</span>, <span class="fu">pure</span> <span class="dt">A</span>)</span>
-<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>                            , (<span class="dv">10</span>, <span class="fu">pure</span> <span class="dt">B</span>)</span>
-<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>                            , (<span class="dv">20</span>,  <span class="dt">Alt</span> <span class="op">&lt;$&gt;</span> arbitrary_d d' <span class="op">&lt;*&gt;</span> arbitrary_d d')</span>
-<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>                            , (<span class="dv">20</span>,  <span class="dt">Cat</span> <span class="op">&lt;$&gt;</span> arbitrary_d d' <span class="op">&lt;*&gt;</span> arbitrary_d d')</span>
-<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>                            , (<span class="dv">20</span>, <span class="dt">Star</span> <span class="op">&lt;$&gt;</span> arbitrary_d d')</span>
-<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>                            ]</span>
-<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>    <span class="kw">where</span> d' <span class="ot">=</span> <span class="fu">pred</span> d</span>
-<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a><span class="ot">foo ::</span> <span class="dt">IO</span> [<span class="dt">E</span>]</span>
-<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>foo <span class="ot">=</span> Q.generate Q.arbitrary</span>
-<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a><span class="ot">prop_test_re2c ::</span> <span class="dt">E</span> <span class="ot">-&gt;</span> <span class="dt">E</span> <span class="ot">-&gt;</span> <span class="dt">Q.Property</span></span>
-<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>prop_test_re2c r1 r2 <span class="ot">=</span> QM.monadicIO <span class="op">$</span> <span class="kw">do</span></span>
-<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> re_file <span class="ot">=</span> <span class="fu">unlines</span> [ <span class="st">&quot;/*!re2c&quot;</span></span>
-<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>                          , <span class="fu">show</span> r1 <span class="op">++</span> <span class="st">&quot; {}&quot;</span></span>
-<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>                          , <span class="fu">show</span> r2 <span class="op">++</span> <span class="st">&quot; {}&quot;</span></span>
-<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a>                          , <span class="st">&quot;*/&quot;</span></span>
-<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a>                          ]</span>
-<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a>    s1 <span class="ot">&lt;-</span> QM.run <span class="op">$</span> <span class="kw">do</span> BS.writeFile <span class="st">&quot;a.re&quot;</span> <span class="op">$</span> BS.pack re_file</span>
-<span id="cb1-49"><a href="#cb1-49" aria-hidden="true" tabindex="-1"></a>                      SP.system <span class="st">&quot;re2c -Werror-undefined-control-flow -S a.re -o a.c 2&gt;&gt;re2c_last_warning || exit 42 &amp;&amp; gcc a.c -o a &amp;&amp; ./a&quot;</span></span>
-<span id="cb1-50"><a href="#cb1-50" aria-hidden="true" tabindex="-1"></a>    QM.assert <span class="op">$</span> s1 <span class="ot">`elem`</span> [<span class="dt">SE.ExitSuccess</span>, <span class="dt">SE.ExitFailure</span> <span class="dv">42</span>]</span>
-<span id="cb1-51"><a href="#cb1-51" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-52"><a href="#cb1-52" aria-hidden="true" tabindex="-1"></a><span class="ot">main ::</span> <span class="dt">IO</span> ()</span>
-<span id="cb1-53"><a href="#cb1-53" aria-hidden="true" tabindex="-1"></a><span class="co">-- main = Q.quickCheck prop_test_re2c</span></span>
-<span id="cb1-54"><a href="#cb1-54" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> Q.quickCheckWith Q.stdArgs { Q.maxSuccess <span class="ot">=</span> <span class="dv">10000</span> } prop_test_re2c</span></code></pre></div>
+<pre><code class="language-haskell">-- qc_re2c.hs
+{-# LANGUAGE LambdaCase #-}
+
+import qualified Test.QuickCheck as Q
+import qualified Test.QuickCheck.Monadic as QM
+import qualified System.Random as SR
+import qualified System.Process as SP
+import qualified System.Exit as SE
+import qualified Data.ByteString.Char8 as BS
+
+data E = A
+       | B
+       | Alt E E
+       | Cat E E
+       | Star E
+
+instance Show E where
+  show = \case
+    A       -&gt; &quot;\&quot;a\&quot;&quot;
+    B       -&gt; &quot;\&quot;b\&quot;&quot;
+    Alt l r -&gt; &quot;(&quot; ++ show l ++ &quot;|&quot; ++ show r ++ &quot;)&quot;
+    Cat l r -&gt; &quot;(&quot; ++ show l ++ show r ++ &quot;)&quot;
+    Star e  -&gt; &quot;(&quot; ++ show e ++ &quot;)&quot; ++ &quot;*&quot;
+
+instance Q.Arbitrary E where
+    arbitrary = do d &lt;- Q.choose (0,5) :: Q.Gen Int
+                   arbitrary_d d
+
+arbitrary_d 0 = Q.oneof [ pure A, pure B ]
+arbitrary_d d = Q.frequency [ (10, pure A)
+                            , (10, pure B)
+                            , (20,  Alt &lt;$&gt; arbitrary_d d' &lt;*&gt; arbitrary_d d')
+                            , (20,  Cat &lt;$&gt; arbitrary_d d' &lt;*&gt; arbitrary_d d')
+                            , (20, Star &lt;$&gt; arbitrary_d d')
+                            ]
+    where d' = pred d
+
+foo :: IO [E]
+foo = Q.generate Q.arbitrary
+
+prop_test_re2c :: E -&gt; E -&gt; Q.Property
+prop_test_re2c r1 r2 = QM.monadicIO $ do
+    let re_file = unlines [ &quot;/*!re2c&quot;
+                          , show r1 ++ &quot; {}&quot;
+                          , show r2 ++ &quot; {}&quot;
+                          , &quot;*/&quot;
+                          ]
+    s1 &lt;- QM.run $ do BS.writeFile &quot;a.re&quot; $ BS.pack re_file
+                      SP.system &quot;re2c -Werror-undefined-control-flow -S a.re -o a.c 2&gt;&gt;re2c_last_warning || exit 42 &amp;&amp; gcc a.c -o a &amp;&amp; ./a&quot;
+    QM.assert $ s1 `elem` [SE.ExitSuccess, SE.ExitFailure 42]
+
+main :: IO ()
+-- main = Q.quickCheck prop_test_re2c
+main = Q.quickCheckWith Q.stdArgs { Q.maxSuccess = 10000 } prop_test_re2c
+</code></pre>
 <p>Running the thing is easy:</p>
-<pre><code>$ runhaskell qc_re2c.hs</code></pre>
+<pre><code>$ runhaskell qc_re2c.hs
+</code></pre>
 <p>It generates samples similar to the following:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*!re2c</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">((((&quot;b&quot;)*)*|((&quot;b&quot;)*)*))* {}</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">&quot;b&quot; {}</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">*/</span></span></code></pre></div>
-<p>We can extend fuzzer to support things like <code>"[^abc]"</code> (set
+<pre><code class="language-c">/*!re2c
+((((&quot;b&quot;)*)*|((&quot;b&quot;)*)*))* {}
+&quot;b&quot; {}
+*/
+</code></pre>
+<p>We can extend fuzzer to support things like <code>&quot;[^abc]&quot;</code> (set
 negation), add more regex clauses and so on.</p>
 <p>Found issues so far:</p>
 <ul>
@@ -131,6 +109,4 @@ case</a></li>
 </ul>
 <p>Now computer can write (and trim) code samples for you.</p>
 <p>Simple!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

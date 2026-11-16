@@ -1,36 +1,11 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>paludis and crosscompilers (part 2)</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>paludis and crosscompilers (part 2)</h1>
-            
-                <div class="info">December 20, 2011</div>
-            
-
-            <p>Я думал, что собирать остальные кросскомпиляторы так же просто, как и
-<a href="../posts/127-paludis-and-crosscompilers.html"><code>arm</code></a>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>paludis and crosscompilers (part 2)</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>paludis and crosscompilers (part 2)</h1><div class="info">December 20, 2011</div><p>Я думал, что собирать остальные кросскомпиляторы так же просто, как и
+<a href="127-paludis-and-crosscompilers.html"><code>arm</code></a>
 кросскомпилятор. Ан нет! <code>paludis</code> запас нам несколько подводных
 граблей.</p>
 <p>Казалось бы, чего проще - собрать <code>powerpc64-unknown-linux-gnu</code>
@@ -42,7 +17,8 @@
 <pre><code>22:08 &lt; ciaranm&gt; you might find that this is one of those situations
                  where it works with portage because por tage randomly
                  doesn't 'export' certain variables, and just has them
-                 as globals</code></pre>
+                 as globals
+</code></pre>
 <p>Казалось бы, подумаешь какая-то переменная попадает в окружение дочерним
 процессам. Оказывается, в <code>gcc</code> (с виду <code>gentoo</code> специфично) есть
 скрытая фича: протаскивание <code>CFLAGS</code> в <code>gcc</code> через переменные
@@ -54,18 +30,20 @@ $ file a
 #
 $ ABI=n32 CFLAGS_n32=-mabi=n32 x86_64-pc-linux-gnu-gcc a.c -o a
     a.c:1:0: error: unknown ABI (n32) for -mabi= switch
-# сюрприз!</code></pre>
+# сюрприз!
+</code></pre>
 <p>Всё бы хорошо, но <code>ABI</code> - переменная, которая попадает в ебилды из
 <code>profiles/</code> и <code>paludis</code> ее экспортирует, а <code>emerge</code> - нет. В итоге
 все программы собираются чуть по-разному.</p>
-<p>В прошлый раз я это “починил” это не понимая выставив <code>ABI=cross</code>,</p>
+<p>В прошлый раз я это &quot;починил&quot; это не понимая выставив <code>ABI=cross</code>,</p>
 <p>Теперь рассмотрим чего еще не хватает.</p>
 <p>Иногда <code>eclass/multilib.eclass</code> таки выставляет нужный <code>ABI</code> при
 сборке:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">multilib_toolchain_setup()</span> <span class="kw">{</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="bu">local</span> <span class="va">v</span> <span class="va">vv</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">export</span> <span class="va">ABI</span><span class="op">=</span><span class="va">$1</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="ex">...</span></span></code></pre></div>
+<pre><code class="language-bash">multilib_toolchain_setup() {
+    local v vv
+    export ABI=$1
+...
+</code></pre>
 <p>Но эта функция никогда не вызывается для самих <code>toolchain</code> пакетов,
 так как там в каждой фазе (например, в <code>src_compile</code>) фигурирует сразу
 пачка <code>ABI</code> одновременно (host <code>ABI</code>, и несколько target <code>ABI</code>).</p>
@@ -76,62 +54,63 @@ $ ABI=n32 CFLAGS_n32=-mabi=n32 x86_64-pc-linux-gnu-gcc a.c -o a
 выставляются в <code>profiles/</code>, так что они просачиваются в наше окружение
 из хост системы).</p>
 <p>Так что теперь <code>bashrc.cross</code> у меня теперь выглядит так:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> <span class="st">&quot;</span><span class="va">${CATEGORY}</span><span class="st">&quot;</span> <span class="kw">in</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="ss">cross-</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>        <span class="co"># cross-build</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>        <span class="va">CBUILD</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CHOST}</span><span class="st">&quot;</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>        <span class="va">CTARGET</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CATEGORY</span><span class="op">#</span>cross-<span class="va">}</span><span class="st">&quot;</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="co">#</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="co"># самая важная строка :]</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>        <span class="bu">unset</span> <span class="va">ABI</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">#</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        <span class="co">#</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        <span class="co"># but paludis sets them back to default too early</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>        <span class="co"># it's fine if nonmultilib ABI is enough for you</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        <span class="co"># copied from multilib.eclass:multilib_env()</span></span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">&quot;</span> <span class="kw">in</span></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>            <span class="ss">x86_64</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>                <span class="co">#MULTILIB_ABIS=&quot;x32 amd64 x86&quot;</span></span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>                <span class="va">MULTILIB_ABIS</span><span class="op">=</span><span class="st">&quot;x32&quot;</span></span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>                <span class="va">DEFAULT_ABI</span><span class="op">=</span><span class="st">&quot;x32&quot;</span></span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>                <span class="cf">;;</span></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>            <span class="ss">mips64</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>                <span class="va">MULTILIB_ABIS</span><span class="op">=</span><span class="st">&quot;n64 n32 o32&quot;</span></span>
-<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a>                <span class="va">DEFAULT_ABI</span><span class="op">=</span><span class="st">&quot;n32&quot;</span></span>
-<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>                <span class="cf">;;</span></span>
-<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>            <span class="ss">powerpc64</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>                <span class="va">MULTILIB_ABIS</span><span class="op">=</span><span class="st">&quot;ppc64 ppc&quot;</span></span>
-<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>                <span class="va">DEFAULT_ABI</span><span class="op">=</span><span class="st">&quot;ppc64&quot;</span></span>
-<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>                <span class="cf">;;</span></span>
-<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>            <span class="ss">s390x</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>                <span class="va">MULTILIB_ABIS</span><span class="op">=</span><span class="st">&quot;s390x s390&quot;</span></span>
-<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a>                <span class="va">DEFAULT_ABI</span><span class="op">=</span><span class="st">&quot;s390x&quot;</span></span>
-<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>                <span class="cf">;;</span></span>
-<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>            <span class="ss">sparc64</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>                <span class="va">MULTILIB_ABIS</span><span class="op">=</span><span class="st">&quot;sparc64 sparc32&quot;</span></span>
-<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a>                <span class="va">DEFAULT_ABI</span><span class="op">=</span><span class="st">&quot;sparc64&quot;</span></span>
-<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>                <span class="cf">;;</span></span>
-<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>            <span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-37"><a href="#cb4-37" aria-hidden="true" tabindex="-1"></a>                <span class="va">DEFAULT_ABI</span><span class="op">=</span><span class="st">&quot;default&quot;</span></span>
-<span id="cb4-38"><a href="#cb4-38" aria-hidden="true" tabindex="-1"></a>                <span class="va">MULTILIB_ABIS</span><span class="op">=</span><span class="st">&quot;default&quot;</span></span>
-<span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>                <span class="cf">;;</span></span>
-<span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a>        <span class="cf">esac</span></span>
-<span id="cb4-41"><a href="#cb4-41" aria-hidden="true" tabindex="-1"></a>        <span class="co">#</span></span>
-<span id="cb4-42"><a href="#cb4-42" aria-hidden="true" tabindex="-1"></a>        <span class="co"># просто баг в src_install у glibc</span></span>
-<span id="cb4-43"><a href="#cb4-43" aria-hidden="true" tabindex="-1"></a>        <span class="bu">unset</span> <span class="va">SYMLINK_LIB</span></span>
-<span id="cb4-44"><a href="#cb4-44" aria-hidden="true" tabindex="-1"></a>        <span class="co">#</span></span>
-<span id="cb4-45"><a href="#cb4-45" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="st">&quot;</span><span class="va">${PN}</span><span class="st">&quot;</span> <span class="kw">in</span></span>
-<span id="cb4-46"><a href="#cb4-46" aria-hidden="true" tabindex="-1"></a>            <span class="ss">binutils</span><span class="kw">|</span><span class="ss">gcc</span><span class="kw">|</span><span class="ss">gdb</span><span class="kw">)</span></span>
-<span id="cb4-47"><a href="#cb4-47" aria-hidden="true" tabindex="-1"></a>                <span class="bu">:</span></span>
-<span id="cb4-48"><a href="#cb4-48" aria-hidden="true" tabindex="-1"></a>            <span class="cf">;;</span></span>
-<span id="cb4-49"><a href="#cb4-49" aria-hidden="true" tabindex="-1"></a>            <span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb4-50"><a href="#cb4-50" aria-hidden="true" tabindex="-1"></a>                <span class="va">CC</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">-gcc&quot;</span></span>
-<span id="cb4-51"><a href="#cb4-51" aria-hidden="true" tabindex="-1"></a>                <span class="va">CXX</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">-g++&quot;</span></span>
-<span id="cb4-52"><a href="#cb4-52" aria-hidden="true" tabindex="-1"></a>                <span class="va">LD</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">-ld&quot;</span></span>
-<span id="cb4-53"><a href="#cb4-53" aria-hidden="true" tabindex="-1"></a>            <span class="cf">;;</span></span>
-<span id="cb4-54"><a href="#cb4-54" aria-hidden="true" tabindex="-1"></a>        <span class="cf">esac</span></span>
-<span id="cb4-55"><a href="#cb4-55" aria-hidden="true" tabindex="-1"></a>    <span class="cf">;;</span></span>
-<span id="cb4-56"><a href="#cb4-56" aria-hidden="true" tabindex="-1"></a><span class="cf">esac</span></span></code></pre></div>
+<pre><code class="language-bash">case &quot;${CATEGORY}&quot; in
+    cross-*)
+        # cross-build
+        CBUILD=&quot;${CHOST}&quot;
+        CTARGET=&quot;${CATEGORY#cross-}&quot;
+        #
+        # самая важная строка :]
+        unset ABI
+        #
+        #
+        # but paludis sets them back to default too early
+        # it's fine if nonmultilib ABI is enough for you
+        # copied from multilib.eclass:multilib_env()
+        case &quot;${CTARGET}&quot; in
+            x86_64*)
+                #MULTILIB_ABIS=&quot;x32 amd64 x86&quot;
+                MULTILIB_ABIS=&quot;x32&quot;
+                DEFAULT_ABI=&quot;x32&quot;
+                ;;
+            mips64*)
+                MULTILIB_ABIS=&quot;n64 n32 o32&quot;
+                DEFAULT_ABI=&quot;n32&quot;
+                ;;
+            powerpc64*)
+                MULTILIB_ABIS=&quot;ppc64 ppc&quot;
+                DEFAULT_ABI=&quot;ppc64&quot;
+                ;;
+            s390x*)
+                MULTILIB_ABIS=&quot;s390x s390&quot;
+                DEFAULT_ABI=&quot;s390x&quot;
+                ;;
+            sparc64*)
+                MULTILIB_ABIS=&quot;sparc64 sparc32&quot;
+                DEFAULT_ABI=&quot;sparc64&quot;
+                ;;
+            *)
+                DEFAULT_ABI=&quot;default&quot;
+                MULTILIB_ABIS=&quot;default&quot;
+                ;;
+        esac
+        #
+        # просто баг в src_install у glibc
+        unset SYMLINK_LIB
+        #
+        case &quot;${PN}&quot; in
+            binutils|gcc|gdb)
+                :
+            ;;
+            *)
+                CC=&quot;${CTARGET}-gcc&quot;
+                CXX=&quot;${CTARGET}-g++&quot;
+                LD=&quot;${CTARGET}-ld&quot;
+            ;;
+        esac
+    ;;
+esac
+</code></pre>
 <p>Тут мы видим прикольный пример: кросскомпилятор на <code>x86_64</code> <code>host</code> в
 <code>x86_64</code> <code>target</code>:</p>
 <ul>
@@ -145,7 +124,8 @@ $ file a
 # host compiler
 $ x86_64-pc-linux-gnu-gcc a.c -o a
 $ file a
-    a: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.9, not stripped</code></pre>
+    a: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.9, not stripped
+</code></pre>
 <p>Чего я насобирал пока изучал как в <code>gentoo</code> всё это дело собирается:</p>
 <pre><code>$ gcc-config -l
   [1] alpha-unknown-linux-gnu-4.5.3 *
@@ -160,44 +140,44 @@ $ file a
   [10] sparc-unknown-linux-gnu-4.5.3 *
   [11] x86_64-pc-linux-gnu-4.5.3 *
   [12] x86_64-pc-linux-gnu-4.6.2
-  [13] x86_64-unknown-linux-gnu-4.6.2 *</code></pre>
+  [13] x86_64-unknown-linux-gnu-4.6.2 *
+</code></pre>
 <p>И все работают!</p>
 <p>Если ооооочень хочется установить <code>SYMLINK_LIB=yes</code>, то нужно
 подфиксить <code>src_install</code> <code>glibc</code>, иначе он сломает хостовый <code>/lib</code>
 (<code>vapier</code> грозился пофиксить это сам):</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>RCS file: /var/cvsroot/gentoo-x86/sys-libs/glibc/files/eblits/src_install.eblit,v</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>retrieving revision 1.19</span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">diff -u -u -r1.19 src_install.eblit</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="dt">--- files/eblits/src_install.eblit      12 Dec 2011 17:33:10 -0000      1.19</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ files/eblits/src_install.eblit      20 Dec 2011 18:31:14 -0000</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -10,8 +10,9 @@</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>                GBUILDDIR=${WORKDIR}/build-${ABI}-${CTARGET}-nptl</span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>        fi</span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="st">-       local install_root=${D}</span></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="st">-       is_crosscompile &amp;&amp; install_root=&quot;${install_root}/usr/${CTARGET}&quot;</span></span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="va">+       local cross_prefix=</span></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="va">+       is_crosscompile &amp;&amp; cross_prefix=/usr/${CTARGET}</span></span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="va">+       local install_root=${D}${cross_prefix}</span></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>        if want_linuxthreads ; then</span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>                cd &quot;${WORKDIR}&quot;/build-${ABI}-${CTARGET}-linuxthreads</span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>                einfo &quot;Installing GLIBC ${ABI} with linuxthreads ...&quot;</span>
-<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -74,12 +75,12 @@</span></span>
-<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>        if [[ ${SYMLINK_LIB} == &quot;yes&quot; ]] &amp;&amp; has_multilib_profile ; then</span>
-<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>                case $(tc-arch) in</span>
-<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>                        amd64)</span>
-<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a><span class="st">-                               [[ ! -e ${D}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) /lib</span></span>
-<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a><span class="st">-                               dosym ../$(get_abi_LIBDIR x86)/ld-linux.so.2 /lib/ld-linux.so.2</span></span>
-<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a><span class="va">+                               [[ ! -e ${install_root}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) ${cross_prefix}/lib</span></span>
-<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a><span class="va">+                               dosym ../$(get_abi_LIBDIR x86)/ld-linux.so.2 ${cross_prefix}/lib/ld-linux.so.2</span></span>
-<span id="cb7-25"><a href="#cb7-25" aria-hidden="true" tabindex="-1"></a>                                ;;</span>
-<span id="cb7-26"><a href="#cb7-26" aria-hidden="true" tabindex="-1"></a>                        ppc64)</span>
-<span id="cb7-27"><a href="#cb7-27" aria-hidden="true" tabindex="-1"></a><span class="st">-                               [[ ! -e ${D}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) /lib</span></span>
-<span id="cb7-28"><a href="#cb7-28" aria-hidden="true" tabindex="-1"></a><span class="st">-                               dosym ../$(get_abi_LIBDIR ppc)/ld.so.1 /lib/ld.so.1</span></span>
-<span id="cb7-29"><a href="#cb7-29" aria-hidden="true" tabindex="-1"></a><span class="va">+                               [[ ! -e ${install_root}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) ${cross_prefix}/lib</span></span>
-<span id="cb7-30"><a href="#cb7-30" aria-hidden="true" tabindex="-1"></a><span class="va">+                               dosym ../$(get_abi_LIBDIR ppc)/ld.so.1 ${cross_prefix}/lib/ld.so.1</span></span>
-<span id="cb7-31"><a href="#cb7-31" aria-hidden="true" tabindex="-1"></a>                                ;;</span>
-<span id="cb7-32"><a href="#cb7-32" aria-hidden="true" tabindex="-1"></a>                esac</span>
-<span id="cb7-33"><a href="#cb7-33" aria-hidden="true" tabindex="-1"></a>        fi</span></code></pre></div>
-        </div>
-    </body>
-</html>
+<pre><code class="language-diff">RCS file: /var/cvsroot/gentoo-x86/sys-libs/glibc/files/eblits/src_install.eblit,v
+retrieving revision 1.19
+diff -u -u -r1.19 src_install.eblit
+--- files/eblits/src_install.eblit      12 Dec 2011 17:33:10 -0000      1.19
++++ files/eblits/src_install.eblit      20 Dec 2011 18:31:14 -0000
+@@ -10,8 +10,9 @@
+                GBUILDDIR=${WORKDIR}/build-${ABI}-${CTARGET}-nptl
+        fi
+-       local install_root=${D}
+-       is_crosscompile &amp;&amp; install_root=&quot;${install_root}/usr/${CTARGET}&quot;
++       local cross_prefix=
++       is_crosscompile &amp;&amp; cross_prefix=/usr/${CTARGET}
++       local install_root=${D}${cross_prefix}
+        if want_linuxthreads ; then
+                cd &quot;${WORKDIR}&quot;/build-${ABI}-${CTARGET}-linuxthreads
+                einfo &quot;Installing GLIBC ${ABI} with linuxthreads ...&quot;
+@@ -74,12 +75,12 @@
+        if [[ ${SYMLINK_LIB} == &quot;yes&quot; ]] &amp;&amp; has_multilib_profile ; then
+                case $(tc-arch) in
+                        amd64)
+-                               [[ ! -e ${D}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) /lib
+-                               dosym ../$(get_abi_LIBDIR x86)/ld-linux.so.2 /lib/ld-linux.so.2
++                               [[ ! -e ${install_root}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) ${cross_prefix}/lib
++                               dosym ../$(get_abi_LIBDIR x86)/ld-linux.so.2 ${cross_prefix}/lib/ld-linux.so.2
+                                ;;
+                        ppc64)
+-                               [[ ! -e ${D}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) /lib
+-                               dosym ../$(get_abi_LIBDIR ppc)/ld.so.1 /lib/ld.so.1
++                               [[ ! -e ${install_root}/lib ]] &amp;&amp; dosym $(get_abi_LIBDIR ${DEFAULT_ABI}) ${cross_prefix}/lib
++                               dosym ../$(get_abi_LIBDIR ppc)/ld.so.1 ${cross_prefix}/lib/ld.so.1
+                                ;;
+                esac
+        fi
+</code></pre>
+</div></body></html>

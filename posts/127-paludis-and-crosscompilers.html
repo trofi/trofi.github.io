@@ -1,47 +1,24 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>paludis and crosscompilers</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>paludis and crosscompilers</h1>
-            
-                <div class="info">November 24, 2010</div>
-            
-
-            <p>Когда-то давным-давно у меня был <code>Pentium III</code>. Моей мечтой было собрать на нем ядро
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>paludis and crosscompilers</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>paludis and crosscompilers</h1><div class="info">November 24, 2010</div><p>Когда-то давным-давно у меня был <code>Pentium III</code>. Моей мечтой было собрать на нем ядро
 <code>linux</code> для архитектуры <code>amd64</code> и попробовать загрузить его в <code>qemu-system-x86_64</code>.
 Для этого мне нужен был компилятор, который собирает 64-битные бинарники на 32-битной системе.
 Даже будучи бывшим <code>lfs</code>ником сборка кросскомпилятора меня немного пугала.
 В <code>gentoo</code> кросскомпиляторы собираются на удивление просто средствами <code>dev-util/crossdev</code>:</p>
-<pre class="shell"><code>$ crossdev mingw32 # соберет mingw32-gcc и mingw32-g++
-$ crossdev x86_64-pc-linux-gnu # соберет x86_64-pc-linux-gnu-gcc и x86_64-pc-linux-gnu-g++</code></pre>
+<pre><code class="language-shell">$ crossdev mingw32 # соберет mingw32-gcc и mingw32-g++
+$ crossdev x86_64-pc-linux-gnu # соберет x86_64-pc-linux-gnu-gcc и x86_64-pc-linux-gnu-g++
+</code></pre>
 <p>Само ядро собирается так-же просто, как и в <code>native</code> среде. Единственное различие - надо
 явно задавать кросспрефикс и архитектуру:</p>
-<pre class="shell"><code>$ ARCH=amd64 CROSS=x86_64-pc-linux-gnu- make menuconfig
-$ ARCH=amd64 CROSS=x86_64-pc-linux-gnu- make</code></pre>
+<pre><code class="language-shell">$ ARCH=amd64 CROSS=x86_64-pc-linux-gnu- make menuconfig
+$ ARCH=amd64 CROSS=x86_64-pc-linux-gnu- make
+</code></pre>
 <p>Смотрим, что же там нам поставил <code>crossdev</code>:</p>
-<pre class="shell"><code>$ echo 'int main() { return 0; }' &gt; test.c
+<pre><code class="language-shell">$ echo 'int main() { return 0; }' &gt; test.c
 
 $ mingw32-gcc test.c -o test.exe
 $ file test.exe
@@ -49,13 +26,14 @@ test.exe: PE32 executable for MS Windows (console) Intel 80386 32-bit
 
 $ x86_64-pc-linux-gnu-gcc test.c -o test.elf64
 $ file test.elf64
-test.elf64: ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked (uses shared libs), for GNU/Linux 2.6.9, not stripped</code></pre>
+test.elf64: ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamically linked (uses shared libs), for GNU/Linux 2.6.9, not stripped
+</code></pre>
 <p>Итак, простые бинарники мы собирать готовы. Всё было бы хорошо, если бы
 <code>crossdev</code> не был прибит гвоздями к <code>emerge</code>. Что же делать пользователям
 <code>paludis</code>? Самый простой вариант - разобраться что именно делает
 <code>crossdev</code> и воссоздать такую-же среду.</p>
 <p>Грубо говоря сборка любого кросскомпилятора проходит в 5 этапов:</p>
-<ol type="1">
+<ol>
 <li>Устанавливается <code>binutils</code> (<code>assembler</code>, <code>linker</code>)</li>
 <li>Устанавливаются заголовочные файлы ядра и бибилиотеки <code>С</code> (или их эквиваленты) для <code>target</code> системы:
 <code>stddef.h</code>, <code>windows.h</code>.</li>
@@ -66,7 +44,7 @@ test.elf64: ELF 64-bit LSB shared object, x86-64, version 1 (GNU/Linux), dynamic
 <li>Собирается компилятор C, который уже может собирать полноценные программы (а им уже <code>С++</code> и далее)</li>
 </ol>
 <p>Открываем <code>/usr/portage/sys-devel/crossdev/files/crossdev</code> и видим примерно такой порядок действий:</p>
-<pre class="shell"><code>## настройка окружения:
+<pre><code class="language-shell">## настройка окружения:
 CTARGET=mingw32
 cross=&quot;cross-${CTARGET}&quot;
 ...
@@ -82,13 +60,14 @@ CROSSCOMPILE_OPTS=&quot;bootstrap&quot; USE=&quot;-* nocxx&quot; emerge $cross/g
 # 4.
 CROSSCOMPILE_OPTS=&quot;&quot;                         emerge $cross/w32api
 # 5.
-USE=&quot;${LUSE} ${USE}&quot; CROSSCOMPILE_OPTS=&quot;&quot;    emerge $cross/mingw-runtime</code></pre>
+USE=&quot;${LUSE} ${USE}&quot; CROSSCOMPILE_OPTS=&quot;&quot;    emerge $cross/mingw-runtime
+</code></pre>
 <p>Концептуально всё просто. Итак, теперь конкретная пошаговая инструкция
 для пользователей <code>paludis</code>:</p>
-<ol type="1">
+<ol>
 <li>Создадим и наполним оверлей <code>cross-repo</code>:</li>
 </ol>
-<pre class="shell"><code># создаем
+<pre><code class="language-shell"># создаем
 $ cat /etc/paludis/repositories/cross-repo.conf
 master_repository = gentoo
 format = e
@@ -123,70 +102,76 @@ for i in w32api mingw-runtime
 done
 for i in gcc gdb binutils
   do ln -s /usr/portage/sys-devel/$i cross-mingw32/$i
-done</code></pre>
-<ol start="2" type="1">
+done
+</code></pre>
+<ol start="2">
 <li>Сконфигурим окружение для <code>paludis</code>.
 Нам нужно задавать особое значение для <code>$CTARGET</code> (эта переменная указывает на то, для какой
 платформы будет генерить бинарники получившийся кросскомпилятор).
 Для этого добавим следующую штуку в <code>/etc/paludis/bashrc</code>:</li>
 </ol>
-<div class="sourceCode" id="cb6"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>   <span class="cf">case</span> <span class="st">&quot;</span><span class="va">${CATEGORY}</span><span class="st">&quot;</span> <span class="kw">in</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="ss">cross-</span><span class="pp">*</span><span class="kw">)</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>        <span class="va">ABI</span><span class="op">=</span>cross</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>        <span class="va">LIBDIR_cross</span><span class="op">=</span>lib</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>        <span class="va">CFLAGS_cross</span><span class="op">=</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>        <span class="va">CPPFLAGS_cross</span><span class="op">=</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>        <span class="va">CXXFLAGS_cross</span><span class="op">=</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>        <span class="va">LDFLAGS_cross</span><span class="op">=</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>        <span class="va">CBUILD</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CHOST}</span><span class="st">&quot;</span></span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>        <span class="va">CTARGET</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CATEGORY</span><span class="op">#</span>cross-<span class="va">}</span><span class="st">&quot;</span></span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>        <span class="cf">case</span> <span class="st">&quot;</span><span class="va">${PN}</span><span class="st">&quot;</span> <span class="kw">in</span></span>
-<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>            <span class="ss">binutils</span><span class="kw">|</span><span class="ss">gcc</span><span class="kw">|</span><span class="ss">gdb</span><span class="kw">)</span></span>
-<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>                <span class="bu">:</span></span>
-<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>            <span class="cf">;;</span></span>
-<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>            <span class="pp">*</span><span class="kw">)</span>  <span class="co"># a lot of packages don't know what the crosscompilation is</span></span>
-<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>                <span class="va">CC</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">-gcc&quot;</span></span>
-<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>                <span class="va">CXX</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">-g++&quot;</span></span>
-<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>                <span class="va">LD</span><span class="op">=</span><span class="st">&quot;</span><span class="va">${CTARGET}</span><span class="st">-ld&quot;</span></span>
-<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>            <span class="cf">;;</span></span>
-<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">esac</span></span>
-<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">;;</span></span>
-<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>   <span class="cf">esac</span></span></code></pre></div>
+<pre><code class="language-sh">   case &quot;${CATEGORY}&quot; in
+    cross-*)
+        ABI=cross
+        LIBDIR_cross=lib
+        CFLAGS_cross=
+        CPPFLAGS_cross=
+        CXXFLAGS_cross=
+        LDFLAGS_cross=
+
+        CBUILD=&quot;${CHOST}&quot;
+        CTARGET=&quot;${CATEGORY#cross-}&quot;
+
+        case &quot;${PN}&quot; in
+            binutils|gcc|gdb)
+                :
+            ;;
+            *)  # a lot of packages don't know what the crosscompilation is
+                CC=&quot;${CTARGET}-gcc&quot;
+                CXX=&quot;${CTARGET}-g++&quot;
+                LD=&quot;${CTARGET}-ld&quot;
+            ;;
+        esac
+    ;;
+   esac
+</code></pre>
 <p>Выглядит длинно, но пугаться не надо. Тут мы вырезаем всякие артефакты, которые пытаются выпрагнуть из
 нашей текущей системы (<code>*_cross</code>: <code>multilib ABI</code> и <code>CTARGET</code>) и явно заменяем <code>CC</code>, <code>CXX</code> и <code>LD</code> для всех, кто в <code>cross-</code>
 категории. Это надо для программ, которые не понимают <code>--host</code>/<code>--build</code>/<code>--target</code> (обычно такие программы
 просто не используют <code>autoconf</code>).</p>
-<ol start="3" type="1">
+<ol start="3">
 <li>Выставляем переменные окружения для сборки:</li>
 </ol>
-<pre class="shell"><code>$ cat /etc/paludis/use.conf.d/cross-mingw32.conf
+<pre><code class="language-shell">$ cat /etc/paludis/use.conf.d/cross-mingw32.conf
 
 cross-mingw32/* crosscompile_opts: headers-only
-cross-mingw32/gcc -* nocxx</code></pre>
-<ol start="4" type="1">
+cross-mingw32/gcc -* nocxx
+</code></pre>
+<ol start="4">
 <li>Ставим <code>binutils</code>, хедеры <code>libc</code> и <code>gcc-quick</code> (из шага <code>3.</code> выше):</li>
 </ol>
-<pre class="shell"><code>$ paludis -i cross-mingw32/{binutils,w32api,mingw-runtime,gcc}</code></pre>
-<ol start="5" type="1">
+<pre><code class="language-shell">$ paludis -i cross-mingw32/{binutils,w32api,mingw-runtime,gcc}
+</code></pre>
+<ol start="5">
 <li>Убираем <code>bootstrap</code> переменные. Они нам больше не понадобятся - обновление
 <code>binutils</code> и <code>gcc</code> их не потребует:</li>
 </ol>
-<pre class="shell"><code>$ cat /etc/paludis/use.conf.d/cross-mingw32.conf
+<pre><code class="language-shell">$ cat /etc/paludis/use.conf.d/cross-mingw32.conf
 
 #### cross-mingw32/* crosscompile_opts: headers-only
 #### cross-mingw32/gcc -* nocxx
 
-cross-mingw32/gcc -nls -gcj -gtk -mudflap</code></pre>
-<ol start="6" type="1">
+cross-mingw32/gcc -nls -gcj -gtk -mudflap
+</code></pre>
+<ol start="6">
 <li>Собираем полноценный кросскомпилятор:</li>
 </ol>
-<pre class="shell"><code>$ paludis -i cross-mingw32/{w32api,mingw-runtime,gcc}</code></pre>
-<ol start="7" type="1">
+<pre><code class="language-shell">$ paludis -i cross-mingw32/{w32api,mingw-runtime,gcc}
+</code></pre>
+<ol start="7">
 <li>Тестируем:</li>
 </ol>
-<pre class="shell"><code>$ cd ~/.wine/drive_c # :]
+<pre><code class="language-shell">$ cd ~/.wine/drive_c # :]
 $ cat &gt; a.c &lt;&lt;EOF
 #include &lt;stdio.h&gt;
 int main()
@@ -198,7 +183,8 @@ EOF
 
 $ mingw32-gcc a.c -o a.exe
 $ wine a.exe
-hello!</code></pre>
+hello!
+</code></pre>
 <p>Готово! Ссылки, которые помогали мне забороть это дело:</p>
 <ul>
 <li><a href="http://ephemient.livejournal.com/51870.html">почти работающее решение <code>epheminet</code></a></li>
@@ -206,7 +192,7 @@ hello!</code></pre>
 </ul>
 <p><strong>UPDATE:</strong></p>
 <p>Надо же и на обычный <code>linux</code> target <code>gcc</code> скроссить. Возьмем <code>armv5tel-softfloat-linux-gnueabi</code>:</p>
-<ol type="1">
+<ol>
 <li>Продолжаем забивать симлинками наш оверлей:</li>
 </ol>
 <pre><code>$ cd $HOME/portage/cross
@@ -217,38 +203,47 @@ ln -s /usr/portage/sys-libs/glibc           cross-armv5tel-softfloat-linux-gnuea
 
 for i in gcc gdb binutils
   do ln -s /usr/portage/sys-devel/$i cross-armv5tel-softfloat-linux-gnueabi/$i
-done</code></pre>
-<ol start="2" type="1">
-<li><p><code>bashrc</code> у <code>paludis</code> уже был сконфигурен.</p></li>
-<li><p>Готовимся к <code>stage1</code> и выставляем минимальные USE:</p></li>
+done
+</code></pre>
+<ol start="2">
+<li>
+<p><code>bashrc</code> у <code>paludis</code> уже был сконфигурен.</p>
+</li>
+<li>
+<p>Готовимся к <code>stage1</code> и выставляем минимальные USE:</p>
+</li>
 </ol>
-<pre class="shell"><code>$ cat /etc/paludis/use.conf.d/cross-armv5tel-softfloat-linux-gnueabi.conf
+<pre><code class="language-shell">$ cat /etc/paludis/use.conf.d/cross-armv5tel-softfloat-linux-gnueabi.conf
 
 cross-armv5tel-softfloat-linux-gnueabi/* crosscompile_opts: headers-only
-cross-armv5tel-softfloat-linux-gnueabi/gcc -* nocxx</code></pre>
-<ol start="4" type="1">
+cross-armv5tel-softfloat-linux-gnueabi/gcc -* nocxx
+</code></pre>
+<ol start="4">
 <li>[Опять] Ставим <code>binutils</code>, хедеры <code>libc</code> и <code>gcc-quick</code> (из шага <code>3.</code> выше):</li>
 </ol>
-<pre class="shell"><code>$ paludis -i cross-armv5tel-softfloat-linux-gnueabi/{binutils,linux-headers,glibc,gcc}</code></pre>
-<ol start="5" type="1">
+<pre><code class="language-shell">$ paludis -i cross-armv5tel-softfloat-linux-gnueabi/{binutils,linux-headers,glibc,gcc}
+</code></pre>
+<ol start="5">
 <li>Убираем <code>bootstrap</code> переменные. Они нам больше не понадобятся - обновление
 <code>binutils</code> и <code>gcc</code> их не потребует:</li>
 </ol>
-<pre class="shell"><code>$ cat /etc/paludis/use.conf.d/cross-mingw32.conf
+<pre><code class="language-shell">$ cat /etc/paludis/use.conf.d/cross-mingw32.conf
 
 #### cross-armv5tel-softfloat-linux-gnueabi/* crosscompile_opts: headers-only
 #### cross-armv5tel-softfloat-linux-gnueabi/gcc -* nocxx
 
-cross-armv5tel-softfloat-linux-gnueabi/gcc -nls -gcj -gtk -mudflap</code></pre>
-<ol start="6" type="1">
+cross-armv5tel-softfloat-linux-gnueabi/gcc -nls -gcj -gtk -mudflap
+</code></pre>
+<ol start="6">
 <li>Собираем полноценный кросскомпилятор:</li>
 </ol>
-<pre class="shell"><code>$ paludis -i cross-armv5tel-softfloat-linux-gnueabi/glibc
-$ paludis -i cross-armv5tel-softfloat-linux-gnueabi/gcc</code></pre>
-<ol start="7" type="1">
+<pre><code class="language-shell">$ paludis -i cross-armv5tel-softfloat-linux-gnueabi/glibc
+$ paludis -i cross-armv5tel-softfloat-linux-gnueabi/gcc
+</code></pre>
+<ol start="7">
 <li>Тестируем:</li>
 </ol>
-<pre class="shell"><code>$ cat &gt; a.c &lt;&lt;EOF
+<pre><code class="language-shell">$ cat &gt; a.c &lt;&lt;EOF
 #include &lt;stdio.h&gt;
 int main()
 {
@@ -262,8 +257,7 @@ $ armv5tel-softfloat-linux-gnueabi-gcc a.c -o a.elf
 $ uname -m
 armv5tel
 $ ./a.elf
-hello!</code></pre>
+hello!
+</code></pre>
 <p>Всё работает!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

@@ -1,37 +1,12 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>An old linux kernel tty/vt bug</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>An old linux kernel tty/vt bug</h1>
-            
-                <div class="info">June 26, 2019</div>
-            
-
-            <p>This post is another one in series of obscure bugs. This time elusive
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>An old linux kernel tty/vt bug</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>An old linux kernel tty/vt bug</h1><div class="info">June 26, 2019</div><p>This post is another one in series of obscure bugs. This time elusive
 bug manifested on my desktop for years until it was pinned down by luck.</p>
-<h2 id="the-bug">The Bug</h2>
+<h2>The Bug</h2>
 <p>Initial bug manifested in a very magical way: I boot up my desktop,
 start a window manager, use it for a week and then at some point when I
 press <code>Ctrl-F1</code> my machine reboots gracefully. System logs say I pressed
@@ -41,30 +16,32 @@ changed.
 I was not sure how to debug that. My only clue was the following message
 in boot logs:</p>
 <pre><code>Mar 29 19:22:42 sf systemd-logind[413]: Power key pressed
-&lt;graceful shutdown goes here&gt;</code></pre>
+&lt;graceful shutdown goes here&gt;
+</code></pre>
 <p>To work around the effect I made power off a no-op in <code>systemd</code>. I never
-use “power” keyboard button anyway:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/login/logind-button.c</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/login/logind-button.c</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -172,3 +172,3 @@ static int button_dispatch(sd_event_source *s, int fd, uint32_t revents, void *u</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="st">-    manager_handle_action(b-&gt;manager, INHIBIT_HANDLE_POWER_KEY, b-&gt;manager-&gt;handle_power_key, b-&gt;manager-&gt;power_key_ignore_inhibited, true);</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="va">+    //manager_handle_action(b-&gt;manager, INHIBIT_HANDLE_POWER_KEY, b-&gt;manager-&gt;handle_power_key, b-&gt;manager-&gt;power_key_ignore_inhibited, true);</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>     break;</span></code></pre></div>
+use &quot;power&quot; keyboard button anyway:</p>
+<pre><code class="language-diff">--- a/src/login/logind-button.c
++++ b/src/login/logind-button.c
+@@ -172,3 +172,3 @@ static int button_dispatch(sd_event_source *s, int fd, uint32_t revents, void *u
+
+-    manager_handle_action(b-&gt;manager, INHIBIT_HANDLE_POWER_KEY, b-&gt;manager-&gt;handle_power_key, b-&gt;manager-&gt;power_key_ignore_inhibited, true);
++    //manager_handle_action(b-&gt;manager, INHIBIT_HANDLE_POWER_KEY, b-&gt;manager-&gt;handle_power_key, b-&gt;manager-&gt;power_key_ignore_inhibited, true);
+     break;
+</code></pre>
 <p>The patch still kept messages popping up in the logs but did not
 shutdown my machine any more. This allowed me to track frequency of
 these events without distracting actual work on the machine.
 But how one would find out how to track it down to a faulty component?
 Was it my hardware (keyboard, USB host, etc.) losing mind for a second
 or some obscure software bug?</p>
-<p>I tried to track it down backwards from “Power key pressed” in <code>systemd</code>
+<p>I tried to track it down backwards from &quot;Power key pressed&quot; in <code>systemd</code>
 down to a source that registered generated the event.
 Apparently all <code>systemd</code> does is reading <code>/dev/input/event&lt;N&gt;</code> device
 for <code>power</code> key press and reacts accordingly. That means kernel itself
 sends those signals as <code>code=KEY_POWER</code> and <code>code=KEY_POWER2</code> values
 of <code>struct input_event</code>. I was not able to trace it down to my keyboard
 driver at that time.</p>
-<h2 id="the-clue">The clue</h2>
+<h2>The clue</h2>
 <p>A few years passed. I forgot about the local <code>systemd</code> patch.
 And one day I got a very scary kernel backtraces when my system booted:</p>
 <pre><code>Apr 29 13:12:24 sf kernel: BUG: unable to handle kernel paging request at ffffa39b3b117000
@@ -132,7 +109,8 @@ Apr 29 13:12:24 sf kernel:  ___might_sleep.cold.18+0xd4/0xe4
 Apr 29 13:12:24 sf kernel:  exit_signals+0x1c/0x200
 Apr 29 13:12:24 sf kernel:  do_exit+0xa8/0xbb0
 Apr 29 13:12:24 sf kernel:  ? ksys_ioctl+0x3a/0x70
-Apr 29 13:12:24 sf kernel:  rewind_stack_do_exit+0x17/0x20</code></pre>
+Apr 29 13:12:24 sf kernel:  rewind_stack_do_exit+0x17/0x20
+</code></pre>
 <p>These backtraces did not prevent machine from booting and did not seem
 to cause any ill immediate effect. But they still looked very scary:
 something failed to copy data somewhere after all, that meant certain
@@ -141,7 +119,7 @@ This trace says that <code>loadkeys</code> program managed to crash the kernel b
 calling an <code>ioctl</code> (<code>syscall(__x64_sys_ioctl)</code>) and that crash
 happens somewhere in <code>memmove()</code> function.
 Sounds like a very strange bug to have. What could <code>loadkeys</code> do so
-complicated to get kernel confused? It’s <a href="https://github.com/legionus/kbd/blob/master/src/loadkeys.c">whole
+complicated to get kernel confused? It's <a href="https://github.com/legionus/kbd/blob/master/src/loadkeys.c">whole
 source</a> is
 200 lines. Well, actual key loading happens
 <a href="https://github.com/legionus/kbd/blob/master/src/libkeymap/loadkeys.c#L18">here</a>
@@ -151,225 +129,228 @@ occasionally seeing these crashes since at least 2009 (kernel <code>4.1</code>).
 I encountered no conclusive investigations and dived in.
 The backtrace above suggests crash happened somewhere at
 <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/vt/keyboard.c?h=v5.1&amp;id=e93c9c99a629c61837d5a7fc2120cd2b6c70dbdd#n1986"><code>vt_do_kdgkb_ioctl()</code></a>:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* </span><span class="al">FIXME</span><span class="co">: This one needs untangling and locking */</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> vt_do_kdgkb_ioctl<span class="op">(</span><span class="dt">int</span> cmd<span class="op">,</span> <span class="kw">struct</span> kbsentry __user <span class="op">*</span> user_kdgkb<span class="op">,</span> <span class="dt">int</span> perm<span class="op">)</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> kbsentry <span class="op">*</span>kbs<span class="op">;</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> <span class="op">*</span>p<span class="op">;</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    u_char <span class="op">*</span>q<span class="op">;</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    u_char __user <span class="op">*</span>up<span class="op">;</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> sz<span class="op">;</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> delta<span class="op">;</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> <span class="op">*</span>first_free<span class="op">,</span> <span class="op">*</span>fj<span class="op">,</span> <span class="op">*</span>fnw<span class="op">;</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> i<span class="op">,</span> j<span class="op">,</span> k<span class="op">;</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> ret<span class="op">;</span></span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>capable<span class="op">(</span>CAP_SYS_TTY_CONFIG<span class="op">))</span></span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>        perm <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    kbs <span class="op">=</span> kmalloc<span class="op">(</span><span class="kw">sizeof</span><span class="op">(*</span>kbs<span class="op">),</span> GFP_KERNEL<span class="op">);</span></span>
-<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(!</span>kbs<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>        ret <span class="op">=</span> <span class="op">-</span>ENOMEM<span class="op">;</span></span>
-<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>        <span class="cf">goto</span> reterr<span class="op">;</span></span>
-<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-23"><a href="#cb4-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* we mostly copy too much here (512bytes), but who cares ;) */</span></span>
-<span id="cb4-24"><a href="#cb4-24" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>copy_from_user<span class="op">(</span>kbs<span class="op">,</span> user_kdgkb<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span><span class="kw">struct</span> kbsentry<span class="op">)))</span> <span class="op">{</span></span>
-<span id="cb4-25"><a href="#cb4-25" aria-hidden="true" tabindex="-1"></a>        ret <span class="op">=</span> <span class="op">-</span>EFAULT<span class="op">;</span></span>
-<span id="cb4-26"><a href="#cb4-26" aria-hidden="true" tabindex="-1"></a>        <span class="cf">goto</span> reterr<span class="op">;</span></span>
-<span id="cb4-27"><a href="#cb4-27" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb4-28"><a href="#cb4-28" aria-hidden="true" tabindex="-1"></a>    kbs<span class="op">-&gt;</span>kb_string<span class="op">[</span><span class="kw">sizeof</span><span class="op">(</span>kbs<span class="op">-&gt;</span>kb_string<span class="op">)</span> <span class="op">-</span> <span class="dv">1</span><span class="op">]</span> <span class="op">=</span> <span class="ch">'</span><span class="sc">\0</span><span class="ch">'</span><span class="op">;</span></span>
-<span id="cb4-29"><a href="#cb4-29" aria-hidden="true" tabindex="-1"></a>    i <span class="op">=</span> kbs<span class="op">-&gt;</span>kb_func<span class="op">;</span></span>
-<span id="cb4-30"><a href="#cb4-30" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-31"><a href="#cb4-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">switch</span> <span class="op">(</span>cmd<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-32"><a href="#cb4-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> KDGKBSENT<span class="op">:</span></span>
-<span id="cb4-33"><a href="#cb4-33" aria-hidden="true" tabindex="-1"></a>        sz <span class="op">=</span> <span class="kw">sizeof</span><span class="op">(</span>kbs<span class="op">-&gt;</span>kb_string<span class="op">)</span> <span class="op">-</span> <span class="dv">1</span><span class="op">;</span>    <span class="co">/* sz should have been</span></span>
-<span id="cb4-34"><a href="#cb4-34" aria-hidden="true" tabindex="-1"></a><span class="co">                               a struct member */</span></span>
-<span id="cb4-35"><a href="#cb4-35" aria-hidden="true" tabindex="-1"></a>        up <span class="op">=</span> user_kdgkb<span class="op">-&gt;</span>kb_string<span class="op">;</span></span>
-<span id="cb4-36"><a href="#cb4-36" aria-hidden="true" tabindex="-1"></a>        p <span class="op">=</span> func_table<span class="op">[</span>i<span class="op">];</span></span>
-<span id="cb4-37"><a href="#cb4-37" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>p<span class="op">)</span></span>
-<span id="cb4-38"><a href="#cb4-38" aria-hidden="true" tabindex="-1"></a>            <span class="cf">for</span> <span class="op">(;</span> <span class="op">*</span>p <span class="op">&amp;&amp;</span> sz<span class="op">;</span> p<span class="op">++,</span> sz<span class="op">--)</span></span>
-<span id="cb4-39"><a href="#cb4-39" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="op">(</span>put_user<span class="op">(*</span>p<span class="op">,</span> up<span class="op">++))</span> <span class="op">{</span></span>
-<span id="cb4-40"><a href="#cb4-40" aria-hidden="true" tabindex="-1"></a>                    ret <span class="op">=</span> <span class="op">-</span>EFAULT<span class="op">;</span></span>
-<span id="cb4-41"><a href="#cb4-41" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">goto</span> reterr<span class="op">;</span></span>
-<span id="cb4-42"><a href="#cb4-42" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
-<span id="cb4-43"><a href="#cb4-43" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>put_user<span class="op">(</span><span class="ch">'</span><span class="sc">\0</span><span class="ch">'</span><span class="op">,</span> up<span class="op">))</span> <span class="op">{</span></span>
-<span id="cb4-44"><a href="#cb4-44" aria-hidden="true" tabindex="-1"></a>            ret <span class="op">=</span> <span class="op">-</span>EFAULT<span class="op">;</span></span>
-<span id="cb4-45"><a href="#cb4-45" aria-hidden="true" tabindex="-1"></a>            <span class="cf">goto</span> reterr<span class="op">;</span></span>
-<span id="cb4-46"><a href="#cb4-46" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb4-47"><a href="#cb4-47" aria-hidden="true" tabindex="-1"></a>        kfree<span class="op">(</span>kbs<span class="op">);</span></span>
-<span id="cb4-48"><a href="#cb4-48" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">((</span>p <span class="op">&amp;&amp;</span> <span class="op">*</span>p<span class="op">)</span> <span class="op">?</span> <span class="op">-</span>EOVERFLOW <span class="op">:</span> <span class="dv">0</span><span class="op">);</span></span>
-<span id="cb4-49"><a href="#cb4-49" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> KDSKBSENT<span class="op">:</span></span>
-<span id="cb4-50"><a href="#cb4-50" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(!</span>perm<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-51"><a href="#cb4-51" aria-hidden="true" tabindex="-1"></a>            ret <span class="op">=</span> <span class="op">-</span>EPERM<span class="op">;</span></span>
-<span id="cb4-52"><a href="#cb4-52" aria-hidden="true" tabindex="-1"></a>            <span class="cf">goto</span> reterr<span class="op">;</span></span>
-<span id="cb4-53"><a href="#cb4-53" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb4-54"><a href="#cb4-54" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-55"><a href="#cb4-55" aria-hidden="true" tabindex="-1"></a>        q <span class="op">=</span> func_table<span class="op">[</span>i<span class="op">];</span></span>
-<span id="cb4-56"><a href="#cb4-56" aria-hidden="true" tabindex="-1"></a>        first_free <span class="op">=</span> funcbufptr <span class="op">+</span> <span class="op">(</span>funcbufsize <span class="op">-</span> funcbufleft<span class="op">);</span></span>
-<span id="cb4-57"><a href="#cb4-57" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> <span class="op">(</span>j <span class="op">=</span> i <span class="op">+</span> <span class="dv">1</span><span class="op">;</span> j <span class="op">&lt;</span> MAX_NR_FUNC <span class="op">&amp;&amp;</span> <span class="op">!</span>func_table<span class="op">[</span>j<span class="op">];</span> j<span class="op">++)</span> <span class="op">;</span></span>
-<span id="cb4-58"><a href="#cb4-58" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>j <span class="op">&lt;</span> MAX_NR_FUNC<span class="op">)</span></span>
-<span id="cb4-59"><a href="#cb4-59" aria-hidden="true" tabindex="-1"></a>            fj <span class="op">=</span> func_table<span class="op">[</span>j<span class="op">];</span></span>
-<span id="cb4-60"><a href="#cb4-60" aria-hidden="true" tabindex="-1"></a>        <span class="cf">else</span></span>
-<span id="cb4-61"><a href="#cb4-61" aria-hidden="true" tabindex="-1"></a>            fj <span class="op">=</span> first_free<span class="op">;</span></span>
-<span id="cb4-62"><a href="#cb4-62" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-63"><a href="#cb4-63" aria-hidden="true" tabindex="-1"></a>        delta <span class="op">=</span> <span class="op">(</span>q <span class="op">?</span> <span class="op">-</span>strlen<span class="op">(</span>q<span class="op">)</span> <span class="op">:</span> <span class="dv">1</span><span class="op">)</span> <span class="op">+</span> strlen<span class="op">(</span>kbs<span class="op">-&gt;</span>kb_string<span class="op">);</span></span>
-<span id="cb4-64"><a href="#cb4-64" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>delta <span class="op">&lt;=</span> funcbufleft<span class="op">)</span> <span class="op">{</span> <span class="co">/* it fits in current buf */</span></span>
-<span id="cb4-65"><a href="#cb4-65" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>j <span class="op">&lt;</span> MAX_NR_FUNC<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-66"><a href="#cb4-66" aria-hidden="true" tabindex="-1"></a>                memmove<span class="op">(</span>fj <span class="op">+</span> delta<span class="op">,</span> fj<span class="op">,</span> first_free <span class="op">-</span> fj<span class="op">);</span></span>
-<span id="cb4-67"><a href="#cb4-67" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> <span class="op">(</span>k <span class="op">=</span> j<span class="op">;</span> k <span class="op">&lt;</span> MAX_NR_FUNC<span class="op">;</span> k<span class="op">++)</span></span>
-<span id="cb4-68"><a href="#cb4-68" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">if</span> <span class="op">(</span>func_table<span class="op">[</span>k<span class="op">])</span></span>
-<span id="cb4-69"><a href="#cb4-69" aria-hidden="true" tabindex="-1"></a>                        func_table<span class="op">[</span>k<span class="op">]</span> <span class="op">+=</span> delta<span class="op">;</span></span>
-<span id="cb4-70"><a href="#cb4-70" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
-<span id="cb4-71"><a href="#cb4-71" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(!</span>q<span class="op">)</span></span>
-<span id="cb4-72"><a href="#cb4-72" aria-hidden="true" tabindex="-1"></a>                func_table<span class="op">[</span>i<span class="op">]</span> <span class="op">=</span> fj<span class="op">;</span></span>
-<span id="cb4-73"><a href="#cb4-73" aria-hidden="true" tabindex="-1"></a>            funcbufleft <span class="op">-=</span> delta<span class="op">;</span></span>
-<span id="cb4-74"><a href="#cb4-74" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span>    <span class="co">/* allocate a larger buffer */</span></span>
-<span id="cb4-75"><a href="#cb4-75" aria-hidden="true" tabindex="-1"></a>            sz <span class="op">=</span> <span class="dv">256</span><span class="op">;</span></span>
-<span id="cb4-76"><a href="#cb4-76" aria-hidden="true" tabindex="-1"></a>            <span class="cf">while</span> <span class="op">(</span>sz <span class="op">&lt;</span> funcbufsize <span class="op">-</span> funcbufleft <span class="op">+</span> delta<span class="op">)</span></span>
-<span id="cb4-77"><a href="#cb4-77" aria-hidden="true" tabindex="-1"></a>                sz <span class="op">&lt;&lt;=</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb4-78"><a href="#cb4-78" aria-hidden="true" tabindex="-1"></a>            fnw <span class="op">=</span> kmalloc<span class="op">(</span>sz<span class="op">,</span> GFP_KERNEL<span class="op">);</span></span>
-<span id="cb4-79"><a href="#cb4-79" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(!</span>fnw<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-80"><a href="#cb4-80" aria-hidden="true" tabindex="-1"></a>                ret <span class="op">=</span> <span class="op">-</span>ENOMEM<span class="op">;</span></span>
-<span id="cb4-81"><a href="#cb4-81" aria-hidden="true" tabindex="-1"></a>                <span class="cf">goto</span> reterr<span class="op">;</span></span>
-<span id="cb4-82"><a href="#cb4-82" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
-<span id="cb4-83"><a href="#cb4-83" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-84"><a href="#cb4-84" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(!</span>q<span class="op">)</span></span>
-<span id="cb4-85"><a href="#cb4-85" aria-hidden="true" tabindex="-1"></a>                func_table<span class="op">[</span>i<span class="op">]</span> <span class="op">=</span> fj<span class="op">;</span></span>
-<span id="cb4-86"><a href="#cb4-86" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>fj <span class="op">&gt;</span> funcbufptr<span class="op">)</span></span>
-<span id="cb4-87"><a href="#cb4-87" aria-hidden="true" tabindex="-1"></a>                memmove<span class="op">(</span>fnw<span class="op">,</span> funcbufptr<span class="op">,</span> fj <span class="op">-</span> funcbufptr<span class="op">);</span></span>
-<span id="cb4-88"><a href="#cb4-88" aria-hidden="true" tabindex="-1"></a>            <span class="cf">for</span> <span class="op">(</span>k <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> k <span class="op">&lt;</span> j<span class="op">;</span> k<span class="op">++)</span></span>
-<span id="cb4-89"><a href="#cb4-89" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="op">(</span>func_table<span class="op">[</span>k<span class="op">])</span></span>
-<span id="cb4-90"><a href="#cb4-90" aria-hidden="true" tabindex="-1"></a>                    func_table<span class="op">[</span>k<span class="op">]</span> <span class="op">=</span></span>
-<span id="cb4-91"><a href="#cb4-91" aria-hidden="true" tabindex="-1"></a>                        fnw <span class="op">+</span> <span class="op">(</span>func_table<span class="op">[</span>k<span class="op">]</span> <span class="op">-</span> funcbufptr<span class="op">);</span></span>
-<span id="cb4-92"><a href="#cb4-92" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-93"><a href="#cb4-93" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>first_free <span class="op">&gt;</span> fj<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb4-94"><a href="#cb4-94" aria-hidden="true" tabindex="-1"></a>                memmove<span class="op">(</span>fnw <span class="op">+</span> <span class="op">(</span>fj <span class="op">-</span> funcbufptr<span class="op">)</span> <span class="op">+</span> delta<span class="op">,</span> fj<span class="op">,</span></span>
-<span id="cb4-95"><a href="#cb4-95" aria-hidden="true" tabindex="-1"></a>                    first_free <span class="op">-</span> fj<span class="op">);</span></span>
-<span id="cb4-96"><a href="#cb4-96" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> <span class="op">(</span>k <span class="op">=</span> j<span class="op">;</span> k <span class="op">&lt;</span> MAX_NR_FUNC<span class="op">;</span> k<span class="op">++)</span></span>
-<span id="cb4-97"><a href="#cb4-97" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">if</span> <span class="op">(</span>func_table<span class="op">[</span>k<span class="op">])</span></span>
-<span id="cb4-98"><a href="#cb4-98" aria-hidden="true" tabindex="-1"></a>                        func_table<span class="op">[</span>k<span class="op">]</span> <span class="op">=</span></span>
-<span id="cb4-99"><a href="#cb4-99" aria-hidden="true" tabindex="-1"></a>                            fnw <span class="op">+</span> <span class="op">(</span>func_table<span class="op">[</span>k<span class="op">]</span> <span class="op">-</span></span>
-<span id="cb4-100"><a href="#cb4-100" aria-hidden="true" tabindex="-1"></a>                               funcbufptr<span class="op">)</span> <span class="op">+</span> delta<span class="op">;</span></span>
-<span id="cb4-101"><a href="#cb4-101" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
-<span id="cb4-102"><a href="#cb4-102" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="op">(</span>funcbufptr <span class="op">!=</span> func_buf<span class="op">)</span></span>
-<span id="cb4-103"><a href="#cb4-103" aria-hidden="true" tabindex="-1"></a>                kfree<span class="op">(</span>funcbufptr<span class="op">);</span></span>
-<span id="cb4-104"><a href="#cb4-104" aria-hidden="true" tabindex="-1"></a>            funcbufptr <span class="op">=</span> fnw<span class="op">;</span></span>
-<span id="cb4-105"><a href="#cb4-105" aria-hidden="true" tabindex="-1"></a>            funcbufleft <span class="op">=</span> funcbufleft <span class="op">-</span> delta <span class="op">+</span> sz <span class="op">-</span> funcbufsize<span class="op">;</span></span>
-<span id="cb4-106"><a href="#cb4-106" aria-hidden="true" tabindex="-1"></a>            funcbufsize <span class="op">=</span> sz<span class="op">;</span></span>
-<span id="cb4-107"><a href="#cb4-107" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb4-108"><a href="#cb4-108" aria-hidden="true" tabindex="-1"></a>        strcpy<span class="op">(</span>func_table<span class="op">[</span>i<span class="op">],</span> kbs<span class="op">-&gt;</span>kb_string<span class="op">);</span></span>
-<span id="cb4-109"><a href="#cb4-109" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span><span class="op">;</span></span>
-<span id="cb4-110"><a href="#cb4-110" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb4-111"><a href="#cb4-111" aria-hidden="true" tabindex="-1"></a>    ret <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb4-112"><a href="#cb4-112" aria-hidden="true" tabindex="-1"></a> reterr<span class="op">:</span></span>
-<span id="cb4-113"><a href="#cb4-113" aria-hidden="true" tabindex="-1"></a>    kfree<span class="op">(</span>kbs<span class="op">);</span></span>
-<span id="cb4-114"><a href="#cb4-114" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> ret<span class="op">;</span></span>
-<span id="cb4-115"><a href="#cb4-115" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>It’s a huge function but it’s high-level purpose is simple:</p>
+<pre><code class="language-c">/* FIXME: This one needs untangling and locking */
+int vt_do_kdgkb_ioctl(int cmd, struct kbsentry __user * user_kdgkb, int perm)
+{
+    struct kbsentry *kbs;
+    char *p;
+    u_char *q;
+    u_char __user *up;
+    int sz;
+    int delta;
+    char *first_free, *fj, *fnw;
+    int i, j, k;
+    int ret;
+
+    if (!capable(CAP_SYS_TTY_CONFIG))
+        perm = 0;
+
+    kbs = kmalloc(sizeof(*kbs), GFP_KERNEL);
+    if (!kbs) {
+        ret = -ENOMEM;
+        goto reterr;
+    }
+
+    /* we mostly copy too much here (512bytes), but who cares ;) */
+    if (copy_from_user(kbs, user_kdgkb, sizeof(struct kbsentry))) {
+        ret = -EFAULT;
+        goto reterr;
+    }
+    kbs-&gt;kb_string[sizeof(kbs-&gt;kb_string) - 1] = '\0';
+    i = kbs-&gt;kb_func;
+
+    switch (cmd) {
+    case KDGKBSENT:
+        sz = sizeof(kbs-&gt;kb_string) - 1;    /* sz should have been
+                               a struct member */
+        up = user_kdgkb-&gt;kb_string;
+        p = func_table[i];
+        if (p)
+            for (; *p &amp;&amp; sz; p++, sz--)
+                if (put_user(*p, up++)) {
+                    ret = -EFAULT;
+                    goto reterr;
+                }
+        if (put_user('\0', up)) {
+            ret = -EFAULT;
+            goto reterr;
+        }
+        kfree(kbs);
+        return ((p &amp;&amp; *p) ? -EOVERFLOW : 0);
+    case KDSKBSENT:
+        if (!perm) {
+            ret = -EPERM;
+            goto reterr;
+        }
+
+        q = func_table[i];
+        first_free = funcbufptr + (funcbufsize - funcbufleft);
+        for (j = i + 1; j &lt; MAX_NR_FUNC &amp;&amp; !func_table[j]; j++) ;
+        if (j &lt; MAX_NR_FUNC)
+            fj = func_table[j];
+        else
+            fj = first_free;
+
+        delta = (q ? -strlen(q) : 1) + strlen(kbs-&gt;kb_string);
+        if (delta &lt;= funcbufleft) { /* it fits in current buf */
+            if (j &lt; MAX_NR_FUNC) {
+                memmove(fj + delta, fj, first_free - fj);
+                for (k = j; k &lt; MAX_NR_FUNC; k++)
+                    if (func_table[k])
+                        func_table[k] += delta;
+            }
+            if (!q)
+                func_table[i] = fj;
+            funcbufleft -= delta;
+        } else {    /* allocate a larger buffer */
+            sz = 256;
+            while (sz &lt; funcbufsize - funcbufleft + delta)
+                sz &lt;&lt;= 1;
+            fnw = kmalloc(sz, GFP_KERNEL);
+            if (!fnw) {
+                ret = -ENOMEM;
+                goto reterr;
+            }
+
+            if (!q)
+                func_table[i] = fj;
+            if (fj &gt; funcbufptr)
+                memmove(fnw, funcbufptr, fj - funcbufptr);
+            for (k = 0; k &lt; j; k++)
+                if (func_table[k])
+                    func_table[k] =
+                        fnw + (func_table[k] - funcbufptr);
+
+            if (first_free &gt; fj) {
+                memmove(fnw + (fj - funcbufptr) + delta, fj,
+                    first_free - fj);
+                for (k = j; k &lt; MAX_NR_FUNC; k++)
+                    if (func_table[k])
+                        func_table[k] =
+                            fnw + (func_table[k] -
+                               funcbufptr) + delta;
+            }
+            if (funcbufptr != func_buf)
+                kfree(funcbufptr);
+            funcbufptr = fnw;
+            funcbufleft = funcbufleft - delta + sz - funcbufsize;
+            funcbufsize = sz;
+        }
+        strcpy(func_table[i], kbs-&gt;kb_string);
+        break;
+    }
+    ret = 0;
+ reterr:
+    kfree(kbs);
+    return ret;
+}
+</code></pre>
+<p>It's a huge function but it's high-level purpose is simple:</p>
 <ul>
 <li>handle <code>ioctl(KDGKBSENT)</code> call (Get KeyBoard Entries)</li>
 <li>handle <code>ioctl(KDSKBSENT)</code> call (Set KeyBoard Entries)</li>
 </ul>
 <p>Entries are <code>struct kbsentry</code>:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> kbsentry <span class="op">{</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">char</span> kb_func<span class="op">;</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">unsigned</span> <span class="dt">char</span> kb_string<span class="op">[</span><span class="dv">512</span><span class="op">];</span></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<pre><code class="language-c">struct kbsentry {
+    unsigned char kb_func;
+    unsigned char kb_string[512];
+};
+</code></pre>
 <p>All it does is to substitute input char <code>kb_func</code> for a sequence of
 chars as <code>kb_string</code> (they can be escape sequences understood by <code>linux</code>
 terminal).</p>
 <p><code>KDSKBSENT</code> handler above is full of array handling logic. To
 understand it we need to look at the actual data structures in
 <a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/vt/defkeymap.c_shipped?h=v5.1&amp;id=e93c9c99a629c61837d5a7fc2120cd2b6c70dbdd"><code>drivers/tty/vt/defkeymap.c_shipped</code></a>:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Do not edit this file! It was automatically generated by   */</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co">/*    loadkeys --mktable defkeymap.map &gt; defkeymap.c          */</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;linux/types.h&gt;</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;linux/keyboard.h&gt;</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;linux/kd.h&gt;</span></span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="co"> * Philosophy: most people do not define more strings, but they who do</span></span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="co"> * often want quite a lot of string space. So, we statically allocate</span></span>
-<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a><span class="co"> * the default and allocate dynamically in chunks of 512 bytes.</span></span>
-<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
-<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a><span class="dt">char</span> func_buf<span class="op">[]</span> <span class="op">=</span> <span class="op">{</span></span>
-<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'A'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'B'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'C'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'D'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'E'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'1'</span><span class="op">,</span> <span class="ch">'7'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'1'</span><span class="op">,</span> <span class="ch">'8'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'1'</span><span class="op">,</span> <span class="ch">'9'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'0'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'1'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'4'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'5'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'6'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'8'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'9'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'1'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-35"><a href="#cb6-35" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-36"><a href="#cb6-36" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'4'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-37"><a href="#cb6-37" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'1'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-38"><a href="#cb6-38" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'2'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-39"><a href="#cb6-39" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'3'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-40"><a href="#cb6-40" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'4'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-41"><a href="#cb6-41" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'5'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-42"><a href="#cb6-42" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'6'</span><span class="op">,</span> <span class="ch">'~'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-43"><a href="#cb6-43" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'M'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-44"><a href="#cb6-44" aria-hidden="true" tabindex="-1"></a> <span class="ch">'</span><span class="sc">\033</span><span class="ch">'</span><span class="op">,</span> <span class="ch">'['</span><span class="op">,</span> <span class="ch">'P'</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> </span>
-<span id="cb6-45"><a href="#cb6-45" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb6-46"><a href="#cb6-46" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-47"><a href="#cb6-47" aria-hidden="true" tabindex="-1"></a><span class="dt">char</span> <span class="op">*</span>funcbufptr <span class="op">=</span> func_buf<span class="op">;</span></span>
-<span id="cb6-48"><a href="#cb6-48" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> funcbufsize <span class="op">=</span> <span class="kw">sizeof</span><span class="op">(</span>func_buf<span class="op">);</span></span>
-<span id="cb6-49"><a href="#cb6-49" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> funcbufleft <span class="op">=</span> <span class="dv">0</span><span class="op">;</span>          <span class="co">/* space left */</span></span>
-<span id="cb6-50"><a href="#cb6-50" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-51"><a href="#cb6-51" aria-hidden="true" tabindex="-1"></a><span class="dt">char</span> <span class="op">*</span>func_table<span class="op">[</span>MAX_NR_FUNC<span class="op">]</span> <span class="op">=</span> <span class="op">{</span></span>
-<span id="cb6-52"><a href="#cb6-52" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">0</span><span class="op">,</span></span>
-<span id="cb6-53"><a href="#cb6-53" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">5</span><span class="op">,</span></span>
-<span id="cb6-54"><a href="#cb6-54" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">10</span><span class="op">,</span></span>
-<span id="cb6-55"><a href="#cb6-55" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">15</span><span class="op">,</span></span>
-<span id="cb6-56"><a href="#cb6-56" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">20</span><span class="op">,</span></span>
-<span id="cb6-57"><a href="#cb6-57" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">25</span><span class="op">,</span></span>
-<span id="cb6-58"><a href="#cb6-58" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">31</span><span class="op">,</span></span>
-<span id="cb6-59"><a href="#cb6-59" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">37</span><span class="op">,</span></span>
-<span id="cb6-60"><a href="#cb6-60" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">43</span><span class="op">,</span></span>
-<span id="cb6-61"><a href="#cb6-61" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">49</span><span class="op">,</span></span>
-<span id="cb6-62"><a href="#cb6-62" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">55</span><span class="op">,</span></span>
-<span id="cb6-63"><a href="#cb6-63" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">61</span><span class="op">,</span></span>
-<span id="cb6-64"><a href="#cb6-64" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">67</span><span class="op">,</span></span>
-<span id="cb6-65"><a href="#cb6-65" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">73</span><span class="op">,</span></span>
-<span id="cb6-66"><a href="#cb6-66" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">79</span><span class="op">,</span></span>
-<span id="cb6-67"><a href="#cb6-67" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">85</span><span class="op">,</span></span>
-<span id="cb6-68"><a href="#cb6-68" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">91</span><span class="op">,</span></span>
-<span id="cb6-69"><a href="#cb6-69" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">97</span><span class="op">,</span></span>
-<span id="cb6-70"><a href="#cb6-70" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">103</span><span class="op">,</span></span>
-<span id="cb6-71"><a href="#cb6-71" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">109</span><span class="op">,</span></span>
-<span id="cb6-72"><a href="#cb6-72" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">115</span><span class="op">,</span></span>
-<span id="cb6-73"><a href="#cb6-73" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">120</span><span class="op">,</span></span>
-<span id="cb6-74"><a href="#cb6-74" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">125</span><span class="op">,</span></span>
-<span id="cb6-75"><a href="#cb6-75" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">130</span><span class="op">,</span></span>
-<span id="cb6-76"><a href="#cb6-76" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">135</span><span class="op">,</span></span>
-<span id="cb6-77"><a href="#cb6-77" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">140</span><span class="op">,</span></span>
-<span id="cb6-78"><a href="#cb6-78" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">145</span><span class="op">,</span></span>
-<span id="cb6-79"><a href="#cb6-79" aria-hidden="true" tabindex="-1"></a> NULL<span class="op">,</span></span>
-<span id="cb6-80"><a href="#cb6-80" aria-hidden="true" tabindex="-1"></a> NULL<span class="op">,</span></span>
-<span id="cb6-81"><a href="#cb6-81" aria-hidden="true" tabindex="-1"></a> func_buf <span class="op">+</span> <span class="dv">149</span><span class="op">,</span></span>
-<span id="cb6-82"><a href="#cb6-82" aria-hidden="true" tabindex="-1"></a> NULL<span class="op">,</span></span>
-<span id="cb6-83"><a href="#cb6-83" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<pre><code class="language-c">/* Do not edit this file! It was automatically generated by   */
+/*    loadkeys --mktable defkeymap.map &gt; defkeymap.c          */
+
+#include &lt;linux/types.h&gt;
+#include &lt;linux/keyboard.h&gt;
+#include &lt;linux/kd.h&gt;
+
+...
+
+/*
+ * Philosophy: most people do not define more strings, but they who do
+ * often want quite a lot of string space. So, we statically allocate
+ * the default and allocate dynamically in chunks of 512 bytes.
+ */
+
+char func_buf[] = {
+ '\033', '[', '[', 'A', 0, 
+ '\033', '[', '[', 'B', 0, 
+ '\033', '[', '[', 'C', 0, 
+ '\033', '[', '[', 'D', 0, 
+ '\033', '[', '[', 'E', 0, 
+ '\033', '[', '1', '7', '~', 0, 
+ '\033', '[', '1', '8', '~', 0, 
+ '\033', '[', '1', '9', '~', 0, 
+ '\033', '[', '2', '0', '~', 0, 
+ '\033', '[', '2', '1', '~', 0, 
+ '\033', '[', '2', '3', '~', 0, 
+ '\033', '[', '2', '4', '~', 0, 
+ '\033', '[', '2', '5', '~', 0, 
+ '\033', '[', '2', '6', '~', 0, 
+ '\033', '[', '2', '8', '~', 0, 
+ '\033', '[', '2', '9', '~', 0, 
+ '\033', '[', '3', '1', '~', 0, 
+ '\033', '[', '3', '2', '~', 0, 
+ '\033', '[', '3', '3', '~', 0, 
+ '\033', '[', '3', '4', '~', 0, 
+ '\033', '[', '1', '~', 0, 
+ '\033', '[', '2', '~', 0, 
+ '\033', '[', '3', '~', 0, 
+ '\033', '[', '4', '~', 0, 
+ '\033', '[', '5', '~', 0, 
+ '\033', '[', '6', '~', 0, 
+ '\033', '[', 'M', 0, 
+ '\033', '[', 'P', 0, 
+};
+
+char *funcbufptr = func_buf;
+int funcbufsize = sizeof(func_buf);
+int funcbufleft = 0;          /* space left */
+
+char *func_table[MAX_NR_FUNC] = {
+ func_buf + 0,
+ func_buf + 5,
+ func_buf + 10,
+ func_buf + 15,
+ func_buf + 20,
+ func_buf + 25,
+ func_buf + 31,
+ func_buf + 37,
+ func_buf + 43,
+ func_buf + 49,
+ func_buf + 55,
+ func_buf + 61,
+ func_buf + 67,
+ func_buf + 73,
+ func_buf + 79,
+ func_buf + 85,
+ func_buf + 91,
+ func_buf + 97,
+ func_buf + 103,
+ func_buf + 109,
+ func_buf + 115,
+ func_buf + 120,
+ func_buf + 125,
+ func_buf + 130,
+ func_buf + 135,
+ func_buf + 140,
+ func_buf + 145,
+ NULL,
+ NULL,
+ func_buf + 149,
+ NULL,
+};
+</code></pre>
 <p>Here we can see that <code>func_buf</code> is statically allocated flattened
 array of default keymaps. <code>func_table</code> array of pointers is a fast
 lookup table into flat <code>func_buf</code> array. If <code>func_buf</code> has not
 enough space it gets reallocated at <code>funcbufptr</code>.
-That’s why <code>vt_do_kdgkb_ioctl()</code> is so complicated: it patches and
+That's why <code>vt_do_kdgkb_ioctl()</code> is so complicated: it patches and
 updates all these offsets.
 Also note: <code>func_buf</code> and <code>funcbufptr</code> are both global pointers
 without any locking around these globals (also stressed by a <strong>FIXME</strong>
@@ -381,25 +362,26 @@ can lead to strange things when you press these keys!
 The only problem was that normally you have only one <code>loadkeys</code> being
 ran for a short time when your system boots up. Nothing else should be
 touching keymaps at that time anyway (or after).</p>
-<h2 id="into-the-rabbit-hole">Into the rabbit hole</h2>
+<h2>Into the rabbit hole</h2>
 <p>To validate the race theory I added debug statement into
 <code>vt_do_kdgkb_ioctl()</code> function to see who calls it at boot:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/drivers/tty/vt/keyboard.c</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/drivers/tty/vt/keyboard.c</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1996,6 +1996,14 @@ int vt_do_kdgkb_ioctl(int cmd, struct kbsentry __user *user_kdgkb, int perm)</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        int i, j, k;</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>        int ret;</span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="va">+       printk(&quot;In vt_do_kdgkb_ioctl(%d=%s)/cpu=%d/comm=%s(%d)\n&quot;,</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="va">+               cmd, (cmd == KDGKBSENT)</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="va">+                       ? &quot;KDGKBSENT&quot;</span></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="va">+                       : ((cmd == KDSKBSENT)</span></span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="va">+                               ? &quot;KDSKBSENT&quot;</span></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="va">+                               : &quot;UNKNOWN&quot;),</span></span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="va">+               hard_smp_processor_id(), current-&gt;comm, task_pid_nr(current));</span></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>        if (!capable(CAP_SYS_TTY_CONFIG))</span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>                perm = 0;</span></code></pre></div>
+<pre><code class="language-diff">--- a/drivers/tty/vt/keyboard.c
++++ b/drivers/tty/vt/keyboard.c
+@@ -1996,6 +1996,14 @@ int vt_do_kdgkb_ioctl(int cmd, struct kbsentry __user *user_kdgkb, int perm)
+        int i, j, k;
+        int ret;
+
++       printk(&quot;In vt_do_kdgkb_ioctl(%d=%s)/cpu=%d/comm=%s(%d)\n&quot;,
++               cmd, (cmd == KDGKBSENT)
++                       ? &quot;KDGKBSENT&quot;
++                       : ((cmd == KDSKBSENT)
++                               ? &quot;KDSKBSENT&quot;
++                               : &quot;UNKNOWN&quot;),
++               hard_smp_processor_id(), current-&gt;comm, task_pid_nr(current));
++
+        if (!capable(CAP_SYS_TTY_CONFIG))
+                perm = 0;
+</code></pre>
 <p>Booting:</p>
 <pre><code>Feb 24 12:06:35 sf systemd-vconsole-setup[343]: Executing &quot;/usr/bin/loadkeys -q -C /dev/tty1 -u ru4&quot;...
 Feb 24 12:06:35 sf systemd-vconsole-setup[344]: /usr/bin/setfont succeeded.
@@ -410,29 +392,33 @@ Feb 24 12:06:35 sf systemd-vconsole-setup[344]: Successfully forked off '(loadke
 Feb 24 12:06:35 sf kernel: In vt_do_kdgkb_ioctl(19273=KDSKBSENT)/cpu=5/comm=loadkeys(424)
 Feb 24 12:06:35 sf kernel: In vt_do_kdgkb_ioctl(19273=KDSKBSENT)/cpu=2/comm=loadkeys(423)
 ...
-&lt;more of these with interleaved PIDs&gt;</code></pre>
+&lt;more of these with interleaved PIDs&gt;
+</code></pre>
 <p>Bingo! <code>systemd</code> was running exactly two instances of <code>loadkeys</code> at the
-same time: <code>loadkeys(424)</code> and <code>loadkeys(423)</code>. It’s an ideal way
+same time: <code>loadkeys(424)</code> and <code>loadkeys(423)</code>. It's an ideal way
 to trigger the race: two processes are likely blocked by <code>I/O</code> as they are
 executed for the first time from disk, and once unblocked execute
 exactly the same code in parallel instruction for instruction.
 But why does <code>systemd</code> runs <code>loadkeys</code> twice? Why not once or as many times
 as I have ttys?
-For many systems it’s supposed to happen only once. See
+For many systems it's supposed to happen only once. See
 <a href="https://github.com/systemd/systemd/blob/883eb9be985fd86d9cabe967eeeab91cdd396a81/src/vconsole/90-vconsole.rules.in#L12"><code>90-vconsole.rules</code> <code>udev</code>
 rule</a>:</p>
 <pre><code># Each vtcon keeps its own state of fonts.
 #
-ACTION==&quot;add&quot;, SUBSYSTEM==&quot;vtconsole&quot;, KERNEL==&quot;vtcon*&quot;, RUN+=&quot;@rootlibexecdir@/systemd-vconsole-setup&quot;</code></pre>
+ACTION==&quot;add&quot;, SUBSYSTEM==&quot;vtconsole&quot;, KERNEL==&quot;vtcon*&quot;, RUN+=&quot;@rootlibexecdir@/systemd-vconsole-setup&quot;
+</code></pre>
 <p>Normally you have only one <code>/sys/devices/virtual/vtconsole/vtcon0</code>.
 But my system has two of these:</p>
 <pre><code># cat /sys/devices/virtual/vtconsole/vtcon0/name
 (S) dummy device
 # cat /sys/devices/virtual/vtconsole/vtcon1/name
-(M) frame buffer device</code></pre>
+(M) frame buffer device
+</code></pre>
 <p>That dummy console comes from <code>intel</code> <code>framebuffer</code> driver:</p>
-<div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere in drivers/gpu/drm/i915/i915_drv.c:</span></span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>ret <span class="op">=</span> do_take_over_console<span class="op">(&amp;</span>dummy_con<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> MAX_NR_CONSOLES <span class="op">-</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">1</span><span class="op">);</span></span></code></pre></div>
+<pre><code class="language-c">// somewhere in drivers/gpu/drm/i915/i915_drv.c:
+ret = do_take_over_console(&amp;dummy_con, 0, MAX_NR_CONSOLES - 1, 1);
+</code></pre>
 <p><code>i915</code> is an <code>intel</code> VGA driver. My system has this driver
 compiled into kernel. That triggers kernel to discover and expose
 <code>vtcon0</code>/<code>vtcon1</code> at the same time.
@@ -448,22 +434,20 @@ some of them require decent throughput and lock for every character
 would be too much.
 After this patch applied I had no backtraces at boot and no more
 unexpected poweroffs. But who knows, maybe it was a distraction and
-power button can’t be simulated through any <code>tty</code> escapes. We’ll see.</p>
+power button can't be simulated through any <code>tty</code> escapes. We'll see.</p>
 <p>If you are wondering what you could fix yourself in <code>linux</code> kernel you can
 finish this work and add read/write locking!</p>
-<h2 id="parting-words">Parting words</h2>
+<h2>Parting words</h2>
 <ul>
 <li>The possible cause of spurious reboots was data corruption caused by
 very old race condition in kernel.</li>
-<li>Silent data corruption is hard to diagnose if you don’t know where to
+<li>Silent data corruption is hard to diagnose if you don't know where to
 look. I was lucky to get a kernel oops in the same buggy code.</li>
 <li><code>tty/vt</code> driver is full of globals. Those should perhaps be changed
 to be per-<code>vtcon</code> arrays (some non-<code>x86</code> already have it that way).</li>
 <li><code>tty/vt</code> global tables are actually generated by an old user space
-<code>loadkeys</code> –mktable` tool and stored in kernel as-is.</li>
+<code>loadkeys</code> --mktable` tool and stored in kernel as-is.</li>
 <li>There is still a read/write race in kernel waiting for you to fix it!</li>
 </ul>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

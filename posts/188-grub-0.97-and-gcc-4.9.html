@@ -1,45 +1,21 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>grub-0.97 and gcc-4.9</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>grub-0.97 and gcc-4.9</h1>
-            
-                <div class="info">December 16, 2015</div>
-            
-
-            <p>Once upon a time (actually the day before yesterday) I dropped an eye at
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>grub-0.97 and gcc-4.9</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>grub-0.97 and gcc-4.9</h1><div class="info">December 16, 2015</div><p>Once upon a time (actually the day before yesterday) I dropped an eye at
 <code>freenode/#gentoo-dev</code> IRC channel and noticed an unusual question:</p>
 <pre><code>21:18 &lt;@_AxS_&gt; gcc internals issue..  does anyone happen to know if gcc-4.9 -O2 treats trampolines
-               differently than gcc-4.8 and previous? (as well as gcc-4.9 -O0) ?</code></pre>
+               differently than gcc-4.8 and previous? (as well as gcc-4.9 -O0) ?
+</code></pre>
 <p>I did not know much about trampolines besides they are <code>gcc</code> extension
 allowing you to write nested functions that can refer to variables
 outside the scope: <a href="https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html">a
 doc</a>.</p>
-<h2 id="the-problem">the problem</h2>
+<h2>the problem</h2>
 <p><code>_AxS_</code> described an issue: <code>grub-0.97</code> happens to <code>SIGSEGV</code> when you
-run a <code>grub</code> helper tool and try to exit from it’s shell. He also had
+run a <code>grub</code> helper tool and try to exit from it's shell. He also had
 a workaround to make grub work: build it with <code>-O0</code> (optimisations
 disabled).</p>
 <p><code>_AxS_</code> mysterious <code>valgrind</code> backtrace on a <code>grub</code> binary looked like
@@ -47,18 +23,20 @@ that:</p>
 <pre><code>==13972== Process terminating with default action of signal 11 (SIGSEGV)
 ==13972==  Bad permissions for mapped region at address 0x1C
 ==13972==    at 0x1C: ???
-==13972==    by 0x40D2782: (below main) (in /lib32/libc-2.21.so)</code></pre>
+==13972==    by 0x40D2782: (below main) (in /lib32/libc-2.21.so)
+</code></pre>
 <p>It looks like a very simple error jumping by <code>NULL</code> address + tiny offset.
-“Must be very easy to fix” was my thought and I started digging.</p>
-<h2 id="reproducing">reproducing</h2>
+&quot;Must be very easy to fix&quot; was my thought and I started digging.</p>
+<h2>reproducing</h2>
 <p>The first thing is to try to reproduce crash locally with debugging
 symbols enabled:</p>
 <pre><code>grub-0.97/grub $ echo quit | ./grub
 Probing devices to guess BIOS drives. This may take a long time.
-Segmentation fault</code></pre>
-<p>Yay! I’m in the game! Next step is to try to get a symbolized version
+Segmentation fault
+</code></pre>
+<p>Yay! I'm in the game! Next step is to try to get a symbolized version
 of <code>valgrind</code> output.</p>
-<h2 id="valgrind"><code>valgrind</code></h2>
+<h2><code>valgrind</code></h2>
 <p>I was not so lucky as my libc uses too fresh instructions <code>valgrind</code>does
 not know about yet:</p>
 <pre><code>Probing devices to guess BIOS drives. This may take a long time.
@@ -71,14 +49,16 @@ vex x86-&gt;IR: unhandled instruction bytes: 0xC5 0xF8 0x77 0xE8
 ==19149==    by 0x8060068: get_floppy_disk_name (device.c:431)
 ==19149==    by 0x8060068: init_device_map (device.c:825)
 ==19149==    by 0x8049C2A: grub_stage2 (asmstub.c:237)
-==19149==    by 0x8049860: main (main.c:268)</code></pre>
+==19149==    by 0x8049860: main (main.c:268)
+</code></pre>
 <p><code>C5 F8 77</code> is an <code>AVX2</code> <code>vzeroupper</code> <a href="https://bugs.kde.org/show_bug.cgi?id=340849"><code>valgrind</code> needs an
 update</a>.</p>
 <pre><code>[vzeroupper] Set the upper half of all YMM registers to zero.
-             Used when switching between 128-bit use and 256-bit use.</code></pre>
+             Used when switching between 128-bit use and 256-bit use.
+</code></pre>
 <p>That means I have to use other tools to see what happens at crash time.</p>
-<h2 id="ltrace"><code>ltrace</code></h2>
-<p>To get an insight into what happened I’ve looked at function call
+<h2><code>ltrace</code></h2>
+<p>To get an insight into what happened I've looked at function call
 trace. <code>ltrace</code> intercepts dynamic symbols (like <code>libc</code> symbols) program
 tries to call and outputs function names and parameters.</p>
 <p>You can add custom description of data structures into
@@ -104,7 +84,8 @@ void* __gmpz_realloc(mpz_srcptr, mp_size_t);
 typedef mp_ptr    = void*;
 ;
 mp_limb_t __gmpn_lshift(mp_ptr, array(mp_limb_t, arg3)*, mp_size_t, uint);
-void __gmpn_copyi(mp_ptr, array(mp_limb_t, arg3)*, mp_size_t);</code></pre>
+void __gmpn_copyi(mp_ptr, array(mp_limb_t, arg3)*, mp_size_t);
+</code></pre>
 <p>Back to <code>grub</code>:</p>
 <pre><code>$ echo quit | ltrace -olog ./grub
 ...
@@ -114,7 +95,8 @@ wmove(0x988f3b8, 8, 0)                                                        = 
 endwin(0xf6bdb200, 128, 0xf6bcaf67, 0x805b3f7)                                = 0
 __longjmp_chk(0x8071f60, 1, 0x8071b3c, 0x8049f26 &lt;no return ...&gt;
 --- SIGSEGV (Segmentation fault) ---
-+++ killed by SIGSEGV +++</code></pre>
++++ killed by SIGSEGV +++
+</code></pre>
 <p><code>longjmp()</code> needs a <code>setjmp()</code> call to store stack context to return
 to. A few of <code>setjmp()</code> calls were in the log trace somewhere in the
 beginning of a trace:</p>
@@ -125,10 +107,11 @@ signal(SIGWINCH, 0x1)                                                         = 
 sync()                                                                        = 0
 _setjmp(0x8071f60, 0, 0, 0)                                                   = 0
 _setjmp(0x807d340, 0, 0, 0)                                                   = 0
-_setjmp(0x807d440, 0xf6bcafb0, 0, 0x805d97d)                                  = 0</code></pre>
+_setjmp(0x807d440, 0xf6bcafb0, 0, 0x805d97d)                                  = 0
+</code></pre>
 <p><code>setjmp()</code> accepts a single parameter): a pointer to buffer where to
 store current context.</p>
-<h2 id="locating-crash-site">locating crash site</h2>
+<h2>locating crash site</h2>
 <p>Resolving <code>0x8071f60</code> to a symbol to get an idea where it gets called
 from (<code>gdb</code> breakpoint would also do the trick):</p>
 <pre><code>$ gdb ./grub
@@ -137,91 +120,93 @@ from (<code>gdb</code> breakpoint would also do the trick):</p>
 Dump of assembler code for function env_for_exit:
    0x08071f60 &lt;+0&gt;:     add    %al,(%eax)
    0x08071f62 &lt;+2&gt;:     add    %al,(%eax)
-   0x08071f64 &lt;+4&gt;:     add    %al,(%eax)</code></pre>
+   0x08071f64 &lt;+4&gt;:     add    %al,(%eax)
+</code></pre>
 <p>Looking up code that sets and restores <code>env_for_exit</code>:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co"> * $ git grep -C40 env_for_exit</span></span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co"> * grub/asmstub.c:</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co">/* The jump buffer for exiting correctly.  */</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> jmp_buf env_for_exit<span class="op">;</span></span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="co">/* The main entry point into this mess. */</span></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>grub_stage2 <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* These need to be static, because they survive our stack transitions. */</span></span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">int</span> status <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">void</span> <span class="op">*</span>realstack<span class="op">;</span></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">*</span>simstack_alloc_base<span class="op">,</span> <span class="op">*</span>simstack<span class="op">;</span></span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="dt">size_t</span> simstack_size<span class="op">,</span> page_size<span class="op">;</span></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  <span class="dt">int</span> i<span class="op">;</span></span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="kw">auto</span> <span class="dt">void</span> doit <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
-<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* We need a nested function so that we get a clean stack frame,</span></span>
-<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a><span class="co">     regardless of how the code is optimized. */</span></span>
-<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> doit <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
-<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
-<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>      <span class="co">/* Make sure our stack lives in the simulated memory area. */</span></span>
-<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>      asm <span class="dt">volatile</span> <span class="op">(</span><span class="st">&quot;movl </span><span class="sc">%%</span><span class="st">esp, %0</span><span class="sc">\n\t</span><span class="st">movl %1, </span><span class="sc">%%</span><span class="st">esp</span><span class="sc">\n</span><span class="st">&quot;</span></span>
-<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>             <span class="op">:</span> <span class="st">&quot;=&amp;r&quot;</span> <span class="op">(</span>realstack<span class="op">)</span> <span class="op">:</span> <span class="st">&quot;r&quot;</span> <span class="op">(</span>simstack<span class="op">));</span></span>
-<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>      <span class="co">/* Do a setjmp here for the stop command.  */</span></span>
-<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>      <span class="cf">if</span> <span class="op">(!</span> setjmp <span class="op">(</span>env_for_exit<span class="op">))</span></span>
-<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
-<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>          <span class="co">/* Actually enter the generic stage2 code.  */</span></span>
-<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>          status <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>          init_bios_info <span class="op">();</span> <span class="co">/* somewhere here quit()-&gt;stop() is called; */</span></span>
-<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>      <span class="cf">else</span></span>
-<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
-<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a>          <span class="co">/* If ERRNUM is non-zero, then set STATUS to non-zero.  */</span></span>
-<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a>          <span class="cf">if</span> <span class="op">(</span>errnum<span class="op">)</span></span>
-<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a>            status <span class="op">=</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a>      <span class="co">/* Replace our stack before we use any local variables. */</span></span>
-<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a>      asm <span class="dt">volatile</span> <span class="op">(</span><span class="st">&quot;movl %0, </span><span class="sc">%%</span><span class="st">esp</span><span class="sc">\n</span><span class="st">&quot;</span> <span class="op">:</span> <span class="op">:</span> <span class="st">&quot;r&quot;</span> <span class="op">(</span>realstack<span class="op">));</span></span>
-<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a>  assert <span class="op">(</span>grub_scratch_mem <span class="op">==</span> <span class="dv">0</span><span class="op">);</span></span>
-<span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>  doit <span class="op">();</span></span>
-<span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span></span>
-<span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>stop <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
-<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifdef HAVE_LIBCURSES</span></span>
-<span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>use_curses<span class="op">)</span></span>
-<span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a>    endwin <span class="op">();</span></span>
-<span id="cb10-59"><a href="#cb10-59" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
-<span id="cb10-60"><a href="#cb10-60" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-61"><a href="#cb10-61" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* Jump to doit.  */</span></span>
-<span id="cb10-62"><a href="#cb10-62" aria-hidden="true" tabindex="-1"></a>  longjmp <span class="op">(</span>env_for_exit<span class="op">,</span> <span class="dv">1</span><span class="op">);</span></span>
-<span id="cb10-63"><a href="#cb10-63" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb10-64"><a href="#cb10-64" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb10-65"><a href="#cb10-65" aria-hidden="true" tabindex="-1"></a><span class="co">/* stage2/builtins.c: */</span></span>
-<span id="cb10-66"><a href="#cb10-66" aria-hidden="true" tabindex="-1"></a><span class="co">/* quit */</span></span>
-<span id="cb10-67"><a href="#cb10-67" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span></span>
-<span id="cb10-68"><a href="#cb10-68" aria-hidden="true" tabindex="-1"></a>quit_func <span class="op">(</span><span class="dt">char</span> <span class="op">*</span>arg<span class="op">,</span> <span class="dt">int</span> flags<span class="op">)</span></span>
-<span id="cb10-69"><a href="#cb10-69" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb10-70"><a href="#cb10-70" aria-hidden="true" tabindex="-1"></a>  stop <span class="op">();</span></span>
-<span id="cb10-71"><a href="#cb10-71" aria-hidden="true" tabindex="-1"></a>  <span class="co">/* Never reach here.  */</span></span>
-<span id="cb10-72"><a href="#cb10-72" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb10-73"><a href="#cb10-73" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb10-74"><a href="#cb10-74" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">struct</span> builtin builtin_quit <span class="op">=</span></span>
-<span id="cb10-75"><a href="#cb10-75" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb10-76"><a href="#cb10-76" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;quit&quot;</span><span class="op">,</span></span>
-<span id="cb10-77"><a href="#cb10-77" aria-hidden="true" tabindex="-1"></a>  quit_func<span class="op">,</span></span>
-<span id="cb10-78"><a href="#cb10-78" aria-hidden="true" tabindex="-1"></a>  BUILTIN_CMDLINE <span class="op">|</span> BUILTIN_HELP_LIST<span class="op">,</span></span>
-<span id="cb10-79"><a href="#cb10-79" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;quit&quot;</span><span class="op">,</span></span>
-<span id="cb10-80"><a href="#cb10-80" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Exit from the GRUB shell.&quot;</span></span>
-<span id="cb10-81"><a href="#cb10-81" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<pre><code class="language-c">/*
+ * $ git grep -C40 env_for_exit
+ * grub/asmstub.c:
+ */
+...
+/* The jump buffer for exiting correctly.  */
+static jmp_buf env_for_exit;
+
+/* The main entry point into this mess. */
+int
+grub_stage2 (void)
+{
+  /* These need to be static, because they survive our stack transitions. */
+  static int status = 0;
+  static void *realstack;
+  void *simstack_alloc_base, *simstack;
+  size_t simstack_size, page_size;
+  int i;
+
+  auto void doit (void);
+
+  /* We need a nested function so that we get a clean stack frame,
+     regardless of how the code is optimized. */
+  void doit (void)
+    {
+      /* Make sure our stack lives in the simulated memory area. */
+      asm volatile (&quot;movl %%esp, %0\n\tmovl %1, %%esp\n&quot;
+             : &quot;=&amp;r&quot; (realstack) : &quot;r&quot; (simstack));
+
+      /* Do a setjmp here for the stop command.  */
+      if (! setjmp (env_for_exit))
+        {
+          /* Actually enter the generic stage2 code.  */
+          status = 0;
+          init_bios_info (); /* somewhere here quit()-&gt;stop() is called; */
+        }
+      else
+        {
+          /* If ERRNUM is non-zero, then set STATUS to non-zero.  */
+          if (errnum)
+            status = 1;
+        }
+
+      /* Replace our stack before we use any local variables. */
+      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack));
+    }
+  assert (grub_scratch_mem == 0);
+...
+  doit ();
+...
+}
+...
+void
+stop (void)
+{
+#ifdef HAVE_LIBCURSES
+  if (use_curses)
+    endwin ();
+#endif
+
+  /* Jump to doit.  */
+  longjmp (env_for_exit, 1);
+}
+...
+/* stage2/builtins.c: */
+/* quit */
+static int
+quit_func (char *arg, int flags)
+{
+  stop ();
+  /* Never reach here.  */
+  return 0;
+}
+static struct builtin builtin_quit =
+{
+  &quot;quit&quot;,
+  quit_func,
+  BUILTIN_CMDLINE | BUILTIN_HELP_LIST,
+  &quot;quit&quot;,
+  &quot;Exit from the GRUB shell.&quot;
+};
+</code></pre>
 <p>A low of stuff happens here.</p>
-<h2 id="gcc-passes"><code>gcc</code> passes</h2>
+<h2><code>gcc</code> passes</h2>
 <p>As we know from <code>_AxS_</code> <code>-O0</code> makes <code>grub</code> magically work.
 Checking again by rebuilding as <code>-O1</code> and <code>-O0</code> this single file
 <code>grub/asmstub.c</code>. (The rest is built with <code>-O1</code> to keep amount of
@@ -236,8 +221,9 @@ passes broke things.</p>
 <p>The following command dumps all individual passes:</p>
 <pre><code>$ gcc -Q --help=optimizers
 $ gcc -Q --help=optimizers | wc -l
-221</code></pre>
-<p>Now it’s time to find out the exact optimization pass(es) that renders
+221
+</code></pre>
+<p>Now it's time to find out the exact optimization pass(es) that renders
 code unusable.</p>
 <pre><code>$ gcc -m32 -Q -O0 --help=optimizers &gt; O0
 $ gcc -m32 -Q -O1 --help=optimizers &gt; O1
@@ -272,15 +258,16 @@ $ diff -U0 O0 O1 | grep enabled
 +  -ftree-sink                          [enabled]
 +  -ftree-slsr                          [enabled]
 +  -ftree-sra                           [enabled]
-+  -ftree-ter                           [enabled]</code></pre>
++  -ftree-ter                           [enabled]
+</code></pre>
 <p>Picking a bunch of flags at a time I distilled it down to a single
 flag:</p>
 <ul>
 <li><code>-O1</code> - <code>SIGSEGV</code>s</li>
 <li><code>-O1 -fno-combine-stack-adjustments</code> - works!</li>
 </ul>
-<h2 id="assembly-changes">assembly changes</h2>
-<p>Now let’s check code generation difference:</p>
+<h2>assembly changes</h2>
+<p>Now let's check code generation difference:</p>
 <pre><code>$ x86_64-pc-linux-gnu-gcc -m32 -DHAVE_CONFIG_H &lt;...&gt; -O1                                -S -o asmstub-O1.S asmstub.c
 $ x86_64-pc-linux-gnu-gcc -m32 -DHAVE_CONFIG_H &lt;...&gt; -O1 -fno-combine-stack-adjustments -S -o asmstub-O1-fno.S asmstub.c
 $ diff -U10 asmstub-O1.S asmstub-O1-fno.S
@@ -321,7 +308,8 @@ $ diff -U10 asmstub-O1.S asmstub-O1-fno.S
         jne     .L21
         movl    $0, status.7386
         call    init_bios_info
-        jmp     .L20</code></pre>
+        jmp     .L20
+</code></pre>
 <p>See what happens here? You might need to revisit <code>doit()</code> code snippet
 above in this post. Optimization combines stack allocation at the very
 <code>doit()</code> start (before <code>asm</code> statement) and stack allocation right
@@ -331,14 +319,15 @@ before <code>setjmp()</code> call.</p>
 code emitted by <code>asm</code> statements) But that <code>asm</code> statement overrides
 <code>%esp</code> value!</p>
 <p>(Exercise for the reader: what exactly breaks by this transformation?)</p>
-<h2 id="gcc-inline-assembly"><code>gcc</code> inline assembly</h2>
+<h2><code>gcc</code> inline assembly</h2>
 <p>Going back to original source snippet:</p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> doit <span class="op">(</span><span class="dt">void</span><span class="op">)</span></span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">{</span></span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* Make sure our stack lives in the simulated memory area. */</span></span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    asm <span class="dt">volatile</span> <span class="op">(</span><span class="st">&quot;movl </span><span class="sc">%%</span><span class="st">esp, %0</span><span class="sc">\n\t</span><span class="st">movl %1, </span><span class="sc">%%</span><span class="st">esp</span><span class="sc">\n</span><span class="st">&quot;</span></span>
-<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>           <span class="op">:</span> <span class="st">&quot;=&amp;r&quot;</span> <span class="op">(</span>realstack<span class="op">)</span> <span class="op">:</span> <span class="st">&quot;r&quot;</span> <span class="op">(</span>simstack<span class="op">));</span></span></code></pre></div>
-<p>Some facts about that <code>asm</code> statement:</p>
+<pre><code class="language-c">void doit (void)
+  {
+    /* Make sure our stack lives in the simulated memory area. */
+    asm volatile (&quot;movl %%esp, %0\n\tmovl %1, %%esp\n&quot;
+           : &quot;=&amp;r&quot; (realstack) : &quot;r&quot; (simstack));
+</code></pre>
+<p>Some facts about that <code>asm</code>  statement:</p>
 <ul>
 <li>backups original <code>%esp</code> value and sets new value from <code>realstack</code></li>
 <li>list of output arguments (to expand <code>%0</code>)</li>
@@ -346,33 +335,34 @@ code emitted by <code>asm</code> statements) But that <code>asm</code> statement
 </ul>
 <p><code>gcc</code> does very limited parsing of <code>asm</code> string statement as <code>gcc</code> usually
 does not know of all instructions <code>binutils</code> supports (<code>gcc</code> basically
-searches for <code>"%&lt;N&gt;"</code> templates and substitutes for allocated
+searches for <code>&quot;%&lt;N&gt;&quot;</code> templates and substitutes for allocated
 operands).</p>
 <p>Thus programmer needs to specify explicit effect of written code. Effect
 gets derived only from input and output arguments but you can also
 specify unobvious effects like condition flags or arbitrary memory
 updates: <a href="http://ibiblio.org/gferg/ldp/GCC-Inline-Assembly-HOWTO.html#ss5.3">more
 details</a>.</p>
-<h2 id="the-fix">the fix</h2>
+<h2>the fix</h2>
 <p>Thus our fix is to update the assembly a bit:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/grub/asmstub.c b/grub/asmstub.c</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>index 6354806..44b056f 100644</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/grub/asmstub.c</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/grub/asmstub.c</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -175,5 +175,5 @@ grub_stage2 (void)</span></span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>       /* Make sure our stack lives in the simulated memory area. */</span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>       asm volatile (&quot;movl %%esp, %0\n\tmovl %1, %%esp\n&quot;</span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="st">-                   : &quot;=&amp;r&quot; (realstack) : &quot;r&quot; (simstack));</span></span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="va">+                   : &quot;=&amp;r&quot; (realstack) : &quot;r&quot; (simstack) : &quot;%esp&quot;);</span></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>       /* Do a setjmp here for the stop command.  */</span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -192,5 +192,5 @@ grub_stage2 (void)</span></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>       /* Replace our stack before we use any local variables. */</span>
-<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a><span class="st">-      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack));</span></span>
-<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="va">+      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack) : &quot;%esp&quot;);</span></span>
-<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>     }</span></code></pre></div>
-<h2 id="fun-facts">fun facts</h2>
+<pre><code class="language-diff">diff --git a/grub/asmstub.c b/grub/asmstub.c
+index 6354806..44b056f 100644
+--- a/grub/asmstub.c
++++ b/grub/asmstub.c
+@@ -175,5 +175,5 @@ grub_stage2 (void)
+       /* Make sure our stack lives in the simulated memory area. */
+       asm volatile (&quot;movl %%esp, %0\n\tmovl %1, %%esp\n&quot;
+-                   : &quot;=&amp;r&quot; (realstack) : &quot;r&quot; (simstack));
++                   : &quot;=&amp;r&quot; (realstack) : &quot;r&quot; (simstack) : &quot;%esp&quot;);
+
+       /* Do a setjmp here for the stop command.  */
+@@ -192,5 +192,5 @@ grub_stage2 (void)
+
+       /* Replace our stack before we use any local variables. */
+-      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack));
++      asm volatile (&quot;movl %0, %%esp\n&quot; : : &quot;r&quot; (realstack) : &quot;%esp&quot;);
+     }
+</code></pre>
+<h2>fun facts</h2>
 <p>All these nested functions, <code>setjmp()</code>, <code>longjmp()</code> were only
 distractions hiding very old and simple code bug. Ancient <code>grub-0.92</code>
 from 2002 (available <a href="ftp://alpha.gnu.org/gnu/grub/">here</a>) also had
@@ -380,6 +370,4 @@ that flaw.</p>
 <p>The patch is already <a href="https://gitweb.gentoo.org/repo/gentoo.git/tree/sys-boot/grub/files/grub-0.97-Add-esp-to-list-of-clobbered-registers.patch">in
 <code>gentoo</code></a>.</p>
 <p>The smarter compilers the funnier life :)</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

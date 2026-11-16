@@ -1,74 +1,51 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>clang++ stdcall bug</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>clang++ stdcall bug</h1>
-            
-                <div class="info">October 25, 2010</div>
-            
-
-            <p>Наконец-то собрав чудопроект <code>clang</code>’ом я отважился его запустить и
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>clang++ stdcall bug</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>clang++ stdcall bug</h1><div class="info">October 25, 2010</div><p>Наконец-то собрав чудопроект <code>clang</code>'ом я отважился его запустить и
 тут-же получил <code>SIGSEGV</code>. Отлов самого бага занял у меня почти сутки.
 Я знал, что ищу, но я не мог гарантированно воспроизвести вылет.
 Рассмотрим такой пример:</p>
 <p><code>interface.hpp</code>:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">//====---- interface.hpp ----=====//</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#ifndef __interface_hpp__</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#define __interface_hpp__</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define FN_ARGS </span><span class="dt">int</span><span class="pp"> </span>a<span class="op">,</span><span class="pp"> </span><span class="dt">int</span><span class="pp"> </span>b<span class="op">,</span><span class="pp"> </span><span class="dt">int</span><span class="pp"> </span>c<span class="op">,</span><span class="pp"> </span><span class="dt">int</span><span class="pp"> </span>d<span class="op">,</span><span class="pp"> </span><span class="dt">int</span><span class="pp"> </span>e<span class="op">,</span><span class="pp"> </span><span class="dt">int</span><span class="pp"> </span>f</span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#define FN_ARGV     </span><span class="dv">1</span><span class="op">,</span><span class="pp">     </span><span class="dv">2</span><span class="op">,</span><span class="pp">     </span><span class="dv">3</span><span class="op">,</span><span class="pp">     </span><span class="dv">4</span><span class="op">,</span><span class="pp">     </span><span class="dv">5</span><span class="op">,</span><span class="pp">     </span><span class="dv">6</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="at">extern</span> <span class="st">&quot;C&quot;</span> <span class="dt">void</span> foo <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> I <span class="op">{</span></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">public</span><span class="op">:</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">virtual</span> <span class="dt">void</span> Startup<span class="op">(</span>FN_ARGS<span class="op">)</span> <span class="ex">__attribute__((stdcall))</span><span class="op">;</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif </span><span class="co">// __interface_hpp__</span></span></code></pre></div>
+<pre><code class="language-cpp">//====---- interface.hpp ----=====//
+#ifndef __interface_hpp__
+#define __interface_hpp__
+
+#define FN_ARGS int a, int b, int c, int d, int e, int f
+#define FN_ARGV     1,     2,     3,     4,     5,     6
+
+extern &quot;C&quot; void foo (void);
+
+class I {
+  public:
+    virtual void Startup(FN_ARGS) __attribute__((stdcall));
+};
+
+#endif // __interface_hpp__
+</code></pre>
 <p><code>interface.cc</code>:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">//====---- interface.cc ----=====//</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;interface.hh&quot;</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> I<span class="op">::</span>Startup<span class="op">(</span>FN_ARGS<span class="op">)</span> <span class="co">//STDCALL</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    foo<span class="op">();</span></span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="co">//====---- main.cc ----=====//</span></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;interface.hh&quot;</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> foo <span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> <span class="op">}</span></span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">(</span><span class="dt">int</span> argc<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span> <span class="op">*</span> argv<span class="op">)</span></span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    I _d<span class="op">;</span></span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>    _d<span class="op">.</span>Startup<span class="op">(</span>FN_ARGV<span class="op">);</span></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-cpp">//====---- interface.cc ----=====//
+#include &quot;interface.hh&quot;
+
+void I::Startup(FN_ARGS) //STDCALL
+{
+    foo();
+}
+//====---- main.cc ----=====//
+#include &lt;stdio.h&gt;
+#include &quot;interface.hh&quot;
+
+void foo (void) { }
+
+int main (int argc, char * * argv)
+{
+    I _d;
+    _d.Startup(FN_ARGV);
+    return 0;
+}
+</code></pre>
 <p>Итак, мы тут видим:</p>
 <ul>
 <li><code>I::Startup()</code> - <code>stdcall</code> функция с <code>6</code> параматрами</li>
@@ -76,26 +53,29 @@
 </ul>
 <p>Запускаем всё это таким злым скриптом (генерим 32-битный код,
 так как на <code>amd64</code> <code>stdcall</code> ничего не значит и там всё работает):</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/sh</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">LANG</span><span class="op">=</span>C</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="at">-rf</span> <span class="pp">*</span>.o</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="va">CXX</span><span class="op">=</span>clang++<span class="kw">;</span> <span class="va">OEXT</span><span class="op">=</span>o_clang</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="co">#CXX=g++; OEXT=o_gcc</span></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="va">CXXFLAGS</span><span class="op">=</span><span class="st">&quot;-m32 -g -O2 -fomit-frame-pointer&quot;</span></span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> f <span class="kw">in</span> <span class="pp">*</span>.cc</span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="cf">do</span></span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    <span class="va">$CXX</span> <span class="va">$CXXFLAGS</span> <span class="at">-c</span> <span class="st">&quot;</span><span class="va">$f</span><span class="st">&quot;</span> <span class="at">-o</span> <span class="st">&quot;</span><span class="va">$f</span><span class="st">.</span><span class="va">$OEXT</span><span class="st">&quot;</span></span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="va">$CXX</span>     <span class="va">$CXXFLAGS</span> <span class="pp">*</span>.<span class="va">$OEXT</span> <span class="at">-o</span> prog</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="ex">./prog</span></span></code></pre></div>
+<pre><code class="language-sh">#!/bin/sh
+
+export LANG=C
+
+rm -rf *.o
+
+CXX=clang++; OEXT=o_clang
+#CXX=g++; OEXT=o_gcc
+CXXFLAGS=&quot;-m32 -g -O2 -fomit-frame-pointer&quot;
+
+for f in *.cc
+do
+    $CXX $CXXFLAGS -c &quot;$f&quot; -o &quot;$f.$OEXT&quot;
+done
+
+$CXX     $CXXFLAGS *.$OEXT -o prog
+
+./prog
+
+</code></pre>
 <pre><code>$ ./mk.sh
-./mk.sh: line 18:  5606 Segmentation fault      ./prog</code></pre>
+./mk.sh: line 18:  5606 Segmentation fault      ./prog
+</code></pre>
 <p>Ух, свалилось. Посмотрим во что собралась наша <code>I::Startup()</code>:</p>
 <p><code>g++</code>:</p>
 <pre><code>$ objdump -d -S interface.cc.o_gcc 
@@ -111,6 +91,7 @@ void I::Startup(FN_ARGS) //STDCALL
     foo();
    8:   83 c4 0c                add    $0xc,%esp
    b:   c2 1c 00                ret    $0x1c
+
 </code></pre>
 <p><code>g++</code> правильно реализует <code>stdcall</code> конвенцию: вызывает функцию <code>foo()</code> и сам чистит за собой стек:</p>
 <p><code>ret $0x1c</code> - выталкивает со стека <code>7</code> параметров (<code>6</code> явных + <code>this</code>)</p>
@@ -125,6 +106,7 @@ void I::Startup(FN_ARGS) //STDCALL
 {
     foo();
    0:   e9 fc ff ff ff          jmp    1 &lt;_ZN1I7StartupEiiiiii+0x1&gt;
+
 </code></pre>
 <p>Oшибка: <code>I::Startup()</code> не трогает стек, будто мы в <code>cdecl</code> функции. Естественно, это ведет
 к тому, что после возврата из функции <code>foo()</code> мы вернемся в <code>main()</code>, но у него будет сдвинутый
@@ -134,6 +116,4 @@ void I::Startup(FN_ARGS) //STDCALL
 <li><a href="http://gcc.gnu.org/bugzilla/show_bug.cgi?id=40718">fixed <code>gcc</code> bug</a></li>
 <li><a href="https://bugs.gentoo.org/show_bug.cgi?id=282189">fixed <code>gentoo</code> <code>gcc</code> bug</a></li>
 </ul>
-        </div>
-    </body>
-</html>
+</div></body></html>

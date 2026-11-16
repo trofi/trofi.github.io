@@ -1,85 +1,65 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>nix gc speedup improvements</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>nix gc speedup improvements</h1>
-            
-                <div class="info">April  4, 2022</div>
-            
-
-            <p>I wondered the other day: why does my <code>nix store gc</code> take an hour to run
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>nix gc speedup improvements</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>nix gc speedup improvements</h1><div class="info">April  4, 2022</div><p>I wondered the other day: why does my <code>nix store gc</code> take an hour to run
 on a system with a few terabytes of garbage packages to clean up. Is it
 a typical time or could something be optimized to make it slightly
 faster?</p>
 <p>I ran <code>top</code> while <code>nix store gc</code> was churning and noticed it was a
 CPU-bound task. That was unusual.</p>
-<h2 id="background">Background</h2>
+<h2>Background</h2>
 <p><code>nix</code> package manager never changes files in-place when it installs new
 packages into <code>/nix/store</code>. This makes installation and uninstallation
 operations cheap: no need for <code>sync()</code>-style calls or file locks.</p>
 <p>Single package installation could be viewed as 2 steps:</p>
-<ol type="1">
+<ol>
 <li>unpack new package to <code>/nix/store/...-package-version</code> (if it does
 not already exist)</li>
 <li>refer to unpacked files (usually via symlinks, via
 scripts, configs or embedded binary)</li>
 </ol>
-<p>Uninstallation is just one step of undoing “[2.]”:</p>
-<ol type="1">
+<p>Uninstallation is just one step of undoing &quot;[2.]&quot;:</p>
+<ol>
 <li>stop referring to the package (by creating a new closure of needed packages)</li>
 </ol>
 <p>This procedure does not require any file or directory removal.
-On <code>NixOS</code> it’s a matter of updating a single <code>/run/current-system</code>
+On <code>NixOS</code> it's a matter of updating a single <code>/run/current-system</code>
 symlink to get a new version of <code>NixOS</code> active.
 As a result over normal lifetime the system accumulates unreferenced
 packages as files and directories in <code>/nix/store/</code>. If you have enough
 storage you can completely ignore these unreferenced files.
-But sometimes it’s useful to delete unreferenced data to free up some
+But sometimes it's useful to delete unreferenced data to free up some
 space or to check that there are no missing references in current package
 closure. Such cleaning is done with <code>nix-collect-garbage</code>
 (or <code>nix store gc</code>). Or their lower level sibling
 <code>nix-store --delete ...</code> (or <code>nix store delete ...</code>).</p>
-<h2 id="actual-gc-speed">Actual <code>GC</code> speed</h2>
+<h2>Actual <code>GC</code> speed</h2>
 <p>All the above sounds nice, but how fast that garbage collection is in
 practice? Should it take 1 second, 1 minute or 1 hour on an average
-system? On a heavily cluttered system? Let’s find out! I have 2 systems:</p>
-<ol type="1">
-<li><p><code>i7</code> host: <code>HDD</code>-based 10+ years old web server with daily updates
-which never saw a garbage collection run. It’s whole <code>/nix/store</code>
-is 26GB.</p></li>
-<li><p><code>nz</code> host: <code>NVMe</code>-based 1 year old desktop where I build A Lot of
-packages daily and run garbage collection once a month. It’s whole
-<code>/nix/store</code> is <code>380GB</code>.</p></li>
+system? On a heavily cluttered system? Let's find out! I have 2 systems:</p>
+<ol>
+<li>
+<p><code>i7</code> host: <code>HDD</code>-based 10+ years old web server with daily updates
+which never saw a garbage collection run. It's whole <code>/nix/store</code>
+is 26GB.</p>
+</li>
+<li>
+<p><code>nz</code> host: <code>NVMe</code>-based 1 year old desktop where I build A Lot of
+packages daily and run garbage collection once a month. It's whole
+<code>/nix/store</code> is <code>380GB</code>.</p>
+</li>
 </ol>
 <p><code>i7</code> dry run:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real 3m18.522s
-...</code></pre>
+...
+</code></pre>
 <p>~200 seconds. Is it a lot? The process touches no disk. According to
-<code>top</code> it’s a CPU-bound problem. What does it do? Running
+<code>top</code> it's a CPU-bound problem. What does it do? Running
 <code>perf top -p $pid</code> shows the following:</p>
 <pre><code>$ sudo perf top -p 6217
 &lt;wait 5 seconds&gt;
@@ -90,7 +70,8 @@ real 3m18.522s
    3.91%  libnixstore.so       [.] nix::parseString
    2.73%  libc-2.33.so         [.] malloc
    2.55%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec
-   2.31%  [kernel]             [k] syscall_exit_to_user_mode</code></pre>
+   2.31%  [kernel]             [k] syscall_exit_to_user_mode
+</code></pre>
 <p>Looks like some string parsing and <code>sqlite3</code> reading. Could be
 optimized a bit around that strange <code>std::istream::get</code> but
 otherwise looks reasonable. Not exactly an interactive latency,
@@ -100,10 +81,11 @@ to do in this case?</p>
 <pre><code>$ time nix store gc --dry-run
 
 real    28m24,295s
-...</code></pre>
+...
+</code></pre>
 <p>~1800 seconds. Almost half an hour! That is already way outside
-interactive use of the tool. But maybe it’s fine for a system
-with large amount of clutter? Let’s find out!</p>
+interactive use of the tool. But maybe it's fine for a system
+with large amount of clutter? Let's find out!</p>
 <p>Checking for profile picture:</p>
 <pre><code>$ sudo perf top -p 2531652
 &lt;wait 5 seconds&gt;
@@ -114,10 +96,11 @@ with large amount of clutter? Let’s find out!</p>
    3,90%  libc-2.33.so         [.] _int_malloc
    3,03%  libc-2.33.so         [.] malloc
    2,38%  libnixstore.so       [.] nix::parseString
-   2,30%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec</code></pre>
+   2,30%  libsqlite3.so.0.8.6  [.] sqlite3VdbeExec
+</code></pre>
 <p>The profile is very close to <code>i7</code> one: same <code>std::istream::get</code>
 at the top and a <code>memcmp()</code> implementation that follows.</p>
-<h2 id="the-first-attempt">The first attempt</h2>
+<h2>The first attempt</h2>
 <p>Profile clearly tells us that <code>istream</code> related parsing is the
 bottleneck.</p>
 <p>Quick quiz: does it?</p>
@@ -156,33 +139,34 @@ bottleneck.</p>
       &quot;buildInputs&quot;: &quot;&quot;,
       &quot;buildPhase&quot;: &quot;python configure.py --bootstrap\n# \&quot;./ninja -vn manual\&quot; output copied here to support cross compilation.\nasciidoc -b docbook -d book -o build/manual.xml doc/manual.asciidoc\nxsltproc --nonet doc/docbook.xsl build/manual.xml &gt; doc/manual.html\n&quot;,
       &quot;builder&quot;: &quot;/nix/store/v3rml3r7liky77iwipjg9bxmm874ra6g-bash-5.1-p12/bin/bash&quot;,
-...</code></pre>
+...
+</code></pre>
 <p>Here <code>inputDrvs</code>, <code>inputSrcs</code> and some <code>env</code> references are
 interesting edges for garbage collector. But some are possibly not
 (like build-only <code>env.builder</code>).
 The parsing format looked trivial and I tried a quick hack to
-substitute <code>istream</code> for a manual parser in <a href="https://github.com/NixOS/nix/pull/6266" class="uri">https://github.com/NixOS/nix/pull/6266</a>.
+substitute <code>istream</code> for a manual parser in <a href="https://github.com/NixOS/nix/pull/6266">https://github.com/NixOS/nix/pull/6266</a>.
 This gave a 25% speedup (7 minutes faster on <code>nz</code>). Sounds like a
 lot for a simple 80-line change.
 But Eelco did not see any speedup improvement on his system. Moreover
-Eelso’s <code>GC</code> times were ridiculously short: 17 seconds instead of minutes.
-That made me think: what is parser’s parse speed if I see so large
+Eelso's <code>GC</code> times were ridiculously short: 17 seconds instead of minutes.
+That made me think: what is parser's parse speed if I see so large
 an improvement? My system has to parse A Lot of <code>.drv</code> files to make
 it measurable.</p>
 <p>To put the example into some abstract numbers:
 if parse speed is even as low as <code>100MB/s</code> then running it for 7 minutes
-would be able to parse <code>~40GB</code> of <code>.drv</code> files. I don’t have that many.
+would be able to parse <code>~40GB</code> of <code>.drv</code> files. I don't have that many.
 All my <code>/nix/store/*.drv</code> files are <code>~1GB</code> (<code>~270K</code> files).
 Does it mean my system parses the same files multiple times? Is my system
 somehow special to have many of them?
 Running <code>strace -f</code> against the <code>nix-daemon</code> confirmed that some of
-<code>.drv</code> files were opened and read repeatedly. That’s strange.</p>
-<h2 id="the-second-attempt">The second attempt</h2>
+<code>.drv</code> files were opened and read repeatedly. That's strange.</p>
+<h2>The second attempt</h2>
 <p>My naive understanding of graph traversal for garbage collection purposes
 told me that each node should be traversed once.
 I added a few <code>debug()</code> calls to
 <a href="https://github.com/NixOS/nix/blob/master/src/libstore/gc.cc"><code>src/libstore/gc.cc</code></a>
-around repeated <code>.drv</code> visits and found … a bug!</p>
+around repeated <code>.drv</code> visits and found ... a bug!</p>
 <p>For some <code>nix.conf</code> setups (like the ones with
 <code>keep-derivations = true</code>) <code>.drv</code> files are themselves considered
 (implicit) referrers. They should be retained on garbage
@@ -193,49 +177,53 @@ Which is handy for package development.</p>
 as referrers, but they were not added to <code>alive</code> set of visited nodes.
 As a result <code>.drv</code> file was visited every time some path pulled a
 <code>.drv</code> in.</p>
-<p>Thus the fix was a two-liner: <a href="https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e" class="uri">https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e</a></p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/src/libstore/gc.cc</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/src/libstore/gc.cc</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -678,7 +678,8 @@ void LocalStore::collectGarbage(const GCOptions &amp; options, GCResults &amp; results)</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>                 alive.insert(start);</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>                 try {</span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>                     StorePathSet closure;</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="st">-                    computeFSClosure(*path, closure);</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="va">+                    computeFSClosure(*path, closure,</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="va">+                        /* flipDirection */ false, gcKeepOutputs, gcKeepDerivations);</span></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>                     for (auto &amp; p : closure)</span>
-<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>                         alive.insert(p);</span>
-<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>                 } catch (InvalidPath &amp;) { }</span></code></pre></div>
+<p>Thus the fix was a two-liner: <a href="https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e">https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e</a></p>
+<pre><code class="language-diff">--- a/src/libstore/gc.cc
++++ b/src/libstore/gc.cc
+@@ -678,7 +678,8 @@ void LocalStore::collectGarbage(const GCOptions &amp; options, GCResults &amp; results)
+                 alive.insert(start);
+                 try {
+                     StorePathSet closure;
+-                    computeFSClosure(*path, closure);
++                    computeFSClosure(*path, closure,
++                        /* flipDirection */ false, gcKeepOutputs, gcKeepDerivations);
+                     for (auto &amp; p : closure)
+                         alive.insert(p);
+                 } catch (InvalidPath &amp;) { }
+</code></pre>
 <p>Before the change <code>computeFSClosure()</code> was called with implicit default
 <code>gcKeepDerivations = false</code> argument. After the change it started honoring
-user’s configuration.
+user's configuration.
 The fun thing is that <code>keep-derivations = true</code> is a default enabled option!
 Unless you switched it off explicitly you probably have it enabled on <code>NixOS</code>.</p>
-<h2 id="benchmarks">Benchmarks</h2>
-<p>Let’s benchmark this change on the same setup as above. I plugged the patch
+<h2>Benchmarks</h2>
+<p>Let's benchmark this change on the same setup as above. I plugged the patch
 into <code>configuration.nix</code> as:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode nix"><code class="sourceCode nix"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>  nixpkgs<span class="op">.</span>overlays = <span class="op">[</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span><span class="va">final</span><span class="op">:</span> <span class="va">prev</span><span class="op">:</span> <span class="op">{</span> <span class="va">nix</span> <span class="op">=</span> prev<span class="op">.</span>nix<span class="op">.</span>overrideAttrs <span class="op">(</span><span class="va">oa</span><span class="op">:</span> <span class="op">{</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>      <span class="va">patches</span> <span class="op">=</span> <span class="op">(</span>oa<span class="op">.</span>patches <span class="kw">or</span> <span class="op">[])</span> <span class="op">++</span> <span class="op">[</span> <span class="op">(</span>prev<span class="op">.</span>fetchpatch <span class="op">({</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        <span class="va">name</span> <span class="op">=</span> <span class="st">&quot;fix-gc-drv-re-parse.patch&quot;</span><span class="op">;</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>        <span class="va">url</span> <span class="op">=</span> <span class="st">&quot;https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e.patch&quot;</span><span class="op">;</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>        <span class="va">hash</span> <span class="op">=</span> <span class="st">&quot;sha256-QiBFJVRWNTXyVFch1zoNJL3ZfF4ZD9JKNlID4v+eUVc=&quot;</span><span class="op">;</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>      <span class="op">}))</span> <span class="op">];</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">});})</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">]</span>;</span></code></pre></div>
+<pre><code class="language-nix">  nixpkgs.overlays = [
+    (final: prev: { nix = prev.nix.overrideAttrs (oa: {
+      patches = (oa.patches or []) ++ [ (prev.fetchpatch ({
+        name = &quot;fix-gc-drv-re-parse.patch&quot;;
+        url = &quot;https://github.com/NixOS/nix/commit/d58453f72ea584cac2e3362fd6a73fcf0e3b615e.patch&quot;;
+        hash = &quot;sha256-QiBFJVRWNTXyVFch1zoNJL3ZfF4ZD9JKNlID4v+eUVc=&quot;;
+      })) ];
+    });})
+  ];
+</code></pre>
 <p><code>i7</code>:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real    0m7.403s
-...</code></pre>
+...
+</code></pre>
 <p>7 seconds compared to previous 200 seconds. <code>~29x</code> speedup.</p>
 <p><code>nz</code>:</p>
 <pre><code>$ time nix store gc --dry-run
 
 real    1m0,140s
-...</code></pre>
+...
+</code></pre>
 <p>60 seconds compared to previous 1800 seconds. <code>~30x</code> speedup as well.</p>
-<h2 id="full-run">Full run</h2>
+<h2>Full run</h2>
 <p>Time to run the actual garbage collection that includes file removal
 from disk and path unregistration from database:</p>
 <p><code>i7</code>:</p>
@@ -259,7 +247,8 @@ $ time nix store gc
 0 store paths deleted, 0.00 MiB freed
 
 real    0m7.708s
-...</code></pre>
+...
+</code></pre>
 <p>Note that actual package removal is 5 times slower than
 <code>GC</code> dry run. This ratio depends a lot on how many files are
 to delete, what filesystem and what mode you are using.
@@ -294,14 +283,15 @@ $ time nix store gc
 0 store paths deleted, 0.00 MiB freed
 
 real    0m4,528s
-...</code></pre>
+...
+</code></pre>
 <p>Again, actual file deletion is only 6 times slower than <code>GC</code> dry run.
 Alive set after <code>GC</code> is <code>15K</code> packages with <code>34GB</code> storage.
 The speed of removal is about <code>~800</code> store paths (packages)
 per second.
 How many packages per second can your distribution delete?
 Does it scale well with amount of packages already installed in system?</p>
-<h2 id="parting-words">Parting words</h2>
+<h2>Parting words</h2>
 <p>Garbage collection should take no more than one minute :)</p>
 <p>It was surprisingly easy to get <code>~30x</code> speed up of garbage collector with
 a two-liner patch. The improvement will help systems with default
@@ -310,6 +300,4 @@ improvement.</p>
 <p>Initially I was fooled by <code>perf top</code> output and optimized the parser
 to get 25% speedup. The real bug was in tracking visited nodes.</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

@@ -1,44 +1,19 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>binutils 2.39</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>binutils 2.39</h1>
-            
-                <div class="info">August 12, 2022</div>
-            
-
-            <p>A week ago new <a href="https://sourceware.org/pipermail/binutils/2022-August/122246.html">2.39 release</a>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>binutils 2.39</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>binutils 2.39</h1><div class="info">August 12, 2022</div><p>A week ago new <a href="https://sourceware.org/pipermail/binutils/2022-August/122246.html">2.39 release</a>
 of <code>binutils</code> saw the light of day.</p>
-<h2 id="new-features">New features</h2>
+<h2>New features</h2>
 <p>I found interesting these additions:</p>
 <ul>
 <li>colors in <code>objdump -d --disassembler-color=color</code> output</li>
 <li><code>gprofng</code> tool is enabled by default now (<a href="https://sourceware.org/pipermail/binutils/2021-August/117665.html"><code>gprofng</code> announcement</a>)</li>
 </ul>
 <p>Colored <code>objdump</code> looks good:</p>
-<p><img src="../posts.data/254-binutils-2.39/objdump.svg" /></p>
+<p><img src="../posts.data/254-binutils-2.39/objdump.svg" alt="" /></p>
 <p>The blue-on-black text is a bit hard to read. <a href="https://sourceware.org/pipermail/binutils/2022-August/122351.html">Soon</a>
 it will be tweakable via <code>OBJDUMP_COLORS</code> environment variable.</p>
 <p><code>gprofng</code> requires some work to finish the packaging:</p>
@@ -75,7 +50,8 @@ CPU           CPU
 0.010   2.38  0.010   2.38   iswprint
 0.010   2.38  0.020   4.76   onscreen_mvcur
 0.      0.    0.410  97.62   CommandLine_run
-...</code></pre>
+...
+</code></pre>
 <p>In the output above both individual and cumulative times are reported
 for each function. Nothing fancy.
 Output of the same sampling data with a <code>calltree</code> view:</p>
@@ -150,67 +126,71 @@ CPU
 0.020   4.76     |        |      +-_IO_new_file_underflow
 0.020   4.76     |        |        +-read
 0.010   2.38     |        +-openat
-0.010   2.38     +-__vfprintf_internal</code></pre>
+0.010   2.38     +-__vfprintf_internal
+</code></pre>
 <p>This view is a bit more interesting: we can instantly see where all those
 string operations get called from. <code>gprofng</code> seems to work \o/.</p>
-<h2 id="new-bugs">New bugs</h2>
+<h2>New bugs</h2>
 <p>Having sorted basic <code>gprofng</code> stuff I attempted to package <code>binutils-2.39</code>
 in <code>nixpkgs</code> in <a href="https://github.com/NixOS/nixpkgs/pull/185297"><code>PR185297</code></a>.
-I got a few problems when I tried to build the system against it. I’ll list
+I got a few problems when I tried to build the system against it. I'll list
 a few of them below.</p>
-<h3 id="breaking-api-change-init_disassemble_info">Breaking API change: <code>init_disassemble_info()</code></h3>
+<h3>Breaking API change: <code>init_disassemble_info()</code></h3>
 <p>One of the unfortunate side-effects of added coloring is the
 disassembler API change (<a href="https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=60a3da00bd5407f07d64dff82a4dae98230dfaac">patch</a>):
 <code>init_disassemble_info()</code> got an extra formatter parameter. The crucial
 bit of the patch is the extra <code>fprintf_styled_func</code> parameter added:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -394,11 +470,13 @@ extern bool generic_symbol_is_valid</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a> /* Method to initialize a disassemble_info struct.  This should be</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    called by all applications creating such a struct.  */</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a> extern void init_disassemble_info (struct disassemble_info *dinfo, void *stream,</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="st">-                                  fprintf_ftype fprintf_func);</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="va">+                                  fprintf_ftype fprintf_func,</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="va">+                                  fprintf_styled_ftype fprintf_styled_func);</span></span></code></pre></div>
+<pre><code class="language-diff">@@ -394,11 +470,13 @@ extern bool generic_symbol_is_valid
+ /* Method to initialize a disassemble_info struct.  This should be
+    called by all applications creating such a struct.  */
+ extern void init_disassemble_info (struct disassemble_info *dinfo, void *stream,
+-                                  fprintf_ftype fprintf_func);
++                                  fprintf_ftype fprintf_func,
++                                  fprintf_styled_ftype fprintf_styled_func);
+</code></pre>
 <p>I noticed it as a <code>perf</code> build breakage against <code>linux.git</code> tree:</p>
 <pre><code>util/annotate.c: In function 'symbol__disassemble_bpf':
 util/annotate.c:1765:9: error: too few arguments to function 'init_disassemble_info'
  1765 |         init_disassemble_info(&amp;info, s,
-      |         ^~~~~~~~~~~~~~~~~~~~~</code></pre>
+      |         ^~~~~~~~~~~~~~~~~~~~~
+</code></pre>
 <p>The fix got merged into <code>linux#master</code> a few days ago as a set
 of <a href="https://github.com/torvalds/linux/compare/00b32625982e0c796f0abb8effcac9c05ef55bd3...600b7b26c07a070d0153daa76b3806c1e52c9e00">patches</a>.</p>
 <p>The gist of the fix is added feature detection against parameter count
 (<code>DISASM_INIT_STYLED</code>) and use of the feature to wrap
 <code>init_disassemble_info()</code> variants:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- /dev/null</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/tools/include/tools/dis-asm-compat.h</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -0,0 +1,55 @@</span></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="va">+static inline int fprintf_styled(void *out,</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="va">+                                enum disassembler_style style,</span></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="va">+                                const char *fmt, ...)</span></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="va">+{</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="va">+       va_list args;</span></span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="va">+       int r;</span></span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="va">+       va_start(args, fmt);</span></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="va">+       r = vfprintf(out, fmt, args);</span></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a><span class="va">+       va_end(args);</span></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="va">+       return r;</span></span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="va">+}</span></span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="va">+static inline void init_disassemble_info_compat(struct disassemble_info *info,</span></span>
-<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a><span class="va">+                                               void *stream,</span></span>
-<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="va">+                                               fprintf_ftype unstyled_func,</span></span>
-<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="va">+                                               fprintf_styled_ftype styled_func)</span></span>
-<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a><span class="va">+{</span></span>
-<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a><span class="va">+#ifdef DISASM_INIT_STYLED</span></span>
-<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a><span class="va">+       init_disassemble_info(info, stream,</span></span>
-<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a><span class="va">+                             unstyled_func,</span></span>
-<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a><span class="va">+                             styled_func);</span></span>
-<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a><span class="va">+#else</span></span>
-<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a><span class="va">+       (void)styled_func;</span></span>
-<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a><span class="va">+       init_disassemble_info(info, stream,</span></span>
-<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a><span class="va">+                             unstyled_func);</span></span>
-<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a><span class="va">+#endif</span></span></code></pre></div>
+<pre><code class="language-diff">--- /dev/null
++++ b/tools/include/tools/dis-asm-compat.h
+@@ -0,0 +1,55 @@
++static inline int fprintf_styled(void *out,
++                                enum disassembler_style style,
++                                const char *fmt, ...)
++{
++       va_list args;
++       int r;
++       va_start(args, fmt);
++       r = vfprintf(out, fmt, args);
++       va_end(args);
++       return r;
++}
++static inline void init_disassemble_info_compat(struct disassemble_info *info,
++                                               void *stream,
++                                               fprintf_ftype unstyled_func,
++                                               fprintf_styled_ftype styled_func)
++{
++#ifdef DISASM_INIT_STYLED
++       init_disassemble_info(info, stream,
++                             unstyled_func,
++                             styled_func);
++#else
++       (void)styled_func;
++       init_disassemble_info(info, stream,
++                             unstyled_func);
++#endif
+</code></pre>
 <p>We will need to backport this fix to older kernel versions. Or pin
 <code>perf</code> to older version of <code>libbfd</code>.</p>
-<h3 id="new-warnings-around-executable-stack">New warnings around executable stack</h3>
+<h3>New warnings around executable stack</h3>
 <p>Another <code>binutils-2.39</code> change was to enable warnings around
 <code>RWX</code> sections (like stack and data) in
 <a href="https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=ba951afb99912da01a6e8434126b8fac7aa75107">this change</a>.
@@ -232,18 +212,19 @@ for <code>EFI</code> linking code. The proper fix was also trivial in this case:
 <code>gnu-efi</code> library needed <a href="https://sourceforge.net/p/gnu-efi/code/ci/803b49c40bb0b720b90d9c31d372911f1b946aa7/">a few annotations</a>.</p>
 <p>The idea is simple: all manually written assembly <code>.S</code> files need
 a note section that declares non-executable stack:</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/apps/trivial.S</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/apps/trivial.S</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -41,3 +41,7 @@ _start:</span></span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a> hello: .byte 'h',0,'e',0,'l',0,'l',0,'o',0,'\n',0,'\r',0,0,0</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a> #endif</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="va">+#if defined(__ELF__) &amp;&amp; defined(__linux__)</span></span>
-<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="va">+       .section .note.GNU-stack,&quot;&quot;,%progbits</span></span>
-<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="va">+#endif</span></span></code></pre></div>
-<p>It’s a lot of boilerplate to add the note to every <code>.S</code> file.</p>
-<h3 id="dwarf-output-regression">DWARF output regression</h3>
+<pre><code class="language-diff">--- a/apps/trivial.S
++++ b/apps/trivial.S
+@@ -41,3 +41,7 @@ _start:
+ hello: .byte 'h',0,'e',0,'l',0,'l',0,'o',0,'\n',0,'\r',0,0,0
+
+ #endif
++
++#if defined(__ELF__) &amp;&amp; defined(__linux__)
++       .section .note.GNU-stack,&quot;&quot;,%progbits
++#endif
+</code></pre>
+<p>It's a lot of boilerplate to add the note to every <code>.S</code> file.</p>
+<h3>DWARF output regression</h3>
 <p>Another fallout was an <code>elfutils-0.187</code> test failure:</p>
 <pre><code>FAIL: run-low_high_pc.sh
 ========================
@@ -261,7 +242,8 @@ a note section that declares non-executable stack:</p>
 [2def] _init
 lowpc: 8049000, highpc: 8049000lx
 ../sysdeps/i386/crti.S: [2def] '_init' highpc &lt;= lowpc
-FAIL run-low_high_pc.sh (exit status: 255)</code></pre>
+FAIL run-low_high_pc.sh (exit status: 255)
+</code></pre>
 <p>Here the test <a href="https://sourceware.org/git/?p=elfutils.git;a=blob;f=tests/low_high_pc.c;h=cd022b1cc5e446520be675859b01c0df04bb5521;hb=HEAD#l70"><code>low_high_pc</code></a>
 complains about something about <code>_init</code> symbol.
 Looking at the reported values the condition is <code>highpc == lowpc</code>.
@@ -308,7 +290,8 @@ Contents of the .debug_info section:
     &lt;2e38&gt;   DW_AT_encoding    : 5      (signed)
     &lt;2e39&gt;   DW_AT_name        : int
  &lt;1&gt;&lt;2e3d&gt;: Abbrev Number: 0
-...</code></pre>
+...
+</code></pre>
 <p>Here we can see that <code>&lt;stdin&gt;</code> file (<code>DW_TAG_compile_unit</code>) was using
 <code>C11</code> language, <code>main</code> symbol is a subprogram (<code>DW_TAG_subprogram</code>)
 defined in line 1 column 5 of the file. <code>DW_AT_low_pc</code> / <code>DW_AT_high_pc</code>
@@ -317,25 +300,26 @@ encode a range where code of subprogram is located in virtual memory.</p>
 <code>../sysdeps/i386/crti.S: [2def] '_init' highpc &lt;= lowpc</code> was complaining
 about invalid code location in virtual memory. It looks like the
 encoding claimed that <code>_init</code> is 0 bytes long. Failure happened only on
-<code>i686-linux</code> and not <code>x96_64-linux</code>. It’s because <code>_init</code> code is very
+<code>i686-linux</code> and not <code>x96_64-linux</code>. It's because <code>_init</code> code is very
 different on <code>i686</code> and <code>x86_64</code>.</p>
 <p>Here is the reproducer:</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a> .<span class="bu">section</span> <span class="op">.</span>init<span class="op">,</span><span class="st">&quot;ax&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a> .p2align <span class="dv">2</span></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a> .globl _init</span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a> .hidden _init</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a> .type _init<span class="op">,</span> <span class="fu">@f</span>unction</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="fu">_init:</span></span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  .<span class="bu">section</span> <span class="op">.</span>text<span class="op">.</span>__x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span><span class="op">,</span><span class="st">&quot;axG&quot;</span><span class="op">,</span><span class="fu">@</span><span class="er">p</span>rogbits<span class="op">,</span>__x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span><span class="op">,</span>comdat</span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    .globl __x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span></span>
-<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    .hidden __x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span></span>
-<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    .p2align <span class="dv">4</span></span>
-<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    .type __x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span><span class="op">,</span><span class="fu">@f</span>unction</span>
-<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">__x86.get_pc_thunk.bx:</span></span>
-<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>      <span class="bu">ud2</span></span>
-<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    .size __x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span><span class="op">,</span> <span class="op">.</span> <span class="op">-</span> __x86<span class="op">.</span>get_pc_thunk<span class="op">.</span><span class="kw">bx</span></span>
-<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    .previous</span>
-<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>  <span class="bu">ud2</span></span></code></pre></div>
+<pre><code class="language-asm"> .section .init,&quot;ax&quot;,@progbits
+ .p2align 2
+ .globl _init
+ .hidden _init
+ .type _init, @function
+_init:
+  .section .text.__x86.get_pc_thunk.bx,&quot;axG&quot;,@progbits,__x86.get_pc_thunk.bx,comdat
+    .globl __x86.get_pc_thunk.bx
+    .hidden __x86.get_pc_thunk.bx
+    .p2align 4
+    .type __x86.get_pc_thunk.bx,@function
+    __x86.get_pc_thunk.bx:
+      ud2
+    .size __x86.get_pc_thunk.bx, . - __x86.get_pc_thunk.bx
+    .previous
+  ud2
+</code></pre>
 <p>The code above defines <code>_init</code> symbol in <code>.init</code> section with a single
 <code>ud2</code> instruction and <code>__x86.get_pc_thunk.bx</code> symbol in
 <code>.text.__x86.get_pc_thunk.bx</code> section with a single <code>ud2</code> instruction.
@@ -351,7 +335,8 @@ $ readelf -aW --debug-dump crti.o
     &lt;14&gt;   DW_AT_name        : (strp) (offset: 0x0): crti.S.S
     &lt;18&gt;   DW_AT_comp_dir    : (strp) (offset: 0x9): /home/slyfox/dev/bugs/binutils-2.39-crti-size/delta
     &lt;1c&gt;   DW_AT_producer    : (strp) (offset: 0x3d): GNU AS 2.38
-    &lt;20&gt;   DW_AT_language    : (data2) 32769    (MIPS assembler)</code></pre>
+    &lt;20&gt;   DW_AT_language    : (data2) 32769    (MIPS assembler)
+</code></pre>
 <p><code>binutils-2.39</code> started emitting a bit more info:</p>
 <pre><code>$ as-2.39 --gdwarf2 --32 -o crti.o crti.S.S
 $ readelf -aW --debug-dump crti.o
@@ -373,10 +358,11 @@ $ readelf -aW --debug-dump crti.o
     &lt;35&gt;   DW_AT_external    : (flag) 1
     &lt;36&gt;   DW_AT_low_pc      : (addr) 0x0
     &lt;3a&gt;   DW_AT_high_pc     : (addr) 0x2
- &lt;1&gt;&lt;3e&gt;: Abbrev Number: 0</code></pre>
+ &lt;1&gt;&lt;3e&gt;: Abbrev Number: 0
+</code></pre>
 <p>Note that <code>DW_TAG_subprogram</code> was not present for any of two symbols in
 <code>binutils-2.38</code>. And <code>binutils-2.39</code> defines both: <code>__x86.get_pc_thunk.bx</code>
-of size 2 and <code>_init</code> of size … 0! It ended up being a <code>gas</code> bug and
+of size 2 and <code>_init</code> of size ... 0! It ended up being a <code>gas</code> bug and
 Jan fixed with <a href="https://sourceware.org/git/?p=binutils-gdb.git;a=commitdiff;h=e8cf73215187b0c08679d726a5cc7c019fa3ea2e">the patch</a>.</p>
 <p>After the fix <code>DWARF</code> sections have the following look:</p>
 <pre><code>$ as-2.39 --gdwarf2 --32 -o crti.o crti.S.S
@@ -401,7 +387,8 @@ Contents of the .debug_info section:
     &lt;27&gt;   DW_AT_external    : (flag) 1
     &lt;28&gt;   DW_AT_low_pc      : (addr) 0x0
     &lt;2c&gt;   DW_AT_high_pc     : (addr) 0x2
- &lt;1&gt;&lt;30&gt;: Abbrev Number: 0</code></pre>
+ &lt;1&gt;&lt;30&gt;: Abbrev Number: 0
+</code></pre>
 <p>As expected <code>_init</code> does not have <code>DW_AT_low_pc</code> / <code>DW_AT_high_pc</code>
 values anymore and <code>elfutils</code> tests run successfully.</p>
 <p>As <code>crti.S</code> is a file from <code>glibc</code> that made me wonder why <code>crti.o</code>
@@ -410,15 +397,13 @@ bug in a <code>debuginfo</code> separation hook. The hook was meant to move all 
 from <code>ELF</code> files in <code>/lib</code> to <code>/lib/debug</code>. For files where the hook
 did not work it did not apply stripping at all. Fixed with
 <a href="https://github.com/NixOS/nixpkgs/pull/185537"><code>PR185537</code></a> now.</p>
-<h2 id="parting-words">Parting words</h2>
+<h2>Parting words</h2>
 <p><code>binutils-2.39</code> does not look too problematic so far. It will need a bit
 of backporting to fix <code>linux</code> and <code>perf</code>. But otherwise the release look
 benign.</p>
-<p><code>gas</code> bug uncovered <code>nixpkgs</code>’s stripping code bug. It’s funny how one
+<p><code>gas</code> bug uncovered <code>nixpkgs</code>'s stripping code bug. It's funny how one
 is required to trigger another. Luckily both are fixed now.</p>
-<p>Once I get <code>perf</code> fixed I’ll ask for a full <code>hydra</code> run to get more
+<p>Once I get <code>perf</code> fixed I'll ask for a full <code>hydra</code> run to get more
 potential failures.</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

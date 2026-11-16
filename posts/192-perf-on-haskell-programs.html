@@ -1,40 +1,15 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>perf on haskell programs</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>perf on haskell programs</h1>
-            
-                <div class="info">April 21, 2016</div>
-            
-
-            <p><code>GHC</code> 7.10.1 got a new <code>-g</code> option to generate debugging information
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>perf on haskell programs</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>perf on haskell programs</h1><div class="info">April 21, 2016</div><p><code>GHC</code> 7.10.1 got a new <code>-g</code> option to generate debugging information
 in <code>DWARF</code> format for compiled <code>haskell</code> code.</p>
 <p>While the <code>-g</code> option was being developed I asked Peter a few times on
 <code>#ghc</code> how <code>perf top</code> would look like for a random <code>haskell</code> program.
 But his focus was on <code>gdb</code> support.</p>
-<p>It’s time to actually try <code>perf</code>. Let’s go!</p>
+<p>It's time to actually try <code>perf</code>. Let's go!</p>
 <pre><code>$ perf record -- ghc-7.10.3 --make ... # building highlighting-kate
 $ perf report
 
@@ -83,49 +58,52 @@ $ perf report
         │       $.H...
         │       D$.I.L
         │       4...I.
-        │       D$.I.D</code></pre>
+        │       D$.I.D
+</code></pre>
 <p>Quite unreadable. At least it contains a part of hot function:
 <code>ghc_Pretty_bufLeftRenderzuzdsreduceDoc</code>.</p>
 <p><code>perf</code> does not show assembly code as <code>NCG</code> (native code generator)
 marks internal assembly entry points as <code>@object</code>s (the <code>c</code> code
 does <code>@function</code> annotations for example).</p>
-<p>So let’s try to undo this hack and build <code>ghc</code> with debugging symbols:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/compiler/nativeGen/X86/CodeGen.hs b/compiler/nativeGen/X86/CodeGen.hs</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>index cd45d92..e03c98f 100644</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/compiler/nativeGen/X86/CodeGen.hs</span></span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/compiler/nativeGen/X86/CodeGen.hs</span></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -130,7 +130,8 @@ basicBlockCodeGen block = do</span></span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>       -&gt; do fileId &lt;- getFileId (srcSpanFile span)</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>             let line = srcSpanStartLine span; col = srcSpanStartCol span</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>             return $ unitOL $ LOCATION fileId line col name</span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="st">-    _ -&gt; return nilOL</span></span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="va">+    _ -&gt; do _fileId &lt;- getFileId (fsLit &quot;dummy.hs&quot;)</span></span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a><span class="va">+            return nilOL</span></span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>   mid_instrs &lt;- stmtsToInstrs stmts</span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>   tail_instrs &lt;- stmtToInstrs tail</span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>   let instrs = loc_instrs `appOL` mid_instrs `appOL` tail_instrs</span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/compiler/nativeGen/X86/Ppr.hs b/compiler/nativeGen/X86/Ppr.hs</span></span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>index 7809ae1..89e23fb 100644</span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a><span class="dt">--- a/compiler/nativeGen/X86/Ppr.hs</span></span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/compiler/nativeGen/X86/Ppr.hs</span></span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -142,8 +142,8 @@ pprGloblDecl lbl</span></span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a> pprTypeAndSizeDecl :: CLabel -&gt; SDoc</span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a> pprTypeAndSizeDecl lbl</span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>     = sdocWithPlatform $ \platform -&gt;</span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a><span class="st">-      if osElfTarget (platformOS platform) &amp;&amp; externallyVisibleCLabel lbl</span></span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a><span class="st">-      then text &quot;.type &quot; &lt;&gt; ppr lbl &lt;&gt; ptext (sLit &quot;, @object&quot;)</span></span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a><span class="va">+      if osElfTarget (platformOS platform)</span></span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a><span class="va">+      then text &quot;.type &quot; &lt;&gt; ppr lbl &lt;&gt; ptext (sLit &quot;, @function&quot;)</span></span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>       else empty</span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a> pprLabel :: CLabel -&gt; SDoc</span></code></pre></div>
+<p>So let's try to undo this hack and build <code>ghc</code> with debugging symbols:</p>
+<pre><code class="language-diff">diff --git a/compiler/nativeGen/X86/CodeGen.hs b/compiler/nativeGen/X86/CodeGen.hs
+index cd45d92..e03c98f 100644
+--- a/compiler/nativeGen/X86/CodeGen.hs
++++ b/compiler/nativeGen/X86/CodeGen.hs
+@@ -130,7 +130,8 @@ basicBlockCodeGen block = do
+       -&gt; do fileId &lt;- getFileId (srcSpanFile span)
+             let line = srcSpanStartLine span; col = srcSpanStartCol span
+             return $ unitOL $ LOCATION fileId line col name
+-    _ -&gt; return nilOL
++    _ -&gt; do _fileId &lt;- getFileId (fsLit &quot;dummy.hs&quot;)
++            return nilOL
+   mid_instrs &lt;- stmtsToInstrs stmts
+   tail_instrs &lt;- stmtToInstrs tail
+   let instrs = loc_instrs `appOL` mid_instrs `appOL` tail_instrs
+diff --git a/compiler/nativeGen/X86/Ppr.hs b/compiler/nativeGen/X86/Ppr.hs
+index 7809ae1..89e23fb 100644
+--- a/compiler/nativeGen/X86/Ppr.hs
++++ b/compiler/nativeGen/X86/Ppr.hs
+@@ -142,8 +142,8 @@ pprGloblDecl lbl
+ pprTypeAndSizeDecl :: CLabel -&gt; SDoc
+ pprTypeAndSizeDecl lbl
+     = sdocWithPlatform $ \platform -&gt;
+-      if osElfTarget (platformOS platform) &amp;&amp; externallyVisibleCLabel lbl
+-      then text &quot;.type &quot; &lt;&gt; ppr lbl &lt;&gt; ptext (sLit &quot;, @object&quot;)
++      if osElfTarget (platformOS platform)
++      then text &quot;.type &quot; &lt;&gt; ppr lbl &lt;&gt; ptext (sLit &quot;, @function&quot;)
+       else empty
+
+ pprLabel :: CLabel -&gt; SDoc
+</code></pre>
 <pre><code>ghc $ echo 'SRC_HC_OPTS += -g' &gt;&gt; mk/build.mk
-ghc $ ./configure &amp;&amp; make</code></pre>
+ghc $ ./configure &amp;&amp; make
+</code></pre>
 <p><code>@object</code> annotations are used by <code>GHC</code> to avoid reading out local
 symbols via <code>PLT</code> and resolve them directly. The <code>.hidden</code> assembly
 annotation should have the same effect
-(<code>__attribute__((visibility("hidden")))</code> in <code>gcc</code>
-speak). That’s it. Checking again our build benchmark:</p>
+(<code>__attribute__((visibility(&quot;hidden&quot;)))</code> in <code>gcc</code>
+speak). That's it. Checking again our build benchmark:</p>
 <pre><code>$ perf record -- inplace/bin/ghc-stage2 --make ... # building highlighting-kate
 $ perf report
 
@@ -203,10 +181,11 @@ $ perf report
  0,40 │        mov    0xaf(%rbx),%rcx
  0,07 │        mov    %rdx,0xa0(%rsp)
  0,25 │        mov    0xb7(%rbx),%rdx
- ...</code></pre>
+ ...
+</code></pre>
 <p>Now we can see not only instructions but also nicer function names and
 bits of <code>haskell</code> code! As you can see there is a lot to fix in
-<code>GHC</code> (and <code>perf</code>, and …):</p>
+<code>GHC</code> (and <code>perf</code>, and ...):</p>
 <ul>
 <li><code>NCG</code> needs to be tweaked upstream to lie less about <code>.hidden</code>
 symbols</li>
@@ -218,6 +197,4 @@ non-functions</li>
 sequence of <code>mov</code> instructions (in last snippet)</li>
 </ul>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

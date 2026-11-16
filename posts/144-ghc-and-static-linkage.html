@@ -1,47 +1,24 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ghc and static linkage</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>ghc and static linkage</h1>
-            
-                <div class="info">July 16, 2011</div>
-            
-
-            <p><code>TL;DR</code> variant:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># force ld to inject binary-local search path</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cabal configure <span class="at">--ghc-option</span><span class="op">=</span>-optl-Wl,-rpath=<span class="dt">\'</span><span class="va">$ORIGIN</span><span class="dt">\'</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cabal build</span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> cp /usr/lib/libgmp.so.<span class="va">$YOURONE</span> dist/build/.../</span></code></pre></div>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>ghc and static linkage</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>ghc and static linkage</h1><div class="info">July 16, 2011</div><p><code>TL;DR</code> variant:</p>
+<pre><code class="language-bash"># force ld to inject binary-local search path
+$ cabal configure --ghc-option=-optl-Wl,-rpath=\'$ORIGIN\'
+$ cabal build
+$ cp /usr/lib/libgmp.so.$YOURONE dist/build/.../
+</code></pre>
 <p>Some thoughts:</p>
 <p>If you ever tried to distribute binaries built with <code>ghc</code>, you should
-know what I’m talking about. <code>ghc</code> is a huge compiler with huge
+know what I'm talking about. <code>ghc</code> is a huge compiler with huge
 runtime, so there is some things to note.</p>
-<p>Let’s explore minimal binary a bit before linking more advanced
+<p>Let's explore minimal binary a bit before linking more advanced
 project.</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- minimal.hs</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="fu">print</span> <span class="dv">1</span></span></code></pre></div>
+<pre><code class="language-haskell">-- minimal.hs
+main = print 1
+</code></pre>
 <pre><code>$ ghc --make minimal.hs
     [1 of 1] Compiling Main             ( minimal.hs, minimal.o )
     Linking minimal ...
@@ -55,20 +32,22 @@ $ ldd minimal
     libdl.so.2 =&gt; /lib64/libdl.so.2 (0x00007f1dd5ba4000)
     libc.so.6 =&gt; /lib64/libc.so.6 (0x00007f1dd581d000)
     libpthread.so.0 =&gt; /lib64/libpthread.so.0 (0x00007f1dd5600000)
-    /lib64/ld-linux-x86-64.so.2 (0x00007f1dd64a2000)</code></pre>
-<p>Looks good. All the libraries are <code>GNU libc</code>’s libraries except for
-<code>libgmp.so.10</code> one. <code>GMP</code> changed it’s <code>ABI</code> recently and it’s
+    /lib64/ld-linux-x86-64.so.2 (0x00007f1dd64a2000)
+</code></pre>
+<p>Looks good. All the libraries are <code>GNU libc</code>'s libraries except for
+<code>libgmp.so.10</code> one. <code>GMP</code> changed it's <code>ABI</code> recently and it's
 reflected it in its <code>SONAME</code>:</p>
 <ul>
 <li><code>gmp-4</code> and less provides <code>libgmp.so.3</code></li>
 <li><code>gmp-5</code> provides <code>libgmp.so.10</code></li>
 </ul>
 <p>As <code>gmp</code> is an <code>LGPL</code> library, so we would like to ship the lib
-separately. Sometimes user would like to use host’s lib instead.</p>
+separately. Sometimes user would like to use host's lib instead.</p>
 <pre><code>$ ldd /usr/lib/libgmp.so.10
     linux-vdso.so.1 =&gt;  (0x00007fff2dbff000)
     libc.so.6 =&gt; /lib64/libc.so.6 (0x00007f1383d44000)
-    /lib64/ld-linux-x86-64.so.2 (0x00007f1384367000)</code></pre>
+    /lib64/ld-linux-x86-64.so.2 (0x00007f1384367000)
+</code></pre>
 <p>As we see it is feasible as <code>GMP</code> does not use weird things. We see only
 <code>libc</code> in dependencies as well.</p>
 <p>When some binary is loaded by the kernel, kernel either maps the binary
@@ -79,12 +58,15 @@ program header):</p>
 <pre><code>$ readelf -l /bin/ls
   INTERP         0x0000000000000270 0x0000000000400270 0x0000000000400270
   [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]
-  ....</code></pre>
-<p>So, my interpreter is <code>libc</code>’s <code>/lib64/ld-linux-x86-64.so.2</code> loader.
-It’s called indirectly when binary id ran as</p>
-<pre><code>$ /bin/ls</code></pre>
+  ....
+</code></pre>
+<p>So, my interpreter is <code>libc</code>'s <code>/lib64/ld-linux-x86-64.so.2</code> loader.
+It's called indirectly when binary id ran as</p>
+<pre><code>$ /bin/ls
+</code></pre>
 <p>and directly when I run it as:</p>
-<pre><code>$ /lib64/ld-linux-x86-64.so.2 /bin/ls</code></pre>
+<pre><code>$ /lib64/ld-linux-x86-64.so.2 /bin/ls
+</code></pre>
 <p>Interpreter can take different command line arguments (like
 <code>--library-path</code> / <code>--library-rpath</code>), It can also
 understand environment variables to adjust its behavior, like
@@ -92,11 +74,11 @@ understand environment variables to adjust its behavior, like
 <p>Those allow us override library search path defined in
 <code>/etc/ld.so.conf</code>, force-inject other libraries to hook some <code>libc</code>
 function (see tiny <code>tsocks</code> project as an example).</p>
-<p>But we can also inject search paths to an <code>ELF</code> file. It’s an:</p>
+<p>But we can also inject search paths to an <code>ELF</code> file. It's an:</p>
 <ul>
 <li><code>-rpath=&lt;path&gt;</code> <code>ld</code> option</li>
 <li>or <code>-Wl,-rpath=&lt;path&gt;</code> <code>gcc</code> option</li>
-<li>or <code>-optl-Wl,-rpath=&lt;path&gt;</code> <code>ghc</code>’s option</li>
+<li>or <code>-optl-Wl,-rpath=&lt;path&gt;</code> <code>ghc</code>'s option</li>
 <li>or <code>--ghc-option=-optl-Wl,-rpath=&lt;path&gt;</code> <code>cabal configure</code>
 option</li>
 </ul>
@@ -105,9 +87,10 @@ directory) or a special magic value describing the directory where our
 ran binary lies: the <code>$ORIGIN</code> value.</p>
 <p>This technique is used commonly by relocatable software with shared
 libraries, like <code>wine</code>:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> readelf <span class="at">-a</span> <span class="kw">`</span><span class="fu">which</span> wine<span class="kw">`</span> <span class="kw">|</span> <span class="fu">grep</span> PATH</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="ex">0x0000000f</span> <span class="er">(</span><span class="ex">RPATH</span><span class="kw">)</span>      <span class="ex">Library</span> rpath: <span class="pp">[</span><span class="ss">$ORIGIN/../lib32</span><span class="pp">]</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="ex">0x0000001d</span> <span class="er">(</span><span class="ex">RUNPATH</span><span class="kw">)</span>    <span class="ex">Library</span> runpath: <span class="pp">[</span><span class="ss">$ORIGIN/../lib32</span><span class="pp">]</span></span></code></pre></div>
+<pre><code class="language-bash">$ readelf -a `which wine` | grep PATH
+    0x0000000f (RPATH)      Library rpath: [$ORIGIN/../lib32]
+    0x0000001d (RUNPATH)    Library runpath: [$ORIGIN/../lib32]
+</code></pre>
 <p>It allows <code>bin/wine</code> to load its libraries from sibling directory:
 <code>bin/../lib</code>.</p>
 <p>So, the <code>cabal configure --ghc-option=-optl-Wl,-rpath=\'$ORIGIN\'</code>
@@ -120,9 +103,11 @@ call). And <code>ghc</code> uses <code>iconv</code> heavily when performs I/O on
     [1 of 1] Compiling Main             ( minimal.hs, minimal.o )
     Linking minimal ...
     /usr/lib64/ghc-7.0.4/libHSrts.a(Linker.o): In function `internal_dlopen':
-    Linker.c:(.text+0x11f4): warning: Using 'dlopen' in statically linked applications requires at runtime the shared libraries from the glibc version used for linking</code></pre>
+    Linker.c:(.text+0x11f4): warning: Using 'dlopen' in statically linked applications requires at runtime the shared libraries from the glibc version used for linking
+</code></pre>
 <pre><code>$ ./minimal
-    minimal: mkTextEncoding: invalid argument (Invalid argument)</code></pre>
+    minimal: mkTextEncoding: invalid argument (Invalid argument)
+</code></pre>
 <p>The error comes from
 <code>ghc-7.0.4/libraries/base/GHC/IO/Encoding/Iconv.hs: newIConv</code>:
 it calls <code>iconv_open()</code>.</p>
@@ -132,6 +117,4 @@ static linking, but requires target system to have charset conversion
 shared libraries installed.</p>
 <p><code>Tl;DR</code>: just use <code>-rpath</code> thing and/or distribute your stuff in source
 form via <code>hackage</code> if possible.</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

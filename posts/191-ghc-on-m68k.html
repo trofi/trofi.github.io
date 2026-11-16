@@ -1,35 +1,10 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>GHC on m68k</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>GHC on m68k</h1>
-            
-                <div class="info">March 12, 2016</div>
-            
-
-            <p>This all started from this <a href="https://ghc.haskell.org/trac/ghc/ticket/11395"><code>ghc</code> bug
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>GHC on m68k</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>GHC on m68k</h1><div class="info">March 12, 2016</div><p>This all started from this <a href="https://ghc.haskell.org/trac/ghc/ticket/11395"><code>ghc</code> bug
 report</a>.</p>
 <p>The bug stated that on <code>m68k</code> ABI return values of <code>int</code>-type are
 passed in register <code>%d0</code> while <code>void *</code>-type are passed in register
@@ -38,26 +13,29 @@ consistently.</p>
 <p>I had zero knowledge of <code>m68k</code> at that time. I only had a vague
 impression that CPU of this type is typically attached to <code>~1MB</code> RAM or
 something. I expected the CPU to have 32 bit registers or less :)
-Portability bugs are my favorite and I’ve started The Quest by
+Portability bugs are my favorite and I've started The Quest by
 building a <code>c</code> cross-compiler. Gentoo allows you to do it with
 <code>crossdev</code> script:</p>
 <pre><code>$ crossdev -t m68k-unknown-linux-gnu
 # Done!
 
 $ m68k-unknown-linux-gnu-gcc --version
-m68k-unknown-linux-gnu-gcc (Gentoo 5.3.0 p1.0, pie-0.6.5) 5.3.0</code></pre>
-<h2 id="the-assembly">the assembly</h2>
+m68k-unknown-linux-gnu-gcc (Gentoo 5.3.0 p1.0, pie-0.6.5) 5.3.0
+</code></pre>
+<h2>the assembly</h2>
 <p><code>m68k</code> ISA is very simple. Smaller example from bug report:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="dt">long</span>   f<span class="op">(</span><span class="dt">long</span>   a<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> a<span class="op">;</span> <span class="op">}</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> <span class="op">*</span> g<span class="op">(</span><span class="dt">void</span> <span class="op">*</span> p<span class="op">)</span> <span class="op">{</span> <span class="cf">return</span> p<span class="op">;</span> <span class="op">}</span></span></code></pre></div>
-<div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a># m68k<span class="op">-</span>unknown<span class="op">-</span>linux<span class="op">-</span>gnu<span class="op">-</span>gcc <span class="op">-</span>S <span class="op">-</span>O2 <span class="op">-</span>fomit<span class="op">-</span>frame<span class="op">-</span>pointer a<span class="op">.</span>c</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">f:</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    move<span class="op">.</span>l <span class="dv">4</span><span class="op">(%</span><span class="kw">sp</span><span class="op">),%</span>d0</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    rts</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="fu">g:</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    move<span class="op">.</span>l <span class="dv">4</span><span class="op">(%</span><span class="kw">sp</span><span class="op">),%</span>a0</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    move<span class="op">.</span>l <span class="op">%</span>a0<span class="op">,%</span>d0</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    rts</span></code></pre></div>
+<pre><code class="language-c">long   f(long   a) { return a; }
+void * g(void * p) { return p; }
+</code></pre>
+<pre><code class="language-asm"># m68k-unknown-linux-gnu-gcc -S -O2 -fomit-frame-pointer a.c
+f:
+    move.l 4(%sp),%d0
+    rts
+g:
+    move.l 4(%sp),%a0
+    move.l %a0,%d0
+    rts
+</code></pre>
 <p>Real-world code example (just to get a feeling about patterns used by
 <code>gcc</code>):</p>
 <pre><code># m68k-unknown-linux-gnu-objdump -d /usr/m68k-unknown-linux-gnu/usr/bin/locale
@@ -85,9 +63,10 @@ m68k-unknown-linux-gnu-gcc (Gentoo 5.3.0 p1.0, pie-0.6.5) 5.3.0</code></pre>
 800017a2:       486e fff8       pea %fp@(-8)
 800017a6:       42a7            clrl %sp@-
 800017a8:       2f2e 000c       movel %fp@(12),%sp@-
-800017ac:       2f2e 0008       movel %fp@(8),%sp@-</code></pre>
-<h2 id="first-attempt">first attempt</h2>
-<p>“Should be easy to weed out all the bugs” was my thought :)
+800017ac:       2f2e 0008       movel %fp@(8),%sp@-
+</code></pre>
+<h2>first attempt</h2>
+<p>&quot;Should be easy to weed out all the bugs&quot; was my thought :)
 Having spent some time arguing with <code>gcc</code> devs about handling of
 incomplete prototypes in <a href="https://gcc.gnu.org/bugzilla/show_bug.cgi?id=69221"><code>gcc</code>
 bugzilla</a> and on
@@ -101,19 +80,21 @@ compiler for <code>m68k</code>:
 <p>Adrian tried to test the patch and reported <code>GHC</code> still <code>SIGSEGV</code>ed
 as before. It was not very clear if patch changed anything. Did it crash
 later than used to or did I break something subtle?</p>
-<h2 id="cross-ghc-nano-howto">cross-<code>ghc</code> nano-howto</h2>
+<h2>cross-<code>ghc</code> nano-howto</h2>
 <p>Next step was to try to actually build <code>GHC</code> as a cross-compiler.
 It appears to be as simple as building cross-<code>gcc</code>:</p>
 <pre><code>$ ./configure --target=m68k-unknown-linux-gnu --enable-unregisterised \
-              --enable-bfd-debug</code></pre>
-<p>That’s it! The first line is enough but it’s faster for subsequent
+              --enable-bfd-debug
+</code></pre>
+<p>That's it! The first line is enough but it's faster for subsequent
 rebuilds to use system dependencies and not bundled libraries. Thus
-I’ve installed dependencies to the <code>SYSROOT</code>:</p>
+I've installed dependencies to the <code>SYSROOT</code>:</p>
 <pre><code>$ ARCH=m68k emerge-m68k-unknown-linux-gnu -1 \
     sys-libs/ncurses \
     dev-libs/gmp \
     virtual/libffi \
-    sys-libs/binutils-libs</code></pre>
+    sys-libs/binutils-libs
+</code></pre>
 <p>And I got cross-<code>ghc</code>! Testing:</p>
 <pre><code>$ echo 'main = print 42' &gt; /tmp/hi.hs
 
@@ -121,22 +102,25 @@ $ inplace/bin/ghc-stage1 --make /tmp/hi.hs
 
 $ file /tmp/hi
 /tmp/hi: ELF 32-bit MSB executable, Motorola m68k, 68020, version 1 (SYSV),
-         dynamically linked, interpreter /lib/ld.so.1, for GNU/Linux 2.6.32, not stripped</code></pre>
+         dynamically linked, interpreter /lib/ld.so.1, for GNU/Linux 2.6.32, not stripped
+</code></pre>
 <p>Simple!</p>
-<h2 id="qemu-user-nano-howto"><code>qemu-user</code> nano-howto</h2>
+<h2><code>qemu-user</code> nano-howto</h2>
 <p><code>qemu</code> allows you to run not only system images (<code>qemu-system</code>) but also
 standalone executables (<code>qemu-user</code>) for foreign architectures and even
 other kernels!
-The simple usage example for <code>powerpc64</code> (it’s slightly better
+The simple usage example for <code>powerpc64</code> (it's slightly better
 supported by <code>qemu</code>) would be:</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span><span class="st">&quot;Hello world!</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span></span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+int main() {
+    printf (&quot;Hello world!\n&quot;);
+}
+</code></pre>
 <pre><code>$ powerpc64-unknown-linux-gnu-gcc a.c -o a
 
 $ /usr/bin/qemu-ppc64 -L /usr/powerpc64-unknown-linux-gnu ./a
-Hello world!</code></pre>
+Hello world!
+</code></pre>
 <p>With help of <a href="https://en.wikipedia.org/wiki/Binfmt_misc"><code>binfmt_misc</code></a>
 kernel module you can run foreign binaries seamlessly as native
 binaries. This allows running things like test suites for cross-compilers
@@ -147,18 +131,20 @@ Setup for <code>powerpc64</code>:</p>
 $ cat /qemu-ppc64 
 #!/bin/bash
 
-exec /usr/bin/qemu-ppc64 -L /usr/powerpc64-unknown-linux-gnu/ &quot;$@&quot;</code></pre>
+exec /usr/bin/qemu-ppc64 -L /usr/powerpc64-unknown-linux-gnu/ &quot;$@&quot;
+</code></pre>
 <p>Running a foreign binary:</p>
 <pre><code>$ file a
 a: ELF 64-bit MSB executable, 64-bit PowerPC or cisco 7500, version 1 (SYSV),
    dynamically linked, interpreter /lib64/ld64.so.1, for GNU/Linux 2.6.32, not stripped
 $ ./a
-Hello world!</code></pre>
+Hello world!
+</code></pre>
 <p>Gentoo has a <a href="https://wiki.gentoo.org/wiki/Crossdev_qemu-static-user-chroot">detailed wiki
 page</a> on
 how to get <code>qemu-user</code> on your system.</p>
-<h2 id="m68k-hoops"><code>m68k</code> hoops</h2>
-<p>I did the same for <code>m68k</code> but found out <code>qemu-m68k</code> can’t even run
+<h2><code>m68k</code> hoops</h2>
+<p>I did the same for <code>m68k</code> but found out <code>qemu-m68k</code> can't even run
 simplest programs:</p>
 <pre><code>$ /usr/bin/qemu-m68k -L /usr/m68k-unknown-linux-gnu ./a
 qemu: fatal: Illegal instruction: ebc0 @ f67e36a8
@@ -170,9 +156,10 @@ D4 = 00000000   A4 = 00000000   F4 = 0000000000000000 (           0)
 D5 = 00000000   A5 = f67fb774   F5 = 0000000000000000 (           0)
 D6 = 00000000   A6 = f6ffee54   F6 = 0000000000000000 (           0)
 D7 = 00000000   A7 = f6ffec04   F7 = 0000000000000000 (           0)
-PC = f67e36a8   SR = 0000 ----- FPRESULT =            0</code></pre>
+PC = f67e36a8   SR = 0000 ----- FPRESULT =            0
+</code></pre>
 <p>That means <code>qemu</code> does not support some instructions generated by <code>gcc</code>.
-<code>objdump -d</code> can help us find out if it’s a real opcode or <code>gcc</code>/<code>ld</code>
+<code>objdump -d</code> can help us find out if it's a real opcode or <code>gcc</code>/<code>ld</code>
 generated garbage:</p>
 <pre><code>$ m68k-unknown-linux-gnu-gcc -static a.c -o a
 
@@ -182,23 +169,25 @@ $ m68k-unknown-linux-gnu-objdump -d ./a  | grep ebc0
 8001ebc0:       226e 0014       moveal %fp@(20),%a1
 80037ab8:       ebc0 105f       bfexts %d0,1,31,%d1
 8003ebc0:       6612            bnes 8003ebd4 &lt;_dl_close_worker+0x96a&gt;
-80058168:       61ff ffff ebc0  bsrl 80056d2a &lt;get_cie_encoding&gt;</code></pre>
+80058168:       61ff ffff ebc0  bsrl 80056d2a &lt;get_cie_encoding&gt;
+</code></pre>
 <p><code>ebc0</code> looks like a real <code>bfexts</code> instruction (Bit Field Extract
 Signed). But Debian guys who reported a bug somehow can run <code>m68k</code>
 <code>chroot</code>!</p>
-<h2 id="hoop-1-qemu-fork">hoop #1: <code>qemu</code> fork</h2>
+<h2>hoop #1: <code>qemu</code> fork</h2>
 <p>Debian has a nice <a href="https://wiki.debian.org/M68k/sbuildQEMU">wiki page about
 it</a> Basically the trick to
-emulate <code>m68k</code> binaries is to use Laurent’s <code>qemu</code> <code>git</code> tree. It allowed
+emulate <code>m68k</code> binaries is to use Laurent's <code>qemu</code> <code>git</code> tree. It allowed
 me to run <code>c</code> hello-world.</p>
-<h2 id="hoop-2-minimum-alignment">hoop #2: minimum alignment</h2>
+<h2>hoop #2: minimum alignment</h2>
 <p>Time to try <code>haskell</code> hello-world:</p>
 <pre><code>$ echo 'main = print 42' &gt; /tmp/hi.hs
 
 $ inplace/bin/ghc-stage1 --make -debug /tmp/hi.hs
 
 $ /tmp/hi
-SIGSEGV</code></pre>
+SIGSEGV
+</code></pre>
 <p>We are on the right track. <code>qemu</code> understands all the instructions it
 sees. <code>qemu-user</code> is capable of generating nice <code>gdb</code>-readable core files:</p>
 <pre><code>$ gdb /tmp/hi qemu_hi*.core
@@ -215,54 +204,59 @@ Program terminated with signal SIGSEGV, Segmentation fault.
 #4  0x8043ffb4 in hs_init_ghc (argc=0xf6ffebf0, argv=0xf6ffebf4, rts_config=...) at rts/RtsStartup.c:181
 #5  0x80455982 in hs_main (argc=1, argv=0xf6ffed54, main_closure=0x804b8f70 &lt;ZCMain_main_closure&gt;, rts_config=...)
     at rts/RtsMain.c:51
-#6  0x80003c1c in main ()</code></pre>
+#6  0x80003c1c in main ()
+</code></pre>
 <p>These <code>+RTS -Ds -Di -Dw -DG -Dg -Db -DS -Dt -Dp -Da -Dl -Dm -Dz -Dc -Dr</code> are all flags for debug runtime. Sanity checks of sorts.
 This sanity failure basically says that it got tagged pointer where if
 should not be tagged. <code>GHC</code> uses least significant bits for closure
 pointers to distinct between evaluated and unevaluated closures. On
 32-bit systems last 2 bits are used for tags assuming those will always
 be zero.</p>
-<div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">// includes/Cmm.h</span></span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#if SIZEOF_VOID_P == 4</span></span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#define W_ bits32</span></span>
-<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="co">/* Maybe it's better to include MachDeps.h */</span></span>
-<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#define TAG_BITS                </span><span class="dv">2</span></span>
-<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif SIZEOF_VOID_P == 8</span></span>
-<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#define W_ bits64</span></span>
-<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="co">/* Maybe it's better to include MachDeps.h */</span></span>
-<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a><span class="pp">#define TAG_BITS                </span><span class="dv">3</span></span>
-<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="pp">#error Unknown word size</span></span>
-<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
-<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a><span class="co">/*</span></span>
-<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a><span class="co"> * The RTS must sometimes UNTAG a pointer before dereferencing it.</span></span>
-<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a><span class="co"> * See the wiki page Commentary/Rts/HaskellExecution/PointerTagging</span></span>
-<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a><span class="co"> */</span></span>
-<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a><span class="pp">#define TAG_MASK </span><span class="op">((</span><span class="dv">1</span><span class="pp"> </span><span class="op">&lt;&lt;</span><span class="pp"> TAG_BITS</span><span class="op">)</span><span class="pp"> </span><span class="op">-</span><span class="pp"> </span><span class="dv">1</span><span class="op">)</span></span>
-<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a><span class="pp">#define UNTAG</span><span class="op">(</span><span class="pp">p</span><span class="op">)</span><span class="pp"> </span><span class="op">(</span><span class="pp">p </span><span class="op">&amp;</span><span class="pp"> </span><span class="op">~</span><span class="pp">TAG_MASK</span><span class="op">)</span></span>
-<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a><span class="pp">#define GETTAG</span><span class="op">(</span><span class="pp">p</span><span class="op">)</span><span class="pp"> </span><span class="op">(</span><span class="pp">p </span><span class="op">&amp;</span><span class="pp"> TAG_MASK</span><span class="op">)</span></span></code></pre></div>
-<div class="sourceCode" id="cb17"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">// includes/rts/storage/ClosureMacros.h</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> StgClosure <span class="op">*</span></span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>UNTAG_CLOSURE<span class="op">(</span>StgClosure <span class="op">*</span> p<span class="op">)</span></span>
-<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span>StgClosure<span class="op">*)((</span>StgWord<span class="op">)</span>p <span class="op">&amp;</span> <span class="op">~</span>TAG_MASK<span class="op">);</span></span>
-<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">// includes/Cmm.h
+#if SIZEOF_VOID_P == 4
+#define W_ bits32
+/* Maybe it's better to include MachDeps.h */
+#define TAG_BITS                2
+#elif SIZEOF_VOID_P == 8
+#define W_ bits64
+/* Maybe it's better to include MachDeps.h */
+#define TAG_BITS                3
+#else
+#error Unknown word size
+#endif
+
+/*
+ * The RTS must sometimes UNTAG a pointer before dereferencing it.
+ * See the wiki page Commentary/Rts/HaskellExecution/PointerTagging
+ */
+#define TAG_MASK ((1 &lt;&lt; TAG_BITS) - 1)
+#define UNTAG(p) (p &amp; ~TAG_MASK)
+#define GETTAG(p) (p &amp; TAG_MASK)
+</code></pre>
+<pre><code class="language-c">// includes/rts/storage/ClosureMacros.h
+...
+static inline StgClosure *
+UNTAG_CLOSURE(StgClosure * p)
+{
+    return (StgClosure*)((StgWord)p &amp; ~TAG_MASK);
+}
+</code></pre>
 <p>Back to our backtrace. <code>stg_dummy_ret_closure</code> is an <code>int</code> array
 (untagged) with currently evaluated closure. But its address is
 clearly not aligned by 4-byte boundary:</p>
-<div class="sourceCode" id="cb18"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="dt">Prelude</span><span class="op">&gt;</span> <span class="bn">0x805aac6e</span> <span class="ot">`mod`</span> <span class="dv">4</span></span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="dv">2</span></span></code></pre></div>
+<pre><code class="language-haskell">Prelude&gt; 0x805aac6e `mod` 4
+2
+</code></pre>
 <p>Most architectures have <code>sizeof(int) == __alignof__(int)</code>
 alignment for various reasons (performance, lack of support for
 unaligned access in memory/cache unit).</p>
-<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    printf <span class="op">(</span> <span class="st">&quot;sizeof (int) = </span><span class="sc">%u</span><span class="st">, __alignof__ (int) = </span><span class="sc">%u\n</span><span class="st">&quot;</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>       <span class="op">,</span> <span class="op">(</span><span class="dt">unsigned</span><span class="op">)</span> <span class="kw">sizeof</span> <span class="op">(</span><span class="dt">int</span><span class="op">),</span> <span class="op">(</span><span class="dt">unsigned</span><span class="op">)</span> __alignof__ <span class="op">(</span><span class="dt">int</span><span class="op">));</span></span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+int main() {
+    printf ( &quot;sizeof (int) = %u, __alignof__ (int) = %u\n&quot;
+       , (unsigned) sizeof (int), (unsigned) __alignof__ (int));
+    return 0;
+}
+</code></pre>
 <p>Here is the result for a few targets:</p>
 <table>
 <thead>
@@ -327,60 +321,64 @@ fix</a>
 does roughly that.
 Python also had suspiciously similar problem <a href="http://bugs.python.org/issue17237">reported
 here</a>.</p>
-<h2 id="hoop-3-qemu-bug">hoop #3: <code>qemu</code> bug</h2>
-<p>I did not expect <code>GHC</code> to work at this time as I’ve not fixed <code>int</code>
+<h2>hoop #3: <code>qemu</code> bug</h2>
+<p>I did not expect <code>GHC</code> to work at this time as I've not fixed <code>int</code>
 / <code>void*</code> prototypes mismatch yet. But hello-world <code>haskell</code> program
 was already working!
 The next step is to try to run <code>GHC</code> test suite and see what will
 break:</p>
-<pre><code>$ make fasttest TEST_HC=$(pwd)/inplace/bin/ghc-stage1 THREADS=12</code></pre>
+<pre><code>$ make fasttest TEST_HC=$(pwd)/inplace/bin/ghc-stage1 THREADS=12
+</code></pre>
 <p><code>testsuite/mk/inplace_bin_ghc-stage1.mk</code> requires some manual tweaks
 in auto-detected variables for our cross-compiler. Updated variables:</p>
-<pre class="make"><code>WORDSIZE=32 # was 64
+<pre><code class="language-make">WORDSIZE=32 # was 64
 TARGETPLATFORM=m68k-unknown-linux # was x86_64-unknown-linux
 TargetARCH_CPP=m68k # was x86_64
-GhcWithInterpreter=NO # was YES</code></pre>
+GhcWithInterpreter=NO # was YES
+</code></pre>
 <p>What was unclear is why <code>qemu</code> itself did throw assertion errors on many
 samples:</p>
-<pre><code>qemu-m68k/tcg/tcg.c:1774: tcg fatal error</code></pre>
-<p>The samples seemingly didn’t do anything fancy. It was time to dive
+<pre><code>qemu-m68k/tcg/tcg.c:1774: tcg fatal error
+</code></pre>
+<p>The samples seemingly didn't do anything fancy. It was time to dive
 into <code>qemu</code>!
-I’ve picked one of small test cases that failed: <code>mul2</code></p>
-<div class="sourceCode" id="cb23"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- testsuite/tests/numeric/should_run/mul2.hs</span></span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# LANGUAGE MagicHash, UnboxedTuples #-}</span></span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">GHC.Prim</span></span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">GHC.Word</span></span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Data.Bits</span></span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a><span class="ot">main ::</span> <span class="dt">IO</span> ()</span>
-<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span> f <span class="dv">5</span> <span class="dv">6</span></span>
-<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>          f <span class="bn">0xFD94E3B7FE36FB18</span> <span class="dv">49</span></span>
-<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>          f <span class="bn">0xFD94E3B7FE36FB18</span> <span class="bn">0xFC1D8A3BFB29FC6A</span></span>
-<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a><span class="ot">f ::</span> <span class="dt">Word</span> <span class="ot">-&gt;</span> <span class="dt">Word</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> ()</span>
-<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>f wx<span class="op">@</span>(<span class="dt">W</span><span class="op">#</span> x) wy<span class="op">@</span>(<span class="dt">W</span><span class="op">#</span> y)</span>
-<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>    <span class="ot">=</span> <span class="kw">do</span> <span class="fu">putStrLn</span> <span class="st">&quot;-----&quot;</span></span>
-<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>         <span class="fu">putStrLn</span> (<span class="st">&quot;Doing &quot;</span> <span class="op">++</span> <span class="fu">show</span> wx <span class="op">++</span> <span class="st">&quot; * &quot;</span> <span class="op">++</span> <span class="fu">show</span> wy)</span>
-<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>         <span class="kw">case</span> x <span class="ot">`timesWord2#`</span> y <span class="kw">of</span></span>
-<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a>             (<span class="op">#</span> h, l <span class="op">#</span>) <span class="ot">-&gt;</span></span>
-<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a>                 <span class="kw">do</span> <span class="kw">let</span> wh <span class="ot">=</span> <span class="dt">W</span><span class="op">#</span> h</span>
-<span id="cb23-20"><a href="#cb23-20" aria-hidden="true" tabindex="-1"></a>                        wl <span class="ot">=</span> <span class="dt">W</span><span class="op">#</span> l</span>
-<span id="cb23-21"><a href="#cb23-21" aria-hidden="true" tabindex="-1"></a>                        r <span class="ot">=</span> shiftL (<span class="fu">fromIntegral</span> wh) (bitSize wh)</span>
-<span id="cb23-22"><a href="#cb23-22" aria-hidden="true" tabindex="-1"></a>                          <span class="op">+</span> <span class="fu">fromIntegral</span> wl</span>
-<span id="cb23-23"><a href="#cb23-23" aria-hidden="true" tabindex="-1"></a>                    <span class="fu">putStrLn</span> (<span class="st">&quot;High: &quot;</span> <span class="op">++</span> <span class="fu">show</span> wh)</span>
-<span id="cb23-24"><a href="#cb23-24" aria-hidden="true" tabindex="-1"></a>                    <span class="fu">putStrLn</span> (<span class="st">&quot;Low: &quot;</span> <span class="op">++</span> <span class="fu">show</span> wl)</span>
-<span id="cb23-25"><a href="#cb23-25" aria-hidden="true" tabindex="-1"></a>                    <span class="fu">putStrLn</span> (<span class="st">&quot;Result: &quot;</span> <span class="op">++</span> <span class="fu">show</span> (<span class="ot">r ::</span> <span class="dt">Integer</span>))</span></code></pre></div>
+I've picked one of small test cases that failed: <code>mul2</code></p>
+<pre><code class="language-haskell">-- testsuite/tests/numeric/should_run/mul2.hs
+{-# LANGUAGE MagicHash, UnboxedTuples #-}
+
+import GHC.Prim
+import GHC.Word
+import Data.Bits
+
+main :: IO ()
+main = do f 5 6
+          f 0xFD94E3B7FE36FB18 49
+          f 0xFD94E3B7FE36FB18 0xFC1D8A3BFB29FC6A
+
+f :: Word -&gt; Word -&gt; IO ()
+f wx@(W# x) wy@(W# y)
+    = do putStrLn &quot;-----&quot;
+         putStrLn (&quot;Doing &quot; ++ show wx ++ &quot; * &quot; ++ show wy)
+         case x `timesWord2#` y of
+             (# h, l #) -&gt;
+                 do let wh = W# h
+                        wl = W# l
+                        r = shiftL (fromIntegral wh) (bitSize wh)
+                          + fromIntegral wl
+                    putStrLn (&quot;High: &quot; ++ show wh)
+                    putStrLn (&quot;Low: &quot; ++ show wl)
+                    putStrLn (&quot;Result: &quot; ++ show (r :: Integer))
+</code></pre>
 <p>Stepping aside a few words on how <code>qemu</code> works:
 <code>qemu</code> is a tiny jit compiler which has the following passes:</p>
-<ol type="1">
+<ol>
 <li><code>target native instructions</code> -&gt; <code>TCG IR</code>: <code>JIT</code> decodes
-target’s instructions and translates them into intermediate
+target's instructions and translates them into intermediate
 representation (<code>TCG</code>).</li>
 <li><code>TCG IR</code> -&gt; <code>TCG IR</code>: a few basic optimisations like dead
 store elimination</li>
 <li><code>TCG IR</code> -&gt; <code>host-native instructions</code>: intermediate
-representation is then compiled to host’s instruction set</li>
+representation is then compiled to host's instruction set</li>
 <li><code>execute host-native instructions</code>: executed host code; return
 status explains why generated code finished</li>
 </ol>
@@ -389,7 +387,7 @@ sequence-by-sequence basis. <code>qemu</code> (simplified) disassembles up to th
 first branching instruction.
 Our <code>qemu</code> assertion happens in pass <code>3.</code> <a href="https://github.com/qemu/qemu/blob/master/tcg/tcg.c#L1774">somewhere
 here</a>
-To find out bad instruction sequence it’s enough to run <code>qemu</code> with
+To find out bad instruction sequence it's enough to run <code>qemu</code> with
 <code>-d in_asm</code> flag. It dumps whatever is read by pass <code>1.</code></p>
 <pre><code>$ qemu-m68k-git -d in_asm -L /usr/m68k-unknown-linux-gnu/ /tmp/mul2
 ----------------
@@ -408,13 +406,15 @@ IN:
 0xf550c828:  subql #1,%d6
 0xf550c82a:  beqs 0xf550c856
 #
-qemu-m68k/tcg/tcg.c:1774: tcg fatal error</code></pre>
+qemu-m68k/tcg/tcg.c:1774: tcg fatal error
+</code></pre>
 <p>The offending instruction sequence was quite large but it was easy to
 trim it down to 2 instructions:</p>
-<div class="sourceCode" id="cb25"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">_start:</span></span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    asll <span class="op">#</span><span class="dv">2</span><span class="op">,%</span>d0</span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    movel <span class="op">%</span>a0<span class="fu">@</span><span class="er">,</span><span class="op">%</span>d2</span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    rts</span></code></pre></div>
+<pre><code class="language-asm">_start:
+    asll #2,%d0
+    movel %a0@,%d2
+    rts
+</code></pre>
 <p>I copied original disassembly dump, pasted it in a text file
 and built a tiny program from it (removing instructions one by one):</p>
 <pre><code>$ m68k-unknown-linux-gnu-gcc -nostdlib -nostartfiles m68k.S -o foo
@@ -425,15 +425,17 @@ $ qemu-m68k-git -d in_asm -L /usr/m68k-unknown-linux-gnu/ ./foo
 #    0x80000054:  asll #2,%d0
 #    0x80000056:  movel %a0@,%d2
 #    0x80000058:  rts
-#    qemu-m68k/tcg/tcg.c:1774: tcg fatal error</code></pre>
-<p>We don’t need to get a working program. It’s enough to keep <code>qemu</code>
+#    qemu-m68k/tcg/tcg.c:1774: tcg fatal error
+</code></pre>
+<p>We don't need to get a working program. It's enough to keep <code>qemu</code>
 crashing in <code>TCG</code> pass.
-Having explored failure a bit more I found out it’s enough to have
+Having explored failure a bit more I found out it's enough to have
 single bad instruction to appear and crash <code>qemu</code>:</p>
-<div class="sourceCode" id="cb27"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a># m68k<span class="op">.</span>S</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="fu">_start:</span></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    asll <span class="op">#</span><span class="dv">1</span><span class="op">,%</span>d0</span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>    br _start</span></code></pre></div>
+<pre><code class="language-asm"># m68k.S
+_start:
+    asll #1,%d0
+    br _start
+</code></pre>
 <p>Using <code>qemu</code>s <code>-d op</code> flag allows us to look at intermediate
 representation of <code>TCG</code>:</p>
 <pre><code>$ m68k-unknown-linux-gnu-gcc -nostdlib -nostartfiles m68k.S -o foo
@@ -452,67 +454,72 @@ $ qemu-m68k-git -d in_asm,op -L ./foo
  movi_i32 tmp3,$0x1e  # tmp3 = 30
  shr_i32 CC_V,D0,tmp3 # CC_V = D0 &lt;&lt; tmp3
  sar_i32 tmp2,D0,tmp2 # tmp2 = D0 &gt;&gt; tmp2, but tmp2 is used uninitilalized!
- ...</code></pre>
+ ...
+</code></pre>
 <p>Our tiny instruction got translated to a pile of intermediate <code>muop</code>s. An
 interesting fact: <code>tmp2</code> (a temporary register) is used in <code>sar_i32</code>
 without initialization.
-It’s clearly <code>qemu</code> decoding pass <code>1.</code> bug (could have been optimizing pass
+It's clearly <code>qemu</code> decoding pass <code>1.</code> bug (could have been optimizing pass
 <code>2.</code> but I disabled it manually) which generates read from freshly introduced
 temp register.</p>
-<div class="sourceCode" id="cb29"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere in target-m68k/translate.c</span></span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="kw">inline</span> <span class="dt">void</span> shift_im<span class="op">(</span>DisasContext <span class="op">*</span>s<span class="op">,</span> <span class="dt">uint16_t</span> insn<span class="op">,</span> <span class="dt">int</span> opsize<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="op">....</span></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>            TCGv t0 <span class="op">=</span> tcg_temp_new<span class="op">();</span></span>
-<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>            tcg_gen_shri_i32<span class="op">(</span>QREG_CC_V<span class="op">,</span> reg<span class="op">,</span> bits <span class="op">-</span> <span class="dv">1</span> <span class="op">-</span> count<span class="op">);</span></span>
-<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>            tcg_gen_sar_i32<span class="op">(</span>t0<span class="op">,</span> reg<span class="op">,</span> t0<span class="op">);</span> <span class="co">// that's our broken shift!</span></span>
-<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>            tcg_gen_not_i32<span class="op">(</span>t0<span class="op">,</span> t0<span class="op">);</span></span>
-<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>            <span class="op">...</span></span></code></pre></div>
+<pre><code class="language-c">// somewhere in target-m68k/translate.c
+static inline void shift_im(DisasContext *s, uint16_t insn, int opsize) {
+....
+            TCGv t0 = tcg_temp_new();
+            tcg_gen_shri_i32(QREG_CC_V, reg, bits - 1 - count);
+            tcg_gen_sar_i32(t0, reg, t0); // that's our broken shift!
+            tcg_gen_not_i32(t0, t0);
+            ...
+</code></pre>
 <p>I fixed that with <a href="https://github.com/vivier/qemu-m68k/pull/7">the simple
 patch</a> and reran test suite
 again.</p>
-<h2 id="hoop-4-cross-compiling-doubles-is-hard">hoop #4: cross-compiling doubles is hard</h2>
+<h2>hoop #4: cross-compiling doubles is hard</h2>
 <p>Or not that hard :) A lot of floating-point related tests worked without
 crashes but resulted in garbage outputs.
 The broken test was to print a <code>Float</code> (32bit <code>float</code> type in
 <code>c</code>-speak):</p>
-<div class="sourceCode" id="cb30"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="ot">v ::</span> <span class="dt">Float</span></span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>v <span class="ot">=</span> <span class="dv">43</span></span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="fu">print</span> v <span class="co">-- prints &quot;0.0&quot;</span></span></code></pre></div>
-<p>This code printed <code>"0.0"</code> when was built with <code>ghc-stage1</code>. At this
+<pre><code class="language-haskell">v :: Float
+v = 43
+main = print v -- prints &quot;0.0&quot;
+</code></pre>
+<p>This code printed <code>&quot;0.0&quot;</code> when was built with <code>ghc-stage1</code>. At this
 point I looked up if <code>m68k</code> was a big-endian platform by chance.
 And it was!
 <code>GHC</code> does weird things to encode double values in generated code.
-Basically it uses platform’s pointer-sized integrals to encode
+Basically it uses platform's pointer-sized integrals to encode
 everything. <code>GHC</code> calls the type <code>StgWord</code>:</p>
-<div class="sourceCode" id="cb31"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co">// somewhere in includes/stg/Types.h</span></span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#if SIZEOF_INT == 4</span></span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">int</span>             StgWord32<span class="op">;</span></span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#elif SIZEOF_LONG == 4</span></span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">unsigned</span> <span class="dt">long</span>            StgWord32<span class="op">;</span></span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a><span class="pp">#error GHC untested on this architecture: sizeof(int) != 4</span></span>
-<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
-<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a><span class="pp">#if SIZEOF_VOID_P == 8</span></span>
-<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> StgWord64          StgWord<span class="op">;</span></span>
-<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a><span class="pp">#if SIZEOF_VOID_P == 4</span></span>
-<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> StgWord32          StgWord<span class="op">;</span></span>
-<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a><span class="pp">#error GHC untested on this architecture: sizeof(void *) != 4 or 8</span></span>
-<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
-<span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
+<pre><code class="language-C">// somewhere in includes/stg/Types.h
+#if SIZEOF_INT == 4
+typedef unsigned int             StgWord32;
+#elif SIZEOF_LONG == 4
+typedef unsigned long            StgWord32;
+#else
+#error GHC untested on this architecture: sizeof(int) != 4
+#endif
+...
+#if SIZEOF_VOID_P == 8
+typedef StgWord64          StgWord;
+#else
+#if SIZEOF_VOID_P == 4
+typedef StgWord32          StgWord;
+#else
+#error GHC untested on this architecture: sizeof(void *) != 4 or 8
+#endif
+#endif
+</code></pre>
 <p>Thus in the end of the day <code>GHC</code> encodes <code>double</code> and <code>float</code>
 values as <code>StgWord closure[] = { (StgWord)&amp;useful_callback, 0x00000000, 0x40458000, ... }</code>.
-It’s an interesting question: how <code>43.0</code> should look like in this encoding?
-Let’s write a small program:</p>
-<div class="sourceCode" id="cb32"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">double</span> d <span class="op">=</span> <span class="fl">43.0</span><span class="op">;</span></span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">float</span> f  <span class="op">=</span> <span class="fl">43.0</span><span class="op">;</span></span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="op">*</span> i2 <span class="op">=</span> <span class="op">&amp;</span>d<span class="op">;</span>      printf <span class="op">(</span><span class="st">&quot;i[2]: </span><span class="sc">%08X</span><span class="st"> </span><span class="sc">%08X\n</span><span class="st">&quot;</span><span class="op">,</span> i2<span class="op">[</span><span class="dv">0</span><span class="op">],</span> i2<span class="op">[</span><span class="dv">1</span><span class="op">]);</span></span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">long</span> <span class="dt">long</span> <span class="op">*</span> l <span class="op">=</span> <span class="op">&amp;</span>d<span class="op">;</span> printf <span class="op">(</span><span class="st">&quot;   l: </span><span class="sc">%016llX\n</span><span class="st">&quot;</span><span class="op">,</span>   l<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
-<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> <span class="op">*</span> i <span class="op">=</span> <span class="op">&amp;</span>f<span class="op">;</span>       printf <span class="op">(</span><span class="st">&quot;   i: </span><span class="sc">%08X\n</span><span class="st">&quot;</span><span class="op">,</span>      i<span class="op">[</span><span class="dv">0</span><span class="op">]);</span></span>
-<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+It's an interesting question: how <code>43.0</code> should look like in this encoding?
+Let's write a small program:</p>
+<pre><code class="language-c">int main() {
+    double d = 43.0;
+    float f  = 43.0;
+    int * i2 = &amp;d;      printf (&quot;i[2]: %08X %08X\n&quot;, i2[0], i2[1]);
+    long long * l = &amp;d; printf (&quot;   l: %016llX\n&quot;,   l[0]);
+    int * i = &amp;f;       printf (&quot;   i: %08X\n&quot;,      i[0]);
+}
+</code></pre>
 <p>And run it:</p>
 <pre><code># 64bit-LE
 $ x86_64-pc-linux-gnu-gcc a.c -o a &amp;&amp; ./a
@@ -542,14 +549,15 @@ i[2]: 40458000 00000000
 $ sparc64-unknown-linux-gnu-gcc a.c -o a &amp;&amp; ./a
 i[2]: 40458000 00000000
    l: 4045800000000000
-   i: 422C0000</code></pre>
+   i: 422C0000
+</code></pre>
 <p>The only thing that changes here is the order of elements of <code>i[2]</code>
 array. Just as like you would see if you stored 64-bit integral value.
 The problem in original code was the assumption of target having the
 same endianness as a host. It took me a while to fix it cleanly in
 <code>GHC</code>: <a href="https://git.haskell.org/ghc.git/commitdiff/c42cdb7f6dcfd519d9607ac9fa53f049b2922fb8">the
 result</a>.</p>
-<h2 id="hoop-5-cmm-call-annotations">hoop #5: <code>Cmm</code> call annotations</h2>
+<h2>hoop #5: <code>Cmm</code> call annotations</h2>
 <p>Even more tests started working better but some <code>SIGSEGV</code>s still
 remained. I looked at one example and noticed stack squeezing code
 consistently crashed garbage collector right after
@@ -560,73 +568,78 @@ low-level code written to deal with closures) is <a href="https://en.wikipedia.o
 (c-minus-minus)</a>
 Suppose we need to call external <code>c</code> function from <code>haskell</code>. Typical
 <code>cmm</code> code would look like that:</p>
-<div class="sourceCode" id="cb34"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>foo<span class="op">(</span>bits32 a<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>    bits32 r<span class="op">;</span></span>
-<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span>r<span class="op">)</span> <span class="op">=</span> foreign <span class="st">&quot;C&quot;</span> cfun<span class="op">(</span>a<span class="op">);</span></span>
-<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="op">(</span>r<span class="op">);</span></span>
-<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">foo(bits32 a) {
+    bits32 r;
+    (r) = foreign &quot;C&quot; cfun(a);
+    return (r);
+}
+</code></pre>
 <p>Generated <code>c</code> code for it looks like that:</p>
-<div class="sourceCode" id="cb35"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ inplace/bin/ghc-stage1 -c -keep-tmp-files a.cmm</span></span>
-<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat /tmp/ghc22508_0/ghc_3.hc</span></span>
-<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="co">/* GHC_PACKAGES</span></span>
-<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a><span class="co">*/</span></span>
-<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;Stg.h&quot;</span></span>
-<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>EFF_<span class="op">(</span>cfun<span class="op">);</span></span>
-<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>FN_<span class="op">(</span>foo<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>StgWord32 _c1<span class="op">;</span></span>
-<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>StgWord32 _c2<span class="op">;</span></span>
-<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>W_ _c3<span class="op">;</span></span>
-<span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a>StgWord32 _c4<span class="op">;</span></span>
-<span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a>_c5<span class="op">:</span></span>
-<span id="cb35-14"><a href="#cb35-14" aria-hidden="true" tabindex="-1"></a>_c1 <span class="op">=</span> R1<span class="op">.</span>w<span class="op">;</span></span>
-<span id="cb35-15"><a href="#cb35-15" aria-hidden="true" tabindex="-1"></a>_c3 <span class="op">=</span> <span class="op">(</span>W_<span class="op">)&amp;</span>cfun<span class="op">;</span></span>
-<span id="cb35-16"><a href="#cb35-16" aria-hidden="true" tabindex="-1"></a>_c4 <span class="op">=</span> _c1<span class="op">;</span></span>
-<span id="cb35-17"><a href="#cb35-17" aria-hidden="true" tabindex="-1"></a>_c2 <span class="op">=</span> <span class="op">((</span>StgWord32 <span class="op">(*)(</span>StgWord32<span class="op">))</span>_c3<span class="op">)(</span>_c4<span class="op">);;</span></span>
-<span id="cb35-18"><a href="#cb35-18" aria-hidden="true" tabindex="-1"></a>R1<span class="op">.</span>w <span class="op">=</span> _c2<span class="op">;</span></span>
-<span id="cb35-19"><a href="#cb35-19" aria-hidden="true" tabindex="-1"></a>JMP_<span class="op">(*((</span>P_<span class="op">)(*</span>Sp<span class="op">)));</span></span>
-<span id="cb35-20"><a href="#cb35-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p>Let’s tweak original example and add a hint to result type:</p>
-<div class="sourceCode" id="cb36"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,6 +1,6 @@</span></span>
-<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>     foo(bits32 a) {</span>
-<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>         bits32 r;</span>
-<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a><span class="st">-        (r) = foreign &quot;C&quot; cfun(a);</span></span>
-<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="va">+        (&quot;ptr&quot; r) = foreign &quot;C&quot; cfun(a);</span></span>
-<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>         return (r);</span>
-<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>     }</span></code></pre></div>
-<div class="sourceCode" id="cb37"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -1,18 +1,18 @@</span></span>
-<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>     /* GHC_PACKAGES</span>
-<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>     */</span>
-<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>     #include &quot;Stg.h&quot;</span>
-<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a> ....</span>
-<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>     EFF_(cfun);</span>
-<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>     FN_(foo) {</span>
-<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>     StgWord32 _c1;</span>
-<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>     StgWord32 _c2;</span>
-<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a>     W_ _c3;</span>
-<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a>     StgWord32 _c4;</span>
-<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a>     _c5:</span>
-<span id="cb37-13"><a href="#cb37-13" aria-hidden="true" tabindex="-1"></a>     _c1 = R1.w;</span>
-<span id="cb37-14"><a href="#cb37-14" aria-hidden="true" tabindex="-1"></a>     _c3 = (W_)&amp;cfun;</span>
-<span id="cb37-15"><a href="#cb37-15" aria-hidden="true" tabindex="-1"></a>     _c4 = _c1;</span>
-<span id="cb37-16"><a href="#cb37-16" aria-hidden="true" tabindex="-1"></a><span class="st">-    _c2 = ((StgWord32 (*)(StgWord32))_c3)(_c4);;</span></span>
-<span id="cb37-17"><a href="#cb37-17" aria-hidden="true" tabindex="-1"></a><span class="va">+    _c2 = (StgWord32)((void * (*)(StgWord32))_c3)(_c4);;</span></span>
-<span id="cb37-18"><a href="#cb37-18" aria-hidden="true" tabindex="-1"></a>     R1.w = _c2;</span>
-<span id="cb37-19"><a href="#cb37-19" aria-hidden="true" tabindex="-1"></a>     JMP_(*((P_)(*Sp)));</span>
-<span id="cb37-20"><a href="#cb37-20" aria-hidden="true" tabindex="-1"></a>     }</span></code></pre></div>
-<p>On most 32-bit platforms this change does nothing. But on <code>m68k</code> it’s
+<pre><code class="language-c">// $ inplace/bin/ghc-stage1 -c -keep-tmp-files a.cmm
+// $ cat /tmp/ghc22508_0/ghc_3.hc
+/* GHC_PACKAGES
+*/
+#include &quot;Stg.h&quot;
+
+EFF_(cfun);
+FN_(foo) {
+StgWord32 _c1;
+StgWord32 _c2;
+W_ _c3;
+StgWord32 _c4;
+_c5:
+_c1 = R1.w;
+_c3 = (W_)&amp;cfun;
+_c4 = _c1;
+_c2 = ((StgWord32 (*)(StgWord32))_c3)(_c4);;
+R1.w = _c2;
+JMP_(*((P_)(*Sp)));
+}
+</code></pre>
+<p>Let's tweak original example and add a hint to result type:</p>
+<pre><code class="language-diff">@@ -1,6 +1,6 @@
+     foo(bits32 a) {
+         bits32 r;
+-        (r) = foreign &quot;C&quot; cfun(a);
++        (&quot;ptr&quot; r) = foreign &quot;C&quot; cfun(a);
+         return (r);
+     }
+</code></pre>
+<pre><code class="language-diff">@@ -1,18 +1,18 @@
+     /* GHC_PACKAGES
+     */
+     #include &quot;Stg.h&quot;
+ ....
+     EFF_(cfun);
+     FN_(foo) {
+     StgWord32 _c1;
+     StgWord32 _c2;
+     W_ _c3;
+     StgWord32 _c4;
+     _c5:
+     _c1 = R1.w;
+     _c3 = (W_)&amp;cfun;
+     _c4 = _c1;
+-    _c2 = ((StgWord32 (*)(StgWord32))_c3)(_c4);;
++    _c2 = (StgWord32)((void * (*)(StgWord32))_c3)(_c4);;
+     R1.w = _c2;
+     JMP_(*((P_)(*Sp)));
+     }
+</code></pre>
+<p>On most 32-bit platforms this change does nothing. But on <code>m68k</code> it's
 precisely what flips between <code>%d0</code> and <code>%a0</code> return registers.
 The fix for this issue looks <a href="https://git.haskell.org/ghc.git/commitdiff/e46742f5c51938bc7c992ac37fecc6df8cab7647">like
 that</a>.
-I tried to eyeball most of calls’ return values but could have easily
+I tried to eyeball most of calls' return values but could have easily
 missed something.
 At this point I got <code>GHC</code>i working:</p>
 <pre><code>$ inplace/bin/ghc-stage2 --interactive
 GHCi, version 8.1.20160305: http://www.haskell.org/ghc/  :? for help
-Loaded GHCi configuration from /home/slyfox/.ghci</code></pre>
-<h2 id="the-result">The result</h2>
+Loaded GHCi configuration from /home/slyfox/.ghci
+</code></pre>
+<h2>The result</h2>
 <p>Not all tests are passing yet. But the result is good enough for people
-to try out <code>GHC</code> and fix the bugs themselves. I’ve triaged some of
+to try out <code>GHC</code> and fix the bugs themselves. I've triaged some of
 these failures but did not bother fixing them yet.</p>
 <p>Fun facts (as usual):</p>
 <ul>
@@ -635,7 +648,7 @@ these failures but did not bother fixing them yet.</p>
 <li><code>m68k</code> has alignment 2 (less than natural alignment)</li>
 <li><code>m68k</code> is a rare system which uses different registers for integral
 and pointer types</li>
-<li><code>qemu</code> (and it’s <code>TCG</code>) is a fun tiny project to play with :)</li>
+<li><code>qemu</code> (and it's <code>TCG</code>) is a fun tiny project to play with :)</li>
 <li><code>binfmt_misc</code> <code>linux</code> kernel feature can run arbitrary binaries as
 executables on your system</li>
 <li><code>double</code>s are not as scary as I thought :)</li>
@@ -643,6 +656,4 @@ executables on your system</li>
 target for cross-compilation :)</li>
 </ul>
 <p>Thanks!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

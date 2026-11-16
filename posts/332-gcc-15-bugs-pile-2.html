@@ -1,41 +1,16 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>gcc-15 bugs, pile 2</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>gcc-15 bugs, pile 2</h1>
-            
-                <div class="info">April 19, 2025</div>
-            
-
-            <p>8 more months have passed since my previous
-<a href="../posts/323-gcc-15-bugs-pile-1.html">pile report</a>. <code>gcc-15</code> was
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>gcc-15 bugs, pile 2</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>gcc-15 bugs, pile 2</h1><div class="info">April 19, 2025</div><p>8 more months have passed since my previous
+<a href="323-gcc-15-bugs-pile-1.html">pile report</a>. <code>gcc-15</code> was
 <a href="https://gcc.gnu.org/pipermail/gcc/2025-April/245943.html">branched off</a>
 from <code>master</code> and will receive only regression fixes. <code>master</code> is called
 <code>gcc-16</code> now.</p>
-<p>It’s a good time to look at the compiler bugs I encountered.</p>
-<h2 id="summary">summary</h2>
+<p>It's a good time to look at the compiler bugs I encountered.</p>
+<h2>summary</h2>
 <p>I got about 30 of those:</p>
 <ul>
 <li><a href="https://gcc.gnu.org/PR116516"><code>rtl-optimization/116516</code></a>: ICE on
@@ -116,85 +91,89 @@ wrong code on bit reset due to a wrong <code>btr</code> pattern.</li>
 code where coroutine types and values cause <code>gcc</code> to fail to handle
 more complicated (but allowed by standard) cases.</li>
 </ul>
-<h2 id="fun-bugs">fun bugs</h2>
-<h3 id="e2fsprogs-bug"><code>e2fsprogs</code> bug</h3>
+<h2>fun bugs</h2>
+<h3><code>e2fsprogs</code> bug</h3>
 <p>The <a href="https://gcc.gnu.org/PR119428"><code>e2fsprogs bug</code></a> was an interesting
 case of wrong code. This was enough to trigger it:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat bug.c</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">,</span> optimize<span class="op">(</span><span class="dv">1</span><span class="op">)))</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> bug_o1<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">int</span> nr<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span> addr<span class="op">)</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">char</span>   <span class="op">*</span>ADDR <span class="op">=</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">char</span> <span class="op">*)</span> addr<span class="op">;</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>        ADDR <span class="op">+=</span> nr <span class="op">&gt;&gt;</span> <span class="dv">3</span><span class="op">;</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>ADDR <span class="op">&amp;=</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">char</span><span class="op">)</span> <span class="op">~(</span><span class="dv">1</span> <span class="op">&lt;&lt;</span> <span class="op">(</span>nr <span class="op">&amp;</span> <span class="bn">0x07</span><span class="op">));</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">,</span> optimize<span class="op">(</span><span class="dv">2</span><span class="op">)))</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> bug_o2<span class="op">(</span><span class="dt">unsigned</span> <span class="dt">int</span> nr<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span> addr<span class="op">)</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>        <span class="dt">unsigned</span> <span class="dt">char</span>   <span class="op">*</span>ADDR <span class="op">=</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">char</span> <span class="op">*)</span> addr<span class="op">;</span></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>        ADDR <span class="op">+=</span> nr <span class="op">&gt;&gt;</span> <span class="dv">3</span><span class="op">;</span></span>
-<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>ADDR <span class="op">&amp;=</span> <span class="op">(</span><span class="dt">unsigned</span> <span class="dt">char</span><span class="op">)</span> <span class="op">~(</span><span class="dv">1</span> <span class="op">&lt;&lt;</span> <span class="op">(</span>nr <span class="op">&amp;</span> <span class="bn">0x07</span><span class="op">));</span></span>
-<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">*</span> bmo1 <span class="op">=</span> __builtin_malloc<span class="op">(</span><span class="dv">1024</span><span class="op">);</span></span>
-<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">*</span> bmo2 <span class="op">=</span> __builtin_malloc<span class="op">(</span><span class="dv">1024</span><span class="op">);</span></span>
-<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span><span class="dt">unsigned</span> bno <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> bno <span class="op">&lt;</span> <span class="dv">1024</span> <span class="op">*</span> <span class="dv">8</span><span class="op">;</span> <span class="op">++</span>bno<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>    __builtin_memset<span class="op">(</span>bmo1<span class="op">,</span> <span class="bn">0xff</span><span class="op">,</span> <span class="dv">1024</span><span class="op">);</span></span>
-<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>    __builtin_memset<span class="op">(</span>bmo2<span class="op">,</span> <span class="bn">0xff</span><span class="op">,</span> <span class="dv">1024</span><span class="op">);</span></span>
-<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>    bug_o1<span class="op">(</span>bno<span class="op">,</span> bmo1<span class="op">);</span></span>
-<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a>    bug_o2<span class="op">(</span>bno<span class="op">,</span> bmo2<span class="op">);</span></span>
-<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>__builtin_memcmp<span class="op">(</span>bmo1<span class="op">,</span> bmo2<span class="op">,</span> <span class="dv">1024</span><span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span></span>
-<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>      __builtin_trap<span class="op">();</span></span>
-<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">// $ cat bug.c
+__attribute__((noipa, optimize(1)))
+void bug_o1(unsigned int nr, void * addr)
+{
+        unsigned char   *ADDR = (unsigned char *) addr;
+
+        ADDR += nr &gt;&gt; 3;
+        *ADDR &amp;= (unsigned char) ~(1 &lt;&lt; (nr &amp; 0x07));
+}
+
+__attribute__((noipa, optimize(2)))
+void bug_o2(unsigned int nr, void * addr)
+{
+        unsigned char   *ADDR = (unsigned char *) addr;
+
+        ADDR += nr &gt;&gt; 3;
+        *ADDR &amp;= (unsigned char) ~(1 &lt;&lt; (nr &amp; 0x07));
+}
+
+int main() {
+  void * bmo1 = __builtin_malloc(1024);
+  void * bmo2 = __builtin_malloc(1024);
+  for (unsigned bno = 0; bno &lt; 1024 * 8; ++bno) {
+    __builtin_memset(bmo1, 0xff, 1024);
+    __builtin_memset(bmo2, 0xff, 1024);
+    bug_o1(bno, bmo1);
+    bug_o2(bno, bmo2);
+    if (__builtin_memcmp(bmo1, bmo2, 1024) != 0)
+      __builtin_trap();
+  }
+}
+</code></pre>
 <p>Crashing as:</p>
 <pre><code>$ gcc bug.c -o bug -O0 &amp;&amp; ./bug
-Illegal instruction (core dumped)</code></pre>
+Illegal instruction (core dumped)
+</code></pre>
 <p>The <code>gcc</code> <a href="https://gcc.gnu.org/cgit/gcc/commit/?id=584b346a4c7a6e6e77da6dc80968401a3c08161d">fix</a>
 amends mask calculation as:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/config/i386/i386.md</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/config/i386/i386.md</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -18168,7 +18168,8 @@</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  [(set (match_dup 4) (match_dup 1))</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>   (set (match_dup 0)</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        (any_rotate:SWI (match_dup 4)</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="st">-		       (subreg:QI (match_dup 2) 0)))]</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="va">+		       (subreg:QI</span></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="va">+			 (and:SI (match_dup 2) (match_dup 3)) 0)))]</span></span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  &quot;operands[4] = gen_reg_rtx (&lt;MODE&gt;mode);&quot;)</span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a> </span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a> (define_insn_and_split &quot;*&lt;insn&gt;&lt;mode&gt;3_mask_1&quot;</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -18202,7 +18203,8 @@</span></span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>   == GET_MODE_BITSIZE (&lt;MODE&gt;mode) - 1&quot;</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>  [(set (match_dup 4) (match_dup 1))</span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>   (set (match_dup 0)</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="st">-       (any_rotate:SWI (match_dup 4) (match_dup 2)))]</span></span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="va">+       (any_rotate:SWI (match_dup 4)</span></span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="va">+		       (and:QI (match_dup 2) (match_dup 3))))]</span></span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  &quot;operands[4] = gen_reg_rtx (&lt;MODE&gt;mode);&quot;)</span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a> </span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a> (define_insn_and_split &quot;*&lt;insn&gt;&lt;mode&gt;3_add&quot;</span></code></pre></div>
+<pre><code class="language-diff">--- a/gcc/config/i386/i386.md
++++ b/gcc/config/i386/i386.md
+@@ -18168,7 +18168,8 @@
+  [(set (match_dup 4) (match_dup 1))
+   (set (match_dup 0)
+        (any_rotate:SWI (match_dup 4)
+-		       (subreg:QI (match_dup 2) 0)))]
++		       (subreg:QI
++			 (and:SI (match_dup 2) (match_dup 3)) 0)))]
+  &quot;operands[4] = gen_reg_rtx (&lt;MODE&gt;mode);&quot;)
+ 
+ (define_insn_and_split &quot;*&lt;insn&gt;&lt;mode&gt;3_mask_1&quot;
+@@ -18202,7 +18203,8 @@
+   == GET_MODE_BITSIZE (&lt;MODE&gt;mode) - 1&quot;
+  [(set (match_dup 4) (match_dup 1))
+   (set (match_dup 0)
+-       (any_rotate:SWI (match_dup 4) (match_dup 2)))]
++       (any_rotate:SWI (match_dup 4)
++		       (and:QI (match_dup 2) (match_dup 3))))]
+  &quot;operands[4] = gen_reg_rtx (&lt;MODE&gt;mode);&quot;)
+ 
+ (define_insn_and_split &quot;*&lt;insn&gt;&lt;mode&gt;3_add&quot;
+</code></pre>
 <p>Here <code>gcc</code> incorrectly compiled <code>bug_o2()</code> into a single <code>btr</code>
 instruction. <code>gcc</code> assumed <code>btr</code> performs a typical 8-bit mask on
-register operand like other instructions do. But in case of <code>btr</code> it’s
+register operand like other instructions do. But in case of <code>btr</code> it's
 a 3/4/5-bit mask (for 8/16/32-bit offsets).</p>
-<h3 id="mesonlsp-bug"><code>mesonlsp</code> bug</h3>
+<h3><code>mesonlsp</code> bug</h3>
 <p>The <a href="https://gcc.gnu.org/PR118856"><code>mesonlsp</code> bug</a> was also interesting.
 There seemingly trivial code:</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat bug.cpp</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string&gt;</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;vector&gt;</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(){</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span><span class="at">const</span> <span class="kw">auto</span> <span class="op">&amp;</span>vec <span class="op">:</span> <span class="bu">std::</span>vector<span class="op">&lt;</span><span class="bu">std::</span>vector<span class="op">&lt;</span><span class="bu">std::</span>string<span class="op">&gt;&gt;{</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>           <span class="op">{</span><span class="st">&quot;aaa&quot;</span><span class="op">},</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>       <span class="op">})</span> <span class="op">{</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c++">// $ cat bug.cpp
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+int main(){
+  for (const auto &amp;vec : std::vector&lt;std::vector&lt;std::string&gt;&gt;{
+           {&quot;aaa&quot;},
+       }) {
+  }
+}
+</code></pre>
 <p>crashed at runtime:</p>
 <pre><code># ok
 $ g++ bug.cpp -o bug -fsanitize=address
@@ -253,13 +232,14 @@ Shadow byte legend (one shadow byte represents 8 application bytes):
   ASan internal:           fe
   Left alloca redzone:     ca
   Right alloca redzone:    cb
-==3828042==ABORTING</code></pre>
-<p>It’s a use-after-free bug. Caused by the <code>gcc</code> bugs in temporary
+==3828042==ABORTING
+</code></pre>
+<p>It's a use-after-free bug. Caused by the <code>gcc</code> bugs in temporary
 variables lifetime tracking. The <code>gcc</code> fixes
 (<a href="https://gcc.gnu.org/cgit/gcc/commit/?id=e96e1bb69c7b46db18e747ee379a62681bc8c82d">one</a>,
 <a href="https://gcc.gnu.org/cgit/gcc/commit/?id=720c8f685210af9fc9c31810e224751102f1481e">two</a>)
-are not very small, thus I’ll not post them here.</p>
-<h2 id="histograms">histograms</h2>
+are not very small, thus I'll not post them here.</p>
+<h2>histograms</h2>
 <p>As usual what are the subsystems we found the bugs in?</p>
 <ul>
 <li><code>c++</code>: 8</li>
@@ -277,16 +257,14 @@ are not very small, thus I’ll not post them here.</p>
 <p>Surprisingly this time <code>c++</code> is at the top of the list. It feels like
 coroutine related bugs pushed the needle. Otherwise, <code>middle-end</code> and
 <code>tree-optimization</code> that follow are expected.</p>
-<h2 id="parting-words">parting words</h2>
+<h2>parting words</h2>
 <p>Of the bugs above it looks like I reported only 18 of those while 13
 were already reported by others.</p>
 <p>Optimized handling of global constant arrays (<code>#embed</code>-style code) caused
 numerous bugs in various subsystems from compiler crashes to wrong code.</p>
 <p>The most disruptive change probably is the switch to
-<a href="../posts/326-gcc-15-switched-to-c23.html"><code>c23</code></a>.</p>
+<a href="326-gcc-15-switched-to-c23.html"><code>c23</code></a>.</p>
 <p>Past month was very quiet from <code>gcc</code> bugs view. <code>gcc-15</code> is in a good
 shape to be released.</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

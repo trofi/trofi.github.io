@@ -1,35 +1,10 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>sparc relocations</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>sparc relocations</h1>
-            
-                <div class="info">December 19, 2011</div>
-            
-
-            <p>Заметил я как-то однажды в <code>lkml</code>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>sparc relocations</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>sparc relocations</h1><div class="info">December 19, 2011</div><p>Заметил я как-то однажды в <code>lkml</code>
 <a href="https://lkml.org/lkml/2011/11/12/57">письмо</a> от Rob Landley (больше
 всего знаменитого авторством <a href="http://busybox.net/~landley/"><code>busybox</code></a>).</p>
 <p>В письме описана проблема загрузки <code>sparc32</code> ядра <code>linux</code> в
@@ -38,7 +13,8 @@
 Patching kernel for srmmu[Fujitsu TurboSparc]/iommu
 Fixup i f029ddfc doesn't refer to a valid instruction at
 f00de648[95eea000]
-halt, power off</code></pre>
+halt, power off
+</code></pre>
 <p>Выглядело непонятно и до ужаса интересно. К письму даже прилагается
 работавшее ядро 3.0 и минимальный юзерленд.</p>
 <p>Чуть позже я забыл про это письмо. Но спустя пару недель на
@@ -47,7 +23,8 @@ halt, power off</code></pre>
 20:06 &lt; landley&gt; Ah, significantly more people in here than on #sparc, maybe somebody here can figure out http://lkml.org/lkml/2011/11/12/57
 20:06 &lt; landley&gt; Sparc apparently has some kind of dynamic symbol relocator, and it barfs mightily on the ext4 code.
 20:06 &lt; landley&gt; As in it tries to relocate one of those register wheel instructions.
-20:08 &lt; landley&gt; I blogged about it at http://landley.net/notes.html#12-11-2011 but haven't made any progress fixing it since...</code></pre>
+20:08 &lt; landley&gt; I blogged about it at http://landley.net/notes.html#12-11-2011 but haven't made any progress fixing it since...
+</code></pre>
 <p>Я понял, что мне не отвертеться и придется корчить из себя
 гентушника-спарковода. Rob интересовался что за код настраивает
 релокации и кто их генерирует.</p>
@@ -109,8 +86,9 @@ halt, power off</code></pre>
 генерятся хитро: они разделяются не по типу релокаций, которые надо
 фиксить, а по простоте того, как их фиксить.</p>
 <p>Например, обращение к глобальной переменной выглядит примерно так:</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode asm"><code class="sourceCode fasm"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>sethi   <span class="op">%</span>hi<span class="op">(</span>bar<span class="op">),</span> <span class="op">%</span>g1          <span class="op">!</span> <span class="dv">1</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>ld     <span class="op">[%</span>g1<span class="op">+%</span>lo<span class="op">(</span>bar<span class="op">)],</span> <span class="op">%</span>o0     <span class="op">!</span> <span class="dv">2</span></span></code></pre></div>
+<pre><code class="language-asm">sethi   %hi(bar), %g1          ! 1
+ld     [%g1+%lo(bar)], %o0     ! 2
+</code></pre>
 <p>Грузится старших <code>22</code> бита (<code>1</code>: релокация <code>R_SPARC_HI22</code>) в
 регистр <code>%g1</code>, потом складывается с младшими <code>10</code> (<code>2</code>: релокация
 <code>R_SPARC_LO10</code>).</p>
@@ -121,18 +99,19 @@ halt, power off</code></pre>
 значит <code>HI22</code> релокация, иначе (но не всегда) - <code>LO10</code>.</p>
 <p>Посмотрим теперь на настройку релокаций
 (<code>arch/sparc/mm/btfixup.c</code>:<code>btfixup()</code>):</p>
-<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="op">....</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="cf">case</span> <span class="ch">'i'</span><span class="op">:</span>       <span class="co">/* INT */</span></span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">((</span>insn <span class="op">&amp;</span> <span class="bn">0xc1c00000</span><span class="op">)</span> <span class="op">==</span> <span class="bn">0x01000000</span><span class="op">)</span> <span class="co">/* %HI */</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>            set_addr<span class="op">(</span>addr<span class="op">,</span> q<span class="op">[</span><span class="dv">1</span><span class="op">],</span> fmangled<span class="op">,</span> <span class="op">(</span>insn <span class="op">&amp;</span> <span class="bn">0xffc00000</span><span class="op">)</span> <span class="op">|</span> <span class="op">(</span>p<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">&gt;&gt;</span> <span class="dv">10</span><span class="op">));</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="cf">if</span> <span class="op">((</span>insn <span class="op">&amp;</span> <span class="bn">0x80002000</span><span class="op">)</span> <span class="op">==</span> <span class="bn">0x80002000</span> <span class="op">&amp;&amp;</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>             <span class="op">(</span>insn <span class="op">&amp;</span> <span class="bn">0x01800000</span><span class="op">)</span> <span class="op">!=</span> <span class="bn">0x01800000</span><span class="op">)</span> <span class="co">/* %LO */</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>            set_addr<span class="op">(</span>addr<span class="op">,</span> q<span class="op">[</span><span class="dv">1</span><span class="op">],</span> fmangled<span class="op">,</span> <span class="op">(</span>insn <span class="op">&amp;</span> <span class="bn">0xffffe000</span><span class="op">)</span> <span class="op">|</span> <span class="op">(</span>p<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">&amp;</span> <span class="bn">0x3ff</span><span class="op">));</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">else</span> <span class="op">{</span></span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>            prom_printf<span class="op">(</span>insn_i<span class="op">,</span> p<span class="op">,</span> addr<span class="op">,</span> insn<span class="op">);</span></span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>            prom_halt<span class="op">();</span></span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span><span class="op">;</span></span></code></pre></div>
+<pre><code class="language-c">....
+case 'i':       /* INT */
+    if ((insn &amp; 0xc1c00000) == 0x01000000) /* %HI */
+            set_addr(addr, q[1], fmangled, (insn &amp; 0xffc00000) | (p[1] &gt;&gt; 10));
+    else if ((insn &amp; 0x80002000) == 0x80002000 &amp;&amp;
+             (insn &amp; 0x01800000) != 0x01800000) /* %LO */
+            set_addr(addr, q[1], fmangled, (insn &amp; 0xffffe000) | (p[1] &amp; 0x3ff));
+    else {
+            prom_printf(insn_i, p, addr, insn);
+            prom_halt();
+    }
+    break;
+</code></pre>
 <p>В <code>insn</code> хранится код инструкции по адресу настраиваемой релокации. В
 <code>p[1]</code> хранится разрешенный адрес (куда указывает релокация).</p>
 <p>Чтобы понять эту битовую кашу надо чуточку знать формат инструкций.
@@ -152,7 +131,8 @@ halt, power off</code></pre>
 .op=10
 .op=11. rest-reg  . op3         . reg-src-1 . i .          reg-src-2
 [ b b | r r r r r | o o o o o o | r r r r r | 0 | ???????? r r r r r ]
-[ b b | r r r r r | o o o o o o | r r r r r | 1 | signed-imm13       ]</code></pre>
+[ b b | r r r r r | o o o o o o | r r r r r | 1 | signed-imm13       ]
+</code></pre>
 <p>Всё не так страшно.</p>
 <p>Теперь становится очевидно, что <code>(insn &amp; 0xc1c00000) == 0x01000000)</code>
 вылавливает такую инструкцию:</p>
@@ -168,23 +148,23 @@ halt, power off</code></pre>
 угодили автору - не ясно, но в нашем случае</p>
 <pre><code>Fixup i f029ddfc doesn't refer to a valid instruction at
 f00de648[95eea000]
-halt, power off</code></pre>
+halt, power off
+</code></pre>
 <p>туда попадает обычная релокация для инструкции <code>0x95eea000</code>
 (инструкция <code>RESTORE</code>, <code>tail call</code>).</p>
 <p>Фикс простой как грабли:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/arch/sparc/mm/btfixup.c</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/arch/sparc/mm/btfixup.c</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -302,8 +302,7 @@ void __init btfixup(void)</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    case 'i':       /* INT */</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>            if ((insn &amp; 0xc1c00000) == 0x01000000) /* %HI */</span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                    set_addr(addr, q[1], fmangled, (insn &amp; 0xffc00000) | (p[1] &gt;&gt; 10));</span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="st">-           else if ((insn &amp; 0x80002000) == 0x80002000 &amp;&amp;</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="st">-                    (insn &amp; 0x01800000) != 0x01800000) /* %LO */</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="va">+           else if ((insn &amp; 0x80002000) == 0x80002000) /* %LO */</span></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>                    set_addr(addr, q[1], fmangled, (insn &amp; 0xffffe000) | (p[1] &amp; 0x3ff));</span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>            else {</span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>                    prom_printf(insn_i, p, addr, insn);</span></code></pre></div>
+<pre><code class="language-diff">--- a/arch/sparc/mm/btfixup.c
++++ b/arch/sparc/mm/btfixup.c
+@@ -302,8 +302,7 @@ void __init btfixup(void)
+    case 'i':       /* INT */
+            if ((insn &amp; 0xc1c00000) == 0x01000000) /* %HI */
+                    set_addr(addr, q[1], fmangled, (insn &amp; 0xffc00000) | (p[1] &gt;&gt; 10));
+-           else if ((insn &amp; 0x80002000) == 0x80002000 &amp;&amp;
+-                    (insn &amp; 0x01800000) != 0x01800000) /* %LO */
++           else if ((insn &amp; 0x80002000) == 0x80002000) /* %LO */
+                    set_addr(addr, q[1], fmangled, (insn &amp; 0xffffe000) | (p[1] &amp; 0x3ff));
+            else {
+                    prom_printf(insn_i, p, addr, insn);
+</code></pre>
 <p>После этого ядро радостно грузится в <code>qemu</code>!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

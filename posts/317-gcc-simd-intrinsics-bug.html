@@ -1,58 +1,34 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>gcc simd intrinsics bug</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>gcc simd intrinsics bug</h1>
-            
-                <div class="info">June 16, 2024</div>
-            
-
-            <p><code>highway</code> keeps yielding very interesting <code>gcc</code> bugs. Some of them are
-so obscure that I don’t even understand <code>gcc</code> developers’ comments on
-where the bug lies: in <code>highway</code> or on <code>gcc</code>. In this post I’ll explore
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>gcc simd intrinsics bug</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>gcc simd intrinsics bug</h1><div class="info">June 16, 2024</div><p><code>highway</code> keeps yielding very interesting <code>gcc</code> bugs. Some of them are
+so obscure that I don't even understand <code>gcc</code> developers' comments on
+where the bug lies: in <code>highway</code> or on <code>gcc</code>. In this post I'll explore
 <a href="https://gcc.gnu.org/PR115161"><code>PR115161</code></a> report here as an example of
 how <code>gcc</code> handles <code>simd</code> intrinsics.</p>
-<h2 id="simplest-xmm-intrinsics-example">simplest <code>xmm</code> intrinsics example</h2>
-<p>Let’s start from an example based on another closely related bug:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;emmintrin.h&gt;</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdint.h&gt;</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> __m128i  iv <span class="op">=</span> _mm_set1_epi32<span class="op">(</span><span class="bn">0x4f000000</span><span class="op">);</span> <span class="co">// 1</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> __m128   fv <span class="op">=</span> _mm_castsi128_ps<span class="op">(</span>iv<span class="op">);</span>       <span class="co">// 2</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> __m128i riv <span class="op">=</span> _mm_cvttps_epi32<span class="op">(</span>fv<span class="op">);</span>       <span class="co">// 3</span></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span> r<span class="op">[</span><span class="dv">4</span><span class="op">];</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>    memcpy<span class="op">(</span>r<span class="op">,</span> <span class="op">&amp;</span>riv<span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>r<span class="op">));</span></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;</span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x\n</span><span class="st">&quot;</span><span class="op">,</span> r<span class="op">[</span><span class="dv">0</span><span class="op">],</span> r<span class="op">[</span><span class="dv">1</span><span class="op">],</span> r<span class="op">[</span><span class="dv">2</span><span class="op">],</span> r<span class="op">[</span><span class="dv">3</span><span class="op">]);</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h2>simplest <code>xmm</code> intrinsics example</h2>
+<p>Let's start from an example based on another closely related bug:</p>
+<pre><code class="language-c">#include &lt;emmintrin.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;string.h&gt;
+
+int main(void) {
+    const __m128i  iv = _mm_set1_epi32(0x4f000000); // 1
+    const __m128   fv = _mm_castsi128_ps(iv);       // 2
+    const __m128i riv = _mm_cvttps_epi32(fv);       // 3
+
+    uint32_t r[4];
+    memcpy(r, &amp;riv, sizeof(r));
+    printf(&quot;%#08x %#08x %#08x %#08x\n&quot;, r[0], r[1], r[2], r[3]);
+}
+</code></pre>
 <p>The above example implements a vectored form of <code>(int)2147483648.0</code>
 conversion using following steps:</p>
-<ol type="1">
+<ol>
 <li>Place 4 identical 32-bit integer <code>0x4f000000</code> values into 128-bit
 <code>iv</code> variable (likely an <code>xmm</code> register).</li>
 <li>Bit cast <code>4 x 0x4f00000</code> into <code>4 x 2147483648.0</code> of 32-bit <code>floats</code>.</li>
@@ -61,7 +37,7 @@ truncating the fractional part and leaving the integer one.</li>
 <li>Print the conversion result in hexadecimal form.</li>
 </ol>
 <p>Or the same in pictures:</p>
-<img src="../posts.data.inline/317-gcc-simd-intrinsics-bug/fig-0.gv.svg" />
+<img src="../posts.data.inline/317-gcc-simd-intrinsics-bug/fig-0.gv.svg" alt="" />
 <p>Note: <code>2147483648.0</code> is exactly 2<sup>31</sup>. Maximum <code>int32_t</code> can hold is
 2<sup>31</sup>-1, or <code>2147483647</code> (one less than our value at hand).</p>
 <p><strong>Quick quiz: What should this example return? Does it depend on the
@@ -75,10 +51,11 @@ says that <code>_mm_cvttps_epi32()</code> is a <code>cvttps2dq</code> instructio
 0x80000000 0x80000000 0x80000000 0x80000000
 
 $ gcc -Wall a.c -o a1 -O1 &amp;&amp; ./a1
-0x7fffffff 0x7fffffff 0x7fffffff 0x7fffffff</code></pre>
+0x7fffffff 0x7fffffff 0x7fffffff 0x7fffffff
+</code></pre>
 <p>Optimization levels do change the behaviour of the code when
-overflow happens: sometimes the result is 2<sup>31</sup> and sometimes it’s
-2<sup>31</sup>-1. Uh-oh. Let’s have a peek at the assembly of both cases.</p>
+overflow happens: sometimes the result is 2<sup>31</sup> and sometimes it's
+2<sup>31</sup>-1. Uh-oh. Let's have a peek at the assembly of both cases.</p>
 <p><code>-O0</code> case:</p>
 <pre><code>$ rizin ./a0
 [0x00401050]&gt; aaaa
@@ -110,8 +87,9 @@ overflow happens: sometimes the result is 2<sup>31</sup> and sometimes it’s
           movl  %eax, %esi
           movl  $0, %eax
           callq sym.imp.printf                       ; sym.imp.printf ; int printf(const char *format)
-; ...</code></pre>
-<p>While it’s a lot of superfluous code we do see there <code>cvttps2dq</code>
+; ...
+</code></pre>
+<p>While it's a lot of superfluous code we do see there <code>cvttps2dq</code>
 instruction and <code>printf()</code> call against its result.</p>
 <p><code>-O1</code> case:</p>
 <pre><code>$ rizin ./a1
@@ -131,39 +109,41 @@ instruction and <code>printf()</code> call against its result.</p>
           callq sym.imp.__printf_chk                 ; sym.imp.__printf_chk
           movl  $0, %eax
           addq  $8, %rsp
-          retq</code></pre>
-<p>Here we don’t see <code>cvttps2dq</code> at all! <code>gcc</code> just puts <code>0x7fffffff</code>
+          retq
+</code></pre>
+<p>Here we don't see <code>cvttps2dq</code> at all! <code>gcc</code> just puts <code>0x7fffffff</code>
 constants into registers and calls <code>printf()</code> directly.
-For completeness let’s try to find out the exact optimization pass that
+For completeness let's try to find out the exact optimization pass that
 performs this constant folding. Normally I would expect it to be a tree
 optimization, and thus <code>-fdump-tree-all</code> would tell me where the magic
 happens. Alas:</p>
-<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ gcc a.c -o a -O2 -fdump-tree-all &amp;&amp; ./a</span></span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat a.c.265t.optimized</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="op">;;</span> Function main <span class="op">(</span>main<span class="op">,</span> funcdef_no<span class="op">=</span><span class="dv">574</span><span class="op">,</span> decl_uid<span class="op">=</span><span class="dv">6511</span><span class="op">,</span> cgraph_uid<span class="op">=</span><span class="dv">575</span><span class="op">,</span> symbol_order<span class="op">=</span><span class="dv">574</span><span class="op">)</span> <span class="op">(</span>executed once<span class="op">)</span></span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main <span class="op">()</span></span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _2<span class="op">;</span></span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  vector<span class="op">(</span><span class="dv">4</span><span class="op">)</span> <span class="dt">int</span> _3<span class="op">;</span></span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _4<span class="op">;</span></span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _5<span class="op">;</span></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">unsigned</span> <span class="dt">int</span> _6<span class="op">;</span></span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>  <span class="op">&lt;</span>bb <span class="dv">2</span><span class="op">&gt;</span> <span class="op">[</span>local count<span class="op">:</span> <span class="dv">1073741824</span><span class="op">]:</span></span>
-<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>  _3 <span class="op">=</span> __builtin_ia32_cvttps2dq <span class="op">({</span> <span class="fl">2.147483648e+9</span><span class="op">,</span> <span class="fl">2.147483648e+9</span><span class="op">,</span> <span class="fl">2.147483648e+9</span><span class="op">,</span> <span class="fl">2.147483648e+9</span> <span class="op">});</span></span>
-<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  _2 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">96</span><span class="op">&gt;;</span></span>
-<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>  _6 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">64</span><span class="op">&gt;;</span></span>
-<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>  _4 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">32</span><span class="op">&gt;;</span></span>
-<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>  _5 <span class="op">=</span> BIT_FIELD_REF <span class="op">&lt;</span>_3<span class="op">,</span> <span class="dv">32</span><span class="op">,</span> <span class="dv">0</span><span class="op">&gt;;</span></span>
-<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>  __printf_chk <span class="op">(</span><span class="dv">2</span><span class="op">,</span> <span class="st">&quot;</span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x</span><span class="st"> </span><span class="sc">%#08x\n</span><span class="st">&quot;</span><span class="op">,</span> _5<span class="op">,</span> _4<span class="op">,</span> _6<span class="op">,</span> _2<span class="op">);</span></span>
-<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">// $ gcc a.c -o a -O2 -fdump-tree-all &amp;&amp; ./a
+// $ cat a.c.265t.optimized
+
+;; Function main (main, funcdef_no=574, decl_uid=6511, cgraph_uid=575, symbol_order=574) (executed once)
+
+int main ()
+{
+  unsigned int _2;
+  vector(4) int _3;
+  unsigned int _4;
+  unsigned int _5;
+  unsigned int _6;
+
+  &lt;bb 2&gt; [local count: 1073741824]:
+  _3 = __builtin_ia32_cvttps2dq ({ 2.147483648e+9, 2.147483648e+9, 2.147483648e+9, 2.147483648e+9 });
+  _2 = BIT_FIELD_REF &lt;_3, 32, 96&gt;;
+  _6 = BIT_FIELD_REF &lt;_3, 32, 64&gt;;
+  _4 = BIT_FIELD_REF &lt;_3, 32, 32&gt;;
+  _5 = BIT_FIELD_REF &lt;_3, 32, 0&gt;;
+  __printf_chk (2, &quot;%#08x %#08x %#08x %#08x\n&quot;, _5, _4, _6, _2);
+  return 0;
+
+}
+</code></pre>
 <p>Here we see that <code>_mm_set1_epi32()</code> and <code>_mm_castsi128_ps()</code> were
-“folded” into a <code>2.147483648e+9</code> successfully, but <code>_mm_cvttps_epi32()</code>
-was not. And yet the final assembly does not contain the call. Let’s
+&quot;folded&quot; into a <code>2.147483648e+9</code> successfully, but <code>_mm_cvttps_epi32()</code>
+was not. And yet the final assembly does not contain the call. Let's
 look at the <code>RTL</code> passes that usually follow <code>tree</code> ones as part
 of the optimization:</p>
 <pre><code>$ gcc a.c -o a -O2 -fdump-rtl-all-slim &amp;&amp; ./a
@@ -231,8 +211,9 @@ a.c.349r.shorten
 a.c.350r.nothrow
 a.c.351r.dwarf2
 a.c.352r.final
-a.c.353r.dfinish</code></pre>
-<p>It’s a long list of passes! Let’s look at the first <code>266r.expand</code>:</p>
+a.c.353r.dfinish
+</code></pre>
+<p>It's a long list of passes! Let's look at the first <code>266r.expand</code>:</p>
 <pre><code>$ cat a.c.266r.expand
 ;;
 ;; Full RTL generated for this function:
@@ -265,17 +246,19 @@ a.c.353r.dfinish</code></pre>
       REG_CALL_DECL `__printf_chk'
    25: r103:SI=0
    29: ax:SI=r103:SI
-   30: use ax:SI</code></pre>
+   30: use ax:SI
+</code></pre>
 <p>Here <code>V4SF</code> means the vector type of 4 floats, <code>V4SI</code> is a vector type
 of 4 <code>int</code>, <code>SI</code> is an <code>int</code> type, <code>DI</code> is a <code>long</code> type. It looks like
 our <code>float-&gt;int32_t</code> conversion happens in two early <code>RTL</code> instructions:</p>
 <pre><code>    5: r106:V4SF=vec_duplicate([`*.LC1'])
     6: r105:V4SF=r106:V4SF
       REG_EQUAL const_vector
-    7: r104:V4SI=fix(r105:V4SF)</code></pre>
+    7: r104:V4SI=fix(r105:V4SF)
+</code></pre>
 <p>The rest of <code>RTL</code> code is extraction of that result as <code>printf()</code>
-arguments. It’s a lot of superfluous data moves. Later optimizations
-should clean it up and assign “hardware” registers like <code>r9</code> to virtual
+arguments. It's a lot of superfluous data moves. Later optimizations
+should clean it up and assign &quot;hardware&quot; registers like <code>r9</code> to virtual
 registers like <code>r108</code>. For completeness final <code>353r.dfinish</code> looks this
 way:</p>
 <pre><code>$ cat a.c.353r.dfinish
@@ -316,8 +299,9 @@ way:</p>
    30: use ax:SI
    38: simple_return
    41: barrier
-   33: NOTE_INSN_DELETED</code></pre>
-<p>Here we don’t have <code>fix()</code> calls any more. <code>printf()</code> call already
+   33: NOTE_INSN_DELETED
+</code></pre>
+<p>Here we don't have <code>fix()</code> calls any more. <code>printf()</code> call already
 contains immediate <code>r8:SI=0x7fffffff</code> constants. All registers are
 resolved to real register names. Searching for <code>fix()</code> in all the pass
 files I found that <code>272r.cse1</code> was the last pass that mentioned it.
@@ -331,7 +315,8 @@ fix_truncv4sfv4si2}
                 (const_int 2147483647 [0x7fffffff]) repeated x4
             ])
         (expr_list:REG_DEAD (reg:V4SF 105)
-            (nil))))</code></pre>
+            (nil))))
+</code></pre>
 <p><code>fix_truncv4sfv4si2()</code> is the name of function that implements conversion
 from <code>fix()</code> call down to the lower level instructions. And it looks
 like <code>fix()</code> expansion also derived that the finals result is a constant:
@@ -349,107 +334,112 @@ written as <code>(int)(2147483648.0f)</code>. Apparently both <code>0x7fffffff</
 <p>The problem is that <code>_mm_cvttps_epi32()</code> is more specific than any valid
 <code>float-&gt;int</code> conversion. <code>intel</code> manual specifically says that at
 <a href="https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html"><code>CVTTPS2DQ</code> description</a>
-in <code>"Intel® 64 and IA-32 Architectures Software Developer’s Manual Combined Volumes: 1, 2A, 2B, 2C, 2D, 3A, 3B, 3C, 3D, and 4"</code>:</p>
+in <code>&quot;Intel® 64 and IA-32 Architectures Software Developer’s Manual Combined Volumes: 1, 2A, 2B, 2C, 2D, 3A, 3B, 3C, 3D, and 4&quot;</code>:</p>
 <pre><code>Description
 ...
 When a conversion is inexact, a truncated (round toward zero) value is
 returned. If a converted result is larger than the maximum signed
 doubleword integer, the floating-point invalid exception is raised, and
 if this exception is masked, the indefinite integer value (80000000H) is
-returned.</code></pre>
+returned.
+</code></pre>
 <p>Thus, <code>0x80000000</code> would be a correct value here and not <code>0x7fffffff</code>.</p>
-<h2 id="avoiding-the-_mm_cvttps_epi32-non-determinism">avoiding the <code>_mm_cvttps_epi32()</code> non-determinism</h2>
+<h2>avoiding the <code>_mm_cvttps_epi32()</code> non-determinism</h2>
 <p>OK, <code>gcc</code> decided to treat it as problematic when handling overflow
 condition. That should be easy to work around by checking first if our
 value is in range first, right? Say, something like the following
 pseudocode:</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="dt">float</span> v <span class="op">=</span> <span class="fl">2147483648.0</span><span class="bu">f</span><span class="op">;</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int32_t</span> result<span class="op">;</span></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="op">(</span>v <span class="op">&gt;=</span> <span class="fl">2147483648.0</span><span class="bu">f</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    result <span class="op">=</span> <span class="bn">0x7fffffff</span><span class="op">;</span></span>
-<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
-<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    result <span class="op">=</span> fix<span class="op">(</span>v<span class="op">);</span></span>
-<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">float v = 2147483648.0f;
+int32_t result;
+if (v &gt;= 2147483648.0f) {
+    result = 0x7fffffff;
+} else {
+    result = fix(v);
+}
+</code></pre>
 <p>In a vectored code writing branching code is problematic, thus one needs
 to be creative and use masking. That is what <code>highway</code> did in
-<a href="https://github.com/google/highway/commit/9dc6e1ecb0748df78398b037d6a8a89e667702e7"><code>avoid GCC "UB" in truncating cases</code></a>
-commit. It’s a lot of code, but it’s idea is to mask away values
+<a href="https://github.com/google/highway/commit/9dc6e1ecb0748df78398b037d6a8a89e667702e7"><code>avoid GCC &quot;UB&quot; in truncating cases</code></a>
+commit. It's a lot of code, but it's idea is to mask away values
 calculated against overflows:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -10884,7 +10869,11 @@ HWY_API VFromD&lt;D&gt; ConvertInRangeTo(D /*di*/, VFromD&lt;RebindToFloat&lt;D&gt;&gt; v) {</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a> // F32 to I32 ConvertTo is generic for all vector lengths</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a> template &lt;class D, HWY_IF_I32_D(D)&gt;</span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a> HWY_API VFromD&lt;D&gt; ConvertTo(D di, VFromD&lt;RebindToFloat&lt;D&gt;&gt; v) {</span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="st">-  return detail::FixConversionOverflow(di, v, ConvertInRangeTo(di, v));</span></span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="va">+  const RebindToFloat&lt;decltype(di)&gt; df;</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="va">+  // See comment at the first occurrence of &quot;IfThenElse(overflow,&quot;.</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  const MFromD&lt;D&gt; overflow = RebindMask(di, Ge(v, Set(df, 2147483648.0f)));</span></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="va">+  return IfThenElse(overflow, Set(di, LimitsMax&lt;int32_t&gt;()),</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="va">+                    ConvertInRangeTo(di, v));</span></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<pre><code class="language-diff">@@ -10884,7 +10869,11 @@ HWY_API VFromD&lt;D&gt; ConvertInRangeTo(D /*di*/, VFromD&lt;RebindToFloat&lt;D&gt;&gt; v) {
+ // F32 to I32 ConvertTo is generic for all vector lengths
+ template &lt;class D, HWY_IF_I32_D(D)&gt;
+ HWY_API VFromD&lt;D&gt; ConvertTo(D di, VFromD&lt;RebindToFloat&lt;D&gt;&gt; v) {
+-  return detail::FixConversionOverflow(di, v, ConvertInRangeTo(di, v));
++  const RebindToFloat&lt;decltype(di)&gt; df;
++  // See comment at the first occurrence of &quot;IfThenElse(overflow,&quot;.
++  const MFromD&lt;D&gt; overflow = RebindMask(di, Ge(v, Set(df, 2147483648.0f)));
++  return IfThenElse(overflow, Set(di, LimitsMax&lt;int32_t&gt;()),
++                    ConvertInRangeTo(di, v));
+ }
+</code></pre>
 <p>If we amend our original example with this tweak we will get the
 following equivalent code:</p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">// $ cat bug.cc</span></span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdint.h&gt;</span></span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;string.h&gt;</span></span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;emmintrin.h&gt;</span></span>
-<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
-<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> assert_eq_p<span class="op">(</span><span class="dt">void</span> <span class="op">*</span> l<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span> r<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> lb<span class="op">[</span><span class="dv">16</span><span class="op">];</span></span>
-<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> rb<span class="op">[</span><span class="dv">16</span><span class="op">];</span></span>
-<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    __builtin_memcpy<span class="op">(</span>lb<span class="op">,</span> l<span class="op">,</span> <span class="dv">16</span><span class="op">);</span></span>
-<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    __builtin_memcpy<span class="op">(</span>rb<span class="op">,</span> r<span class="op">,</span> <span class="dv">16</span><span class="op">);</span></span>
-<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>__builtin_memcmp<span class="op">(</span>lb<span class="op">,</span> rb<span class="op">,</span> <span class="dv">16</span><span class="op">)</span> <span class="op">!=</span> <span class="dv">0</span><span class="op">)</span> __builtin_trap<span class="op">();</span></span>
-<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a><span class="pp">#if 0</span></span>
-<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a><span class="co">#include &lt;stdio.h&gt;</span></span>
-<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a><span class="co">__attribute__((noipa))</span></span>
-<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a><span class="co">static void d_i(const char * prefix, __m128i p) {</span></span>
-<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a><span class="co">    uint64_t v[2];</span></span>
-<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a><span class="co">    memcpy(v, &amp;p, 16);</span></span>
-<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a><span class="co">    fprintf(stderr, </span><span class="st">&quot;</span><span class="sc">%10s</span><span class="st">(i): </span><span class="sc">%#016lx</span><span class="st"> </span><span class="sc">%#016lx\n</span><span class="st">&quot;</span><span class="co">, prefix, v[0], v[1]);</span></span>
-<span id="cb14-25"><a href="#cb14-25" aria-hidden="true" tabindex="-1"></a><span class="co">}</span></span>
-<span id="cb14-26"><a href="#cb14-26" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span>
-<span id="cb14-27"><a href="#cb14-27" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-28"><a href="#cb14-28" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noipa<span class="op">))</span></span>
-<span id="cb14-29"><a href="#cb14-29" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> assert_eq<span class="op">(</span>__m128i l<span class="op">,</span> __m128i r<span class="op">)</span> <span class="op">{</span> assert_eq_p<span class="op">(&amp;</span>l<span class="op">,</span> <span class="op">&amp;</span>r<span class="op">);</span> <span class="op">}</span></span>
-<span id="cb14-30"><a href="#cb14-30" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-31"><a href="#cb14-31" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">()</span> <span class="op">{</span></span>
-<span id="cb14-32"><a href="#cb14-32" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i su <span class="op">=</span> _mm_set1_epi32<span class="op">(</span><span class="bn">0x4f000000</span><span class="op">);</span></span>
-<span id="cb14-33"><a href="#cb14-33" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128  sf <span class="op">=</span> _mm_castsi128_ps<span class="op">(</span>su<span class="op">);</span></span>
-<span id="cb14-34"><a href="#cb14-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-35"><a href="#cb14-35" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128  overflow_mask_f32 <span class="op">=</span> _mm_cmpge_ps<span class="op">(</span>sf<span class="op">,</span> _mm_set1_ps<span class="op">(</span><span class="fl">2147483648.0</span><span class="bu">f</span><span class="op">));</span></span>
-<span id="cb14-36"><a href="#cb14-36" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i overflow_mask <span class="op">=</span> _mm_castps_si128<span class="op">(</span>overflow_mask_f32<span class="op">);</span></span>
-<span id="cb14-37"><a href="#cb14-37" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-38"><a href="#cb14-38" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i conv <span class="op">=</span> _mm_cvttps_epi32<span class="op">(</span>sf<span class="op">);</span></span>
-<span id="cb14-39"><a href="#cb14-39" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i yes <span class="op">=</span> _mm_set1_epi32<span class="op">(</span>INT32_MAX<span class="op">);</span></span>
-<span id="cb14-40"><a href="#cb14-40" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-41"><a href="#cb14-41" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i a <span class="op">=</span> _mm_and_si128<span class="op">(</span>overflow_mask<span class="op">,</span> yes<span class="op">);</span></span>
-<span id="cb14-42"><a href="#cb14-42" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i na <span class="op">=</span> _mm_andnot_si128<span class="op">(</span>overflow_mask<span class="op">,</span> conv<span class="op">);</span></span>
-<span id="cb14-43"><a href="#cb14-43" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-44"><a href="#cb14-44" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i conv_masked <span class="op">=</span> _mm_or_si128<span class="op">(</span>a<span class="op">,</span> na<span class="op">);</span></span>
-<span id="cb14-45"><a href="#cb14-45" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-46"><a href="#cb14-46" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i actual <span class="op">=</span> _mm_cmpeq_epi32<span class="op">(</span>conv_masked<span class="op">,</span> _mm_set1_epi32<span class="op">(</span>INT32_MAX<span class="op">));</span></span>
-<span id="cb14-47"><a href="#cb14-47" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> __m128i expected <span class="op">=</span> _mm_set1_epi32<span class="op">(-</span><span class="dv">1</span><span class="op">);</span></span>
-<span id="cb14-48"><a href="#cb14-48" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-49"><a href="#cb14-49" aria-hidden="true" tabindex="-1"></a>  assert_eq<span class="op">(</span>expected<span class="op">,</span> actual<span class="op">);</span></span>
-<span id="cb14-50"><a href="#cb14-50" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">// $ cat bug.cc
+#include &lt;stdint.h&gt;
+#include &lt;string.h&gt;
+#include &lt;emmintrin.h&gt;
+
+__attribute__((noipa))
+static void assert_eq_p(void * l, void * r) {
+    char lb[16];
+    char rb[16];
+
+    __builtin_memcpy(lb, l, 16);
+    __builtin_memcpy(rb, r, 16);
+
+    if (__builtin_memcmp(lb, rb, 16) != 0) __builtin_trap();
+}
+
+#if 0
+#include &lt;stdio.h&gt;
+__attribute__((noipa))
+static void d_i(const char * prefix, __m128i p) {
+    uint64_t v[2];
+    memcpy(v, &amp;p, 16);
+
+    fprintf(stderr, &quot;%10s(i): %#016lx %#016lx\n&quot;, prefix, v[0], v[1]);
+}
+#endif
+
+__attribute__((noipa))
+static void assert_eq(__m128i l, __m128i r) { assert_eq_p(&amp;l, &amp;r); }
+
+int main() {
+  const __m128i su = _mm_set1_epi32(0x4f000000);
+  const __m128  sf = _mm_castsi128_ps(su);
+
+  const __m128  overflow_mask_f32 = _mm_cmpge_ps(sf, _mm_set1_ps(2147483648.0f));
+  const __m128i overflow_mask = _mm_castps_si128(overflow_mask_f32);
+
+  const __m128i conv = _mm_cvttps_epi32(sf);
+  const __m128i yes = _mm_set1_epi32(INT32_MAX);
+
+  const __m128i a = _mm_and_si128(overflow_mask, yes);
+  const __m128i na = _mm_andnot_si128(overflow_mask, conv);
+
+  const __m128i conv_masked = _mm_or_si128(a, na);
+
+  const __m128i actual = _mm_cmpeq_epi32(conv_masked, _mm_set1_epi32(INT32_MAX));
+  const __m128i expected = _mm_set1_epi32(-1);
+
+  assert_eq(expected, actual);
+}
+</code></pre>
 <p>Here <code>_mm_and_si128()</code> and <code>_mm_andnot_si128()</code> are used to mask away
 converted values larger than <code>2147483648.0f</code>.
 If we look at the diagram it looks this way (I collapsed vector values
 into <code>... x4</code> form as all the values should be identical):</p>
-<img src="../posts.data.inline/317-gcc-simd-intrinsics-bug/fig-1.gv.svg" />
+<img src="../posts.data.inline/317-gcc-simd-intrinsics-bug/fig-1.gv.svg" alt="" />
 <p>Here <code>conv -&gt; na</code> green arrow shows where we throw away all the indefinite
 values. They all get substituted for <code>yes = 0x7FFFffff x4</code> value.
-Thus, the program should finally be deterministic, right? Let’s check:</p>
+Thus, the program should finally be deterministic, right? Let's check:</p>
 <pre><code>$ gcc bug.cc -O0 -o a &amp;&amp; ./a
 
 $ gcc bug.cc -O2 -o a &amp;&amp; ./a
-Illegal instruction (core dumped)</code></pre>
+Illegal instruction (core dumped)
+</code></pre>
 <p>It does not. Only <code>-O0</code> case works (just like before). Looking at the
 assembly again, just <code>-O2</code> this time:</p>
 <pre><code>$ rizin ./a
@@ -477,12 +467,13 @@ assembly again, just <code>-O2</code> this time:</p>
 |                 callq sym.assert_eq_int64_t___vector_2___int64_t___vector_2 ; sym.assert_eq_int64_t___vector_2___int64_t___vector_2
 |                 xorl  %eax, %eax
 |                 addq  $8, %rsp
-\                 retq</code></pre>
+\                 retq
+</code></pre>
 <p>At the first glance <code>cvttps2dq</code> instruction is present, thus <code>gcc</code> was
-not able to completely constant fold it away. Thus, it’s not immediately
-obvious why it’s incorrect. Let’s have a look at the control flow
+not able to completely constant fold it away. Thus, it's not immediately
+obvious why it's incorrect. Let's have a look at the control flow
 diagram reconstructed from the assembly:</p>
-<img src="../posts.data.inline/317-gcc-simd-intrinsics-bug/fig-2.gv.svg" />
+<img src="../posts.data.inline/317-gcc-simd-intrinsics-bug/fig-2.gv.svg" alt="" />
 <p>In practice <code>pcmpeqd %xmm0, %xmm1</code> instruction that was supposed to
 implement <code>_mm_cmpeq_epi32(conv_masked, _mm_set1_epi32(INT32_MAX))</code> gets
 <code>INT32_MAX</code> not as a constant (say, from <code>%xmm3</code>), but as a <code>%xmm0</code>
@@ -495,84 +486,86 @@ assumed and actual value of <code>cvttps2dq</code>.</p>
 <p>To remove this overly specific assumption <code>gcc-15</code> updated <code>fix()</code> code
 not to assume a particular value on overflows using
 <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=b05288d1f1e4b632eddf8830b4369d4659f6c2ff">this patch</a>:</p>
-<div class="sourceCode" id="cb17"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/fold-const.cc</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/fold-const.cc</span></span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2246,7 +2246,18 @@ fold_convert_const_int_from_real (enum tree_code code, tree type, const_tree arg</span></span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>   if (! overflow)</span>
-<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>     val = real_to_integer (&amp;r, &amp;overflow, TYPE_PRECISION (type));</span>
-<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="st">-  t = force_fit_type (type, val, -1, overflow | TREE_OVERFLOW (arg1));</span></span>
-<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a><span class="va">+  /* According to IEEE standard, for conversions from floating point to</span></span>
-<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a><span class="va">+     integer. When a NaN or infinite operand cannot be represented in the</span></span>
-<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a><span class="va">+     destination format and this cannot otherwise be indicated, the invalid</span></span>
-<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a><span class="va">+     operation exception shall be signaled. When a numeric operand would</span></span>
-<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a><span class="va">+     convert to an integer outside the range of the destination format, the</span></span>
-<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a><span class="va">+     invalid operation exception shall be signaled if this situation cannot</span></span>
-<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a><span class="va">+     otherwise be indicated.  */</span></span>
-<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a><span class="va">+  if (!flag_trapping_math || !overflow)</span></span>
-<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a><span class="va">+    t = force_fit_type (type, val, -1, overflow | TREE_OVERFLOW (arg1));</span></span>
-<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a><span class="va">+  else</span></span>
-<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a><span class="va">+    t = NULL_TREE;</span></span>
-<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>   return t;</span>
-<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a> }</span>
-<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a><span class="kw">diff --git a/gcc/simplify-rtx.cc b/gcc/simplify-rtx.cc</span></span>
-<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>index 5caf1dfd957f..f6b4d73b593c 100644</span>
-<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/simplify-rtx.cc</span></span>
-<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/simplify-rtx.cc</span></span>
-<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2256,14 +2256,25 @@ simplify_const_unary_operation (enum rtx_code code, machine_mode mode,</span></span>
-<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>       switch (code)</span>
-<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a> 	{</span>
-<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a> 	case FIX:</span>
-<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a><span class="va">+	  /* According to IEEE standard, for conversions from floating point to</span></span>
-<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a><span class="va">+	     integer. When a NaN or infinite operand cannot be represented in</span></span>
-<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a><span class="va">+	     the destination format and this cannot otherwise be indicated, the</span></span>
-<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a><span class="va">+	     invalid operation exception shall be signaled. When a numeric</span></span>
-<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a><span class="va">+	     operand would convert to an integer outside the range of the</span></span>
-<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a><span class="va">+	     destination format, the invalid operation exception shall be</span></span>
-<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a><span class="va">+	     signaled if this situation cannot otherwise be indicated.  */</span></span>
-<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a> 	  if (REAL_VALUE_ISNAN (*x))</span>
-<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return const0_rtx;</span></span>
-<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return flag_trapping_math ? NULL_RTX : const0_rtx;</span></span>
-<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a><span class="va">+	  if (REAL_VALUE_ISINF (*x) &amp;&amp; flag_trapping_math)</span></span>
-<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return NULL_RTX;</span></span>
-<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a> 	  /* Test against the signed upper bound.  */</span>
-<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a> 	  wmax = wi::max_value (width, SIGNED);</span>
-<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a> 	  real_from_integer (&amp;t, VOIDmode, wmax, SIGNED);</span>
-<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a> 	  if (real_less (&amp;t, x))</span>
-<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return immed_wide_int_const (wmax, mode);</span></span>
-<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return (flag_trapping_math</span></span>
-<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a><span class="va">+		    ? NULL_RTX : immed_wide_int_const (wmax, mode));</span></span>
-<span id="cb17-52"><a href="#cb17-52" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-53"><a href="#cb17-53" aria-hidden="true" tabindex="-1"></a> 	  /* Test against the signed lower bound.  */</span>
-<span id="cb17-54"><a href="#cb17-54" aria-hidden="true" tabindex="-1"></a> 	  wmin = wi::min_value (width, SIGNED);</span>
-<span id="cb17-55"><a href="#cb17-55" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -2276,13 +2287,17 @@ simplify_const_unary_operation (enum rtx_code code, machine_mode mode,</span></span>
-<span id="cb17-56"><a href="#cb17-56" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-57"><a href="#cb17-57" aria-hidden="true" tabindex="-1"></a> 	case UNSIGNED_FIX:</span>
-<span id="cb17-58"><a href="#cb17-58" aria-hidden="true" tabindex="-1"></a> 	  if (REAL_VALUE_ISNAN (*x) || REAL_VALUE_NEGATIVE (*x))</span>
-<span id="cb17-59"><a href="#cb17-59" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return const0_rtx;</span></span>
-<span id="cb17-60"><a href="#cb17-60" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return flag_trapping_math ? NULL_RTX : const0_rtx;</span></span>
-<span id="cb17-61"><a href="#cb17-61" aria-hidden="true" tabindex="-1"></a><span class="va">+</span></span>
-<span id="cb17-62"><a href="#cb17-62" aria-hidden="true" tabindex="-1"></a><span class="va">+	  if (REAL_VALUE_ISINF (*x) &amp;&amp; flag_trapping_math)</span></span>
-<span id="cb17-63"><a href="#cb17-63" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return NULL_RTX;</span></span>
-<span id="cb17-64"><a href="#cb17-64" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-65"><a href="#cb17-65" aria-hidden="true" tabindex="-1"></a> 	  /* Test against the unsigned upper bound.  */</span>
-<span id="cb17-66"><a href="#cb17-66" aria-hidden="true" tabindex="-1"></a> 	  wmax = wi::max_value (width, UNSIGNED);</span>
-<span id="cb17-67"><a href="#cb17-67" aria-hidden="true" tabindex="-1"></a> 	  real_from_integer (&amp;t, VOIDmode, wmax, UNSIGNED);</span>
-<span id="cb17-68"><a href="#cb17-68" aria-hidden="true" tabindex="-1"></a> 	  if (real_less (&amp;t, x))</span>
-<span id="cb17-69"><a href="#cb17-69" aria-hidden="true" tabindex="-1"></a><span class="st">-	    return immed_wide_int_const (wmax, mode);</span></span>
-<span id="cb17-70"><a href="#cb17-70" aria-hidden="true" tabindex="-1"></a><span class="va">+	    return (flag_trapping_math</span></span>
-<span id="cb17-71"><a href="#cb17-71" aria-hidden="true" tabindex="-1"></a><span class="va">+		    ? NULL_RTX : immed_wide_int_const (wmax, mode));</span></span>
-<span id="cb17-72"><a href="#cb17-72" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb17-73"><a href="#cb17-73" aria-hidden="true" tabindex="-1"></a> 	  return immed_wide_int_const (real_to_integer (x, &amp;fail, width),</span>
-<span id="cb17-74"><a href="#cb17-74" aria-hidden="true" tabindex="-1"></a> 				       mode);</span></code></pre></div>
+<pre><code class="language-diff">--- a/gcc/fold-const.cc
++++ b/gcc/fold-const.cc
+@@ -2246,7 +2246,18 @@ fold_convert_const_int_from_real (enum tree_code code, tree type, const_tree arg
+   if (! overflow)
+     val = real_to_integer (&amp;r, &amp;overflow, TYPE_PRECISION (type));
+
+-  t = force_fit_type (type, val, -1, overflow | TREE_OVERFLOW (arg1));
++  /* According to IEEE standard, for conversions from floating point to
++     integer. When a NaN or infinite operand cannot be represented in the
++     destination format and this cannot otherwise be indicated, the invalid
++     operation exception shall be signaled. When a numeric operand would
++     convert to an integer outside the range of the destination format, the
++     invalid operation exception shall be signaled if this situation cannot
++     otherwise be indicated.  */
++  if (!flag_trapping_math || !overflow)
++    t = force_fit_type (type, val, -1, overflow | TREE_OVERFLOW (arg1));
++  else
++    t = NULL_TREE;
++
+   return t;
+ }
+
+diff --git a/gcc/simplify-rtx.cc b/gcc/simplify-rtx.cc
+index 5caf1dfd957f..f6b4d73b593c 100644
+--- a/gcc/simplify-rtx.cc
++++ b/gcc/simplify-rtx.cc
+@@ -2256,14 +2256,25 @@ simplify_const_unary_operation (enum rtx_code code, machine_mode mode,
+       switch (code)
+ 	{
+ 	case FIX:
++	  /* According to IEEE standard, for conversions from floating point to
++	     integer. When a NaN or infinite operand cannot be represented in
++	     the destination format and this cannot otherwise be indicated, the
++	     invalid operation exception shall be signaled. When a numeric
++	     operand would convert to an integer outside the range of the
++	     destination format, the invalid operation exception shall be
++	     signaled if this situation cannot otherwise be indicated.  */
+ 	  if (REAL_VALUE_ISNAN (*x))
+-	    return const0_rtx;
++	    return flag_trapping_math ? NULL_RTX : const0_rtx;
++
++	  if (REAL_VALUE_ISINF (*x) &amp;&amp; flag_trapping_math)
++	    return NULL_RTX;
+
+ 	  /* Test against the signed upper bound.  */
+ 	  wmax = wi::max_value (width, SIGNED);
+ 	  real_from_integer (&amp;t, VOIDmode, wmax, SIGNED);
+ 	  if (real_less (&amp;t, x))
+-	    return immed_wide_int_const (wmax, mode);
++	    return (flag_trapping_math
++		    ? NULL_RTX : immed_wide_int_const (wmax, mode));
+
+ 	  /* Test against the signed lower bound.  */
+ 	  wmin = wi::min_value (width, SIGNED);
+@@ -2276,13 +2287,17 @@ simplify_const_unary_operation (enum rtx_code code, machine_mode mode,
+
+ 	case UNSIGNED_FIX:
+ 	  if (REAL_VALUE_ISNAN (*x) || REAL_VALUE_NEGATIVE (*x))
+-	    return const0_rtx;
++	    return flag_trapping_math ? NULL_RTX : const0_rtx;
++
++	  if (REAL_VALUE_ISINF (*x) &amp;&amp; flag_trapping_math)
++	    return NULL_RTX;
+
+ 	  /* Test against the unsigned upper bound.  */
+ 	  wmax = wi::max_value (width, UNSIGNED);
+ 	  real_from_integer (&amp;t, VOIDmode, wmax, UNSIGNED);
+ 	  if (real_less (&amp;t, x))
+-	    return immed_wide_int_const (wmax, mode);
++	    return (flag_trapping_math
++		    ? NULL_RTX : immed_wide_int_const (wmax, mode));
+
+ 	  return immed_wide_int_const (real_to_integer (x, &amp;fail, width),
+ 				       mode);
+</code></pre>
 <p>It fixes both tree optimizations of <code>RTL</code> optimizations not to assume a
 specific value on known overflows.
 After the fix <code>gcc</code> generates something that passes the test at hand:</p>
-<pre><code>$ g++ bug.cc -o bug -O2 &amp;&amp; ./bug</code></pre>
+<pre><code>$ g++ bug.cc -o bug -O2 &amp;&amp; ./bug
+</code></pre>
 <p>And the <code>highway</code> test suite.
 For completeness the generated code now looks like this:</p>
 <pre><code>$ rizin ./a
@@ -602,11 +595,12 @@ For completeness the generated code now looks like this:</p>
 |                 callq sym.assert_eq_int64_t___vector_2___int64_t___vector_2 ; sym.assert_eq_int64_t___vector_2___int64_t___vector_2
 |                 xorl  %eax, %eax
 |                 addq  $8, %rsp
-\                 retq</code></pre>
+\                 retq
+</code></pre>
 <p>This code looks slightly closer to originally written <code>C</code> code: <code>%xmm2</code>
 collects masked result of <code>cvttps2dq</code> and <code>%xmm1</code> contains <code>0x7FFFffff</code>
 value.</p>
-<h2 id="parting-words">Parting words</h2>
+<h2>Parting words</h2>
 <p>While not as powerful as tree passes <code>RTL</code> passes are capable of folding
 constants, propagating assumed values and removing dead code.</p>
 <p><code>highway</code> uncovered an old <code>gcc</code> <a href="https://gcc.gnu.org/PR115161">bug</a> in
@@ -621,10 +615,8 @@ below</li>
 </ul>
 <p>But <code>gcc</code> does not do it today.</p>
 <p>If <code>gcc</code> thinks that some intrinsic returns a value that differs from
-reality it’s very hard to reliably convince <code>gcc</code> to assume something
-else. Sometimes it’s easier to use inline assembly to get the desired
+reality it's very hard to reliably convince <code>gcc</code> to assume something
+else. Sometimes it's easier to use inline assembly to get the desired
 result as a short term workaround.</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>

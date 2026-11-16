@@ -1,35 +1,10 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Diving into an IPA gcc bug</title>
-        <link rel="stylesheet" type="text/css" href="../css/default.css" />
-        <link rel="stylesheet" type="text/css" href="../css/code.css" />
-        <link rel="stylesheet" type="text/css" href="../css/skylighting.css" />
-
-        <link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0" />
-        <link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0" />
-        <link rel="shortcut icon" href="../images/favicon.ico" />
-    </head>
-    <body>
-        <div id="navigation">
-            <a href="../">home</a>
-            <a href="../blog.html">blog</a>
-            <a href="../log.html">log</a>
-            <a href="../feed/atom.xml">atom</a>
-            <a href="../feed/rss.xml">rss</a>
-            <a href="../about.html">about</a>
-            <a href="../contact.html">contact</a>
-        </div>
-
-        <div id="content">
-            <h1>Diving into an IPA gcc bug</h1>
-            
-                <div class="info">November 19, 2022</div>
-            
-
-            <p><code>gcc</code> has a nice set of optimizations based on inter-procedural
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Diving into an IPA gcc bug</title><link rel="stylesheet" type="text/css" href="../css/default.css"><link rel="stylesheet" type="text/css" href="../css/code.css"><link rel="alternate" type="application/atom+xml" href="../feed/atom.xml" title="Atom 1.0"><link rel="alternate" type="application/rss+xml" href="../feed/rss.xml" title="RSS 2.0"><link rel="shortcut icon" href="../images/favicon.ico"></head><body><div id="navigation"><a href="../index.html">home</a>
+<a href="../blog.html">blog</a>
+<a href="../log.html">log</a>
+<a href="../feed/atom.xml">atom</a>
+<a href="../feed/rss.xml">rss</a>
+<a href="../about.html">about</a>
+<a href="../contact.html">contact</a></div><div id="content"><h1>Diving into an IPA gcc bug</h1><div class="info">November 19, 2022</div><p><code>gcc</code> has a nice set of optimizations based on inter-procedural
 analysis (<code>IPA</code>). Some of them are simpler (like <code>early-inliner</code>),
 and some are fancier (like <code>ipa-modref</code>). Their positive (and negative)
 effect is most pronounced when applied to a program as a whole (<code>LTO</code>
@@ -37,14 +12,14 @@ builds).</p>
 <p>Naturally occasional bugs creep in every now and then. They are rare
 enough and non-trivial enough that I forget almost everything when
 another one pops up.</p>
-<p>I’ll use <a href="https://gcc.gnu.org/PR107661"><code>PR107661</code></a> as a running example
+<p>I'll use <a href="https://gcc.gnu.org/PR107661"><code>PR107661</code></a> as a running example
 to explore some details of <code>ipa-cp</code> pass and write down the process of
-chasing the bug. We’ll have a glance at mechanics of trimming down the
+chasing the bug. We'll have a glance at mechanics of trimming down the
 example, at mechanics of <code>ipa-cp</code> pass run on a simple example and at
 the bug itself.</p>
 <p>I hope this doc will be useful to others and maybe future me.
-It’s a long read. You have been warned.</p>
-<h2 id="the-bug-effect">The bug effect</h2>
+It's a long read. You have been warned.</p>
+<h2>The bug effect</h2>
 <p>After another weekly <code>gcc</code> update I found that <code>llvm-12</code> (and <code>llvm-11</code>)
 test suites started failing 4 tests. All tests normally pass as <code>llvm</code>
 test suite is quite self-contained: inputs are in <code>llvm</code> assembly and
@@ -59,18 +34,20 @@ Failed Tests (4):
   LLVM :: CodeGen/AMDGPU/GlobalISel/llvm.amdgcn.div.fmas.ll
   LLVM :: CodeGen/AMDGPU/atomic_optimizations_pixelshader.ll
   LLVM :: CodeGen/AMDGPU/smem-war-hazard.mir
-  LLVM :: CodeGen/AMDGPU/vgpr-descriptor-waterfall-loop-idom-update.ll</code></pre>
-<h2 id="example-failing-test">Example failing test</h2>
+  LLVM :: CodeGen/AMDGPU/vgpr-descriptor-waterfall-loop-idom-update.ll
+</code></pre>
+<h2>Example failing test</h2>
 <p>Test suite log pointed at this command as a failure trigger:</p>
 <pre><code>$ bin/llc &lt; ../test/CodeGen/AMDGPU/vgpr-descriptor-waterfall-loop-idom-update.ll \
     -march=amdgcn -mcpu=gfx1010 | bin/FileCheck --allow-unused-prefixes=false \
-        ../test/CodeGen/AMDGPU/vgpr-descriptor-waterfall-loop-idom-update.ll --check-prefix=GCN</code></pre>
+        ../test/CodeGen/AMDGPU/vgpr-descriptor-waterfall-loop-idom-update.ll --check-prefix=GCN
+</code></pre>
 <p>I ran this test manually. Sometimes it failed, sometimes it succeeded!</p>
 <p>The failure was non-deterministic. I hoped for use of uninitialized value
 somewhere in <code>llvm</code> code. Any attempt to build <code>llvm-12</code> with
 <code>-fsanitize=address</code> or <code>-fsanitize=undefined</code> made the bug to go away
 without any error reports. Not good. Hard to draw any conclusions.</p>
-<h2 id="nailing-down-suspect-source-file">Nailing down suspect source file</h2>
+<h2>Nailing down suspect source file</h2>
 <p>The next step was to find the file that likely got miscompiled: I kept
 adding <code>#pragma GCC optimize(0)</code> to various <code>AMDGPU</code> files until bug
 disappeared. Then I removed as many added pragmas as I could to find
@@ -93,10 +70,10 @@ hoped it was a real bug and not a <code>valgrind</code> deficiency.</p>
 of <code>llvm</code> assembly code while keeping <code>valgrind</code> complaining.</p>
 <p>From that point I could understand what <code>llvm</code> input I am compiling and
 what checks does <code>GCNHazardRecognizer.cpp</code> attempt to perform: the pass
-tested register conflicts and did not modify the input program. That’s
+tested register conflicts and did not modify the input program. That's
 a nice property: we can remove various parts of the validator without
 fear of breaking the whole compilation process.</p>
-<h2 id="trimming-down-the-source">Trimming down the source</h2>
+<h2>Trimming down the source</h2>
 <p>Even with most functions removed <code>GCNHazardRecognizer.cpp</code> still
 contained <code>24KB</code> of <code>C++</code> with many local and <code>STL</code> includes. It was very
 hard to explore what <code>gcc</code> was doing wrong to such a large input.</p>
@@ -104,33 +81,33 @@ hard to explore what <code>gcc</code> was doing wrong to such a large input.</p>
 functions and making sure that code does not get executed (when <code>llc</code>
 ran successfully). This allowed me to shrink <code>GCNHazardRecognizer.cpp</code>
 down to <code>10KB</code> of <code>C++</code> code.</p>
-<h2 id="trimming-down-optimization-options">Trimming down optimization options</h2>
+<h2>Trimming down optimization options</h2>
 <p>After I could remove no other function from <code>GCNHazardRecognizer.cpp</code>
 I reduced optimization level from <code>-O3</code> down to <code>-O1 -fipa-cp -fipa-cp-clone</code>.</p>
 <p>I got the list of options to try from <code>gcc -O3 -Q --help=optimizers</code>
 output where <code>gcc</code> tells us actual effect of <code>-O3</code> aggregate option
 in terms of more fine-grained individual <code>-f*</code> and <code>--param=*</code> options.</p>
-<h2 id="deoptimizing-the-source">Deoptimizing the source</h2>
+<h2>Deoptimizing the source</h2>
 <p>Then I started adding <code>__attribute__((noinline, noipa))</code> (or
 <code>__attribute__((noclone))</code> if <code>noipa</code> was too much) to every function
 used in <code>GCNHazardRecognizer.cpp</code>. This included common <code>llvm</code> header
 files. That way I could reduce amount of transformations <code>gcc</code> does
 with input file. I used <code>-fopt-info</code> reports to pick next function to
-deoptimize, or inline manually if it’s required to trigger the bug.</p>
+deoptimize, or inline manually if it's required to trigger the bug.</p>
 <p>This step took a while as I had to sprinkle many parts of <code>llvm</code> common
 header code.</p>
 <p>The result allowed me to remove vast majority of tiny helper functions
 from
-optimizer’s oversight. Some functions I was able to turn into no-op
+optimizer's oversight. Some functions I was able to turn into no-op
 functions just to maintain the call graph: so that I could keep code
 execution flow roughly the same.</p>
-<h2 id="getting-self-contained-example">Getting self-contained example</h2>
+<h2>Getting self-contained example</h2>
 <p>From that point I could extract the result into a single <code>.cpp</code> file.
 I filed a <a href="https://gcc.gnu.org/PR107661"><code>PR107661</code></a> form the result
 hoping that the bug would be obvious to an expert.</p>
-<p>The resulting test was still a bit cryptic. I’m not posting it here as
+<p>The resulting test was still a bit cryptic. I'm not posting it here as
 we can do a bit better before looking at what compiler does with it.</p>
-<h2 id="removing-most-syntactic-sugar">Removing most syntactic sugar</h2>
+<h2>Removing most syntactic sugar</h2>
 <p>Then I expanded high level <code>c++</code> constructs like lambda functions and
 classes into structs and explicit method names, inlined methods manually
 and removed unused parameters. In this case I especially was afraid of
@@ -138,46 +115,47 @@ and removed unused parameters. In this case I especially was afraid of
 capture lambda context. I was not sure it conforms to <code>C++</code> semantics.</p>
 <p>In the example below we just pass a function pointer with seemingly no
 opportunity of undefined behavior.</p>
-<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// #define DISABLE_HACK 1</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> L_run<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;BAD</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span> <span class="op">}</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> callback_fn_L<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> L_run<span class="op">();</span> <span class="op">}</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> callback_fn_R<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;GOOD</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span> <span class="op">}</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> function_ref <span class="op">{</span></span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">(*</span>callback<span class="op">)(</span><span class="dt">void</span><span class="op">);</span></span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="co">// allow one level of recursion to call callback twice</span></span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> is_recur<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">int</span> n <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> <span class="op">(</span>n<span class="op">++)</span> <span class="op">{</span></span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="dv">0</span><span class="op">:</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> do3<span class="op">(</span><span class="dt">volatile</span> <span class="dt">int</span> <span class="op">*</span> punused<span class="op">,</span> function_ref Expired<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>  Expired<span class="op">.</span>callback<span class="op">();</span></span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>is_recur<span class="op">())</span></span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>    do3<span class="op">(</span>punused<span class="op">,</span> Expired<span class="op">);</span></span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> do1<span class="op">(</span>function_ref Expired<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>  <span class="dt">volatile</span> <span class="dt">int</span> unused <span class="op">=</span> <span class="dv">42</span><span class="op">;</span></span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>  do3<span class="op">(&amp;</span>unused<span class="op">,</span> Expired<span class="op">);</span></span>
-<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> do1<span class="op">(</span>function_ref<span class="op">{</span>callback_fn_R<span class="op">});</span> <span class="op">}</span></span>
-<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined(DISABLE_HACK)</span></span>
-<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> seemingly_unused_foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> do1<span class="op">(</span>function_ref<span class="op">{</span>callback_fn_L<span class="op">});</span> <span class="op">}</span></span>
-<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
+<pre><code class="language-c">// #define DISABLE_HACK 1
+
+#include &lt;stdio.h&gt;
+
+static void L_run(void) { fprintf(stderr, &quot;BAD\n&quot;); }
+static void callback_fn_L(void) { L_run(); }
+static void callback_fn_R(void) { fprintf(stderr, &quot;GOOD\n&quot;); }
+
+struct function_ref {
+  void (*callback)(void);
+};
+
+// allow one level of recursion to call callback twice
+static int is_recur(void) {
+  static int n = 0;
+  switch (n++) {
+    case 0: return 1;
+    default: return 0;
+  }
+}
+
+static void do3(volatile int * punused, function_ref Expired) {
+  Expired.callback();
+
+  if (is_recur())
+    do3(punused, Expired);
+}
+
+static void do1(function_ref Expired) {
+  volatile int unused = 42;
+
+  do3(&amp;unused, Expired);
+}
+
+int main(void) { do1(function_ref{callback_fn_R}); }
+
+#if defined(DISABLE_HACK)
+#else
+void seemingly_unused_foo(void) { do1(function_ref{callback_fn_L}); }
+#endif
+</code></pre>
 <p>This example behaves differently when <code>void seemingly_unused_foo(void)</code>
 is present and is absent in the code:</p>
 <pre><code>$ ./gcc-13-snap/bin/gcc -O1 -fipa-cp -fipa-cp-clone                a.cc -o a &amp;&amp; ./a
@@ -185,16 +163,18 @@ GOOD
 BAD
 $ ./gcc-13-snap/bin/gcc -O1 -fipa-cp -fipa-cp-clone -DDISABLE_HACK a.cc -o a &amp;&amp; ./a
 GOOD
-GOOD</code></pre>
-<p>Note how executable output changes from <code>GOOD/BAD</code> to <code>GOOD/GOOD</code>. It’s not
+GOOD
+</code></pre>
+<p>Note how executable output changes from <code>GOOD/BAD</code> to <code>GOOD/GOOD</code>. It's not
 supposed to and <code>gcc-12</code> never prints <code>BAD</code> text.</p>
-<h2 id="making-sure-not-many-optimization-opportunities-are-left">Making sure not many optimization opportunities are left</h2>
-<p>Once we have a self-contained example it’s useful to apply (or disable)
+<h2>Making sure not many optimization opportunities are left</h2>
+<p>Once we have a self-contained example it's useful to apply (or disable)
 most unrelated optimizations. Once again I usually use <code>-fopt-info</code> for
 that.</p>
 <p>Running it against our current example reports just one transformation:</p>
 <pre><code>$ gcc -O1 -fipa-cp -fipa-cp-clone -fopt-info -c a.cc -o a.o
-a.cc:31:19: optimized: converting indirect call in void do3.constprop(volatile int*, function_ref)/24 to direct call to void callback_fn_L()/13</code></pre>
+a.cc:31:19: optimized: converting indirect call in void do3.constprop(volatile int*, function_ref)/24 to direct call to void callback_fn_L()/13
+</code></pre>
 <p>Here we see that <code>gcc</code> did something to <code>do3()</code> to optimize indirect
 <code>Expired.callback();</code> call into direct <code>callback_fn_L()</code> call. That is
 probably done to optimize <code>seemingly_unused_foo()</code> as nothing else is
@@ -226,33 +206,35 @@ a.cc:14:40: missed:   not inlinable: void callback_fn_L()/13 -&gt; void L_run()/
 a.cc:13:34: missed:   not inlinable: void L_run()/12 -&gt; long unsigned int __builtin_fwrite(const void*, size_t, size_t, FILE*)/22, function body not available
 Unit growth for small function inlining: 82-&gt;82 (0%)
 
-Inlined 4 calls, eliminated 1 functions</code></pre>
+Inlined 4 calls, eliminated 1 functions
+</code></pre>
 <p>Here we see all sorts of rejected inline attempts. From what I
 understand <code>-O1</code> only implies <code>-finline-functions-called-once</code>
 but not <code>-finline-functions</code> (<code>-O2</code> default). That means <code>inline</code>
 keyword (or a single-call <code>static</code> function call) is the usual
 trigger for inlining decision.</p>
-<h2 id="a-simpler-constant-propagation-example">A simpler constant propagation example</h2>
-<p>Before chasing specifics of our breakage let’s look at a simpler
-valid case of constant propagation across procedures. Let’s try the
+<h2>A simpler constant propagation example</h2>
+<p>Before chasing specifics of our breakage let's look at a simpler
+valid case of constant propagation across procedures. Let's try the
 following contrived example:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Forbid inlining to see the cloning effect */</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">))</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> f<span class="op">(</span><span class="dt">int</span> a<span class="op">,</span> <span class="dt">int</span> b<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> a <span class="op">+</span> b<span class="op">;</span></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="co">/* Add one level of indirection to force IPA discover f(..., 10) */</span></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>__attribute__<span class="op">((</span>noinline<span class="op">))</span></span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> g<span class="op">(</span><span class="dt">int</span> a<span class="op">,</span> <span class="dt">int</span> b<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> f<span class="op">(</span>a<span class="op">,</span> b<span class="op">);</span></span>
-<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>  <span class="dt">volatile</span> <span class="dt">int</span> i <span class="op">=</span> <span class="dv">42</span><span class="op">;</span></span>
-<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> g<span class="op">(</span>i<span class="op">,</span> <span class="dv">10</span><span class="op">);</span></span>
-<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
-<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/example-1.svg" /></p>
+<pre><code class="language-c">/* Forbid inlining to see the cloning effect */
+__attribute__((noinline))
+static int f(int a, int b) {
+    return a + b;
+}
+
+/* Add one level of indirection to force IPA discover f(..., 10) */
+__attribute__((noinline))
+static int g(int a, int b) {
+    return f(a, b);
+}
+
+int main(void) {
+  volatile int i = 42;
+  return g(i, 10);
+}
+</code></pre>
+<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/example-1.svg" alt="" /></p>
 <p>Here we define <code>f(int a, int b)</code> and <code>g(int a, int b)</code> function that
 ever see <code>b = 10</code> value as their second argument. Will <code>gcc</code> do
 something about that redundancy? We also mark both functions <code>noinline</code>
@@ -260,13 +242,15 @@ to prevent <code>gcc</code> from just inlining everything into <code>main()</cod
 <p>Building and running it:</p>
 <pre><code>$ gcc -O3 a.c -o a &amp;&amp; ./a
 $ echo $?
-52</code></pre>
-<p>The program prints <code>42 + 10 = 52</code> as expected. Let’s look at the <code>IPA</code>
-details to trace through its workings. I’ll use <code>-fdump-ipa-cp-slim</code>
+52
+</code></pre>
+<p>The program prints <code>42 + 10 = 52</code> as expected. Let's look at the <code>IPA</code>
+details to trace through its workings. I'll use <code>-fdump-ipa-cp-slim</code>
 to dump pass internal state and decisions:</p>
 <pre><code>$ gcc -O3 -c a.c -fdump-ipa-cp-slim
-$ cat a.c.081i.cp</code></pre>
-<p>I’ll paste <code>a.c.081i.cp</code> in pieces and add a few comments around:</p>
+$ cat a.c.081i.cp
+</code></pre>
+<p>I'll paste <code>a.c.081i.cp</code> in pieces and add a few comments around:</p>
 <pre><code>IPA constant propagation start:
 
 IPA structures before propagation:
@@ -288,7 +272,8 @@ Jump functions:
        param 1: PASS THROUGH: 1, op nop_expr
          value: 0x0, mask: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
          Unknown VR
-  Jump functions of caller  f/0:</code></pre>
+  Jump functions of caller  f/0:
+</code></pre>
 <p>This is the list of initial facts about our program before the
 optimization:</p>
 <ul>
@@ -298,7 +283,8 @@ optimization:</p>
 <ul>
 <li>param0 has unknown value</li>
 <li>param1 has known value <code>10</code> (<code>0xa</code>). Why <code>mask:</code> value is so large? An exercise for the reader.</li>
-</ul></li>
+</ul>
+</li>
 </ul>
 <p>Next step is to figure out if known constants propagate to callees in
 any interesting way:</p>
@@ -337,19 +323,22 @@ Lattices:
          Bits: value = 0xa, mask = 0x0
          int [10, 10]
         AGGS VARIABLE
+
 </code></pre>
 <p>Here propagation step figured out extra facts:</p>
 <ul>
-<li><code>f()</code>’s parameters are a bit more definite:
+<li><code>f()</code>'s parameters are a bit more definite:
 <ul>
 <li>param0 is still unknown (<code>BOTTOM</code>)</li>
 <li>param1 always has value <code>10</code></li>
-</ul></li>
-<li><code>g()</code>’s parameters have exactly the same structure as <code>f()</code>’s:
+</ul>
+</li>
+<li><code>g()</code>'s parameters have exactly the same structure as <code>f()</code>'s:
 <ul>
 <li>param0 is still unknown (<code>BOTTOM</code>)</li>
 <li>param1 always has value <code>10</code></li>
-</ul></li>
+</ul>
+</li>
 <li><code>main()</code> has nothing special about its parameters</li>
 </ul>
 <p><code>prop_time: 0, prop_size: 0</code> tell us that possible constant propagation
@@ -370,7 +359,8 @@ Propagated bits info for function g/1:
 Propagated bits info for function f/0:
  param 1: value = 0xa, mask = 0x0
 
-IPA constant propagation end</code></pre>
+IPA constant propagation end
+</code></pre>
 <p>As expected <code>f()</code> and <code>g()</code> were replaced when equivalent functions
 where their second parameter is always equals <code>10</code>. After the
 transformation original <code>f()</code> and <code>g()</code> are no used anymore and can go
@@ -424,7 +414,8 @@ int main ()
   _4 = g (i.0_1, 10);
   return _4;
 
-}</code></pre>
+}
+</code></pre>
 <p>Note how this pass turned <code>int f(int a, int b) { return a + b; }</code> into
 <code>int f.constprop(int a) { return a + 10; }</code>. While <code>g.constprop()</code> and
 <code>main()</code> still do call 2-parameter forms of <code>f()</code> and <code>g()</code> in the
@@ -462,12 +453,13 @@ int main ()
   i.0_1 ={v} i;
   _4 = g.constprop (i.0_1); [tail call]
   return _4;
-}</code></pre>
+}
+</code></pre>
 <p>Or the same in more concise form:</p>
-<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/example-2.svg" /></p>
+<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/example-2.svg" alt="" /></p>
 <p>All function are single-parameter now. <code>b = 10</code> was pushed all the way
 down to <code>f.constprop()</code> definition.</p>
-<h2 id="tracking-down-faulty-subsystem">Tracking down faulty subsystem</h2>
+<h2>Tracking down faulty subsystem</h2>
 <p>Now back to our buggy example: why did <code>BAD</code> get printed at all? I had
 no idea. Generated assembly code did not make sense.</p>
 <p>First I bisected <code>gcc</code> to see if the change was small enough to
@@ -480,7 +472,7 @@ without any change in the output. The diff in commit was too large for
 me to understand. I had no idea what I was looking at.</p>
 <p>I moved to inspect <code>gcc</code> transformation stages. Each individual
 optimization pass is usually simple enough that we can manually
-verify if it’s effect is correct. At least for me that works only
+verify if it's effect is correct. At least for me that works only
 for small input source files.</p>
 <p><code>gcc</code> pass debugging steps hide under <code>-fdump-*</code> flags. Most
 frequent flags I use are:</p>
@@ -570,8 +562,9 @@ void seemingly_unused_foo ()
   unused ={v} 42;
   do3.constprop (&amp;unused, Expired);
   return;
-}</code></pre>
-<p>While it’s a lot of text it’s almost identical source program we wrote.
+}
+</code></pre>
+<p>While it's a lot of text it's almost identical source program we wrote.
 The only difference is verbosity: explicit assignments instead of
 constructors, explicit label jumps and similar.</p>
 <p>Having skimmed through it we can spot a few curious things:</p>
@@ -585,7 +578,7 @@ and it calls only <code>L_run()</code> (from <code>callback_fn_L</code>). There 
 <li><code>do1()</code> was completely optimized away by inlining into
 <code>main()</code> and <code>seemingly_unused_foo()</code>.</li>
 </ul>
-<p>Let’s look at the output of <code>IPA</code> phases instead. I used
+<p>Let's look at the output of <code>IPA</code> phases instead. I used
 <code>-fdump-ipa-all-slim</code> to generate the logs. Among other things
 it generates <code>a.cc.081i.cp</code> file:</p>
 <pre><code>IPA constant propagation start:
@@ -718,7 +711,8 @@ void seemingly_unused_foo ()
   D.3373.callback = callback_fn_L;
   do1 (D.3373);
   return;
-}</code></pre>
+}
+</code></pre>
 <p>A lot more text that before. Here <code>IPA</code> pass tells us a bit of inferred
 state out of our program and then applies some transformations to it.</p>
 <p>The above output tells us that <code>do3()</code> was cloned into <code>do3.constprop()</code>
@@ -736,10 +730,10 @@ anywhere.</p>
 <code>- adding an extra caller void do3(volatile int*, function_ref)/17 of void do3.constprop(volatile int*, function_ref)/24</code>
 in the log is a good hint where to look at the details in <code>gcc</code> source
 code.</p>
-<p>Anyway, the resulting printed code is not directly broken. So far it’s
-“only” edge information that looks incorrect. Maybe I am misinterpreting
+<p>Anyway, the resulting printed code is not directly broken. So far it's
+&quot;only&quot; edge information that looks incorrect. Maybe I am misinterpreting
 it?</p>
-<p>Now let’s look at the next <code>a.cc.085i.inline</code> <code>IPA</code> step:</p>
+<p>Now let's look at the next <code>a.cc.085i.inline</code> <code>IPA</code> step:</p>
 <pre><code>...
 Deciding on functions to be inlined into all callers and removing useless speculations:
 
@@ -837,16 +831,17 @@ int main ()
 
   &lt;bb 4&gt;:
   return 0;
-}</code></pre>
+}
+</code></pre>
 <p>Here we can see how problematic edges discovered in <code>cp</code> phase broke
 <code>inline</code>: <code>main()</code> function now calls <code>do3.constprop ();</code> (after <code>do3()</code>
 inline) and that encodes <code>L_run ();</code> call to print <code>BAD</code>.</p>
-<h2 id="diving-into-ipa-cp">Diving into <code>ipa-cp</code></h2>
-<p>Now let’s try to figure out why does <code>ipa-cp</code> add a problematic
+<h2>Diving into <code>ipa-cp</code></h2>
+<p>Now let's try to figure out why does <code>ipa-cp</code> add a problematic
 <code>do3() -&gt; do3.constprop()</code> edge.</p>
 <p><code>gcc</code> frequently has great comments in the source code on details of
 what a pass is supposed to do. <code>ipa-cp</code> is no exception: it hides
-in <a href="%3Chttps://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d2bcd5e5e691ced8dba4b496b9d044eb2777d2b2;hb=HEAD#l23"><code>gcc/ipa-cp.cc</code> file</a>:</p>
+in [<code>gcc/ipa-cp.cc</code> file](&lt;https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d2bcd5e5e691ced8dba4b496b9d044eb2777d2b2;hb=HEAD#l23):</p>
 <pre><code>  23 /* Interprocedural constant propagation (IPA-CP).
   24 
   25    The goal of this transformation is to
@@ -925,79 +920,81 @@ in <a href="%3Chttps://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d2bcd
   98 
   99    This stage is currently performed by call graph code (mainly in cgraphunit.cc
  100    and tree-inline.cc) according to instructions inserted to the call graph by
- 101    the second stage.  */</code></pre>
+ 101    the second stage.  */
+</code></pre>
 <p>The idea is straightforward:</p>
 <ul>
 <li>collect all the call sites with their parameters (constant parameters
 are most interesting to propagate them into callees)</li>
 <li>sort the call graph topologically</li>
 <li>estimate propagation effect (cost reduction)</li>
-<li>clone functions by applying propagated constants where it’s beneficial</li>
+<li>clone functions by applying propagated constants where it's beneficial</li>
 <li>patch call sites to use clones instead of original functions</li>
 </ul>
 <p>While the whole algorithm might be overwhelming each of its step is not
 too big to trace it through for our concrete example.</p>
 <p>In theory <code>ipa-cp</code> should perform a transformation similar to the following:</p>
-<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-1.svg" /></p>
+<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-1.svg" alt="" /></p>
 <p>I expected callback <code>cb</code> indirection to be fully specialized and
 runtime indirection to completely go away.</p>
 <p>In practice something like the following occurs:</p>
-<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-2.svg" /></p>
+<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-2.svg" alt="" /></p>
 <p>Note: <code>main()</code> manages to both inline <code>GOOD</code> callback and call
 specialized <code>do1.constprop()</code> <code>BAD</code> branch. The edge marked with <code>Bug!</code>
 is the actual bug here.</p>
 <p>To summarize the <code>ipa-cp</code> pass once again it consists of 3 steps:</p>
 <ul>
 <li>collect information around known call sites of the functions
-(“jump functions”)</li>
+(&quot;jump functions&quot;)</li>
 <li>calculate propagation information around known calls to see how far
 they reach unmodified and how many functions get always called with
-the same arguments (“constant propagation”)</li>
+the same arguments (&quot;constant propagation&quot;)</li>
 <li>generate specialized function clones and redirect matching call sites
-to the clones (“decision”)</li>
+to the clones (&quot;decision&quot;)</li>
 </ul>
-<p>Let’s look in more detail at our example to find out what specifically
-went wrong. I’ll post code snippet again:</p>
-<div class="sourceCode" id="cb19"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co">// #define DISABLE_HACK 1</span></span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&lt;stdio.h&gt;</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> L_run<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;BAD</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span> <span class="op">}</span></span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> callback_fn_L<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> L_run<span class="op">();</span> <span class="op">}</span></span>
-<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> callback_fn_R<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> fprintf<span class="op">(</span>stderr<span class="op">,</span> <span class="st">&quot;GOOD</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">);</span> <span class="op">}</span></span>
-<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> function_ref <span class="op">{</span></span>
-<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">void</span> <span class="op">(*</span>callback<span class="op">)(</span><span class="dt">void</span><span class="op">);</span></span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
-<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a><span class="co">// allow one level of recursion to call callback twice</span></span>
-<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> is_recur<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
-<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>  <span class="dt">static</span> <span class="dt">int</span> n <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>  <span class="cf">switch</span> <span class="op">(</span>n<span class="op">++)</span> <span class="op">{</span></span>
-<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> <span class="dv">0</span><span class="op">:</span> <span class="cf">return</span> <span class="dv">1</span><span class="op">;</span></span>
-<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span> <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
-<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  <span class="op">}</span></span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> do3<span class="op">(</span><span class="dt">volatile</span> <span class="dt">int</span> <span class="op">*</span> punused<span class="op">,</span> function_ref Expired<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  Expired<span class="op">.</span>callback<span class="op">();</span></span>
-<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>is_recur<span class="op">())</span></span>
-<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>    do3<span class="op">(</span>punused<span class="op">,</span> Expired<span class="op">);</span></span>
-<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> do1<span class="op">(</span>function_ref Expired<span class="op">)</span> <span class="op">{</span></span>
-<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>  <span class="dt">volatile</span> <span class="dt">int</span> unused <span class="op">=</span> <span class="dv">42</span><span class="op">;</span></span>
-<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-32"><a href="#cb19-32" aria-hidden="true" tabindex="-1"></a>  do3<span class="op">(&amp;</span>unused<span class="op">,</span> Expired<span class="op">);</span></span>
-<span id="cb19-33"><a href="#cb19-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb19-34"><a href="#cb19-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-35"><a href="#cb19-35" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> main<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> do1<span class="op">(</span>function_ref<span class="op">{</span>callback_fn_R<span class="op">});</span> <span class="op">}</span></span>
-<span id="cb19-36"><a href="#cb19-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-37"><a href="#cb19-37" aria-hidden="true" tabindex="-1"></a><span class="pp">#if defined(DISABLE_HACK)</span></span>
-<span id="cb19-38"><a href="#cb19-38" aria-hidden="true" tabindex="-1"></a><span class="pp">#else</span></span>
-<span id="cb19-39"><a href="#cb19-39" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> seemingly_unused_foo<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span> do1<span class="op">(</span>function_ref<span class="op">{</span>callback_fn_L<span class="op">});</span> <span class="op">}</span></span>
-<span id="cb19-40"><a href="#cb19-40" aria-hidden="true" tabindex="-1"></a><span class="pp">#endif</span></span></code></pre></div>
+<p>Let's look in more detail at our example to find out what specifically
+went wrong. I'll post code snippet again:</p>
+<pre><code class="language-c">// #define DISABLE_HACK 1
+
+#include &lt;stdio.h&gt;
+
+static void L_run(void) { fprintf(stderr, &quot;BAD\n&quot;); }
+static void callback_fn_L(void) { L_run(); }
+static void callback_fn_R(void) { fprintf(stderr, &quot;GOOD\n&quot;); }
+
+struct function_ref {
+  void (*callback)(void);
+};
+
+// allow one level of recursion to call callback twice
+static int is_recur(void) {
+  static int n = 0;
+  switch (n++) {
+    case 0: return 1;
+    default: return 0;
+  }
+}
+
+static void do3(volatile int * punused, function_ref Expired) {
+  Expired.callback();
+
+  if (is_recur())
+    do3(punused, Expired);
+}
+
+static void do1(function_ref Expired) {
+  volatile int unused = 42;
+
+  do3(&amp;unused, Expired);
+}
+
+int main(void) { do1(function_ref{callback_fn_R}); }
+
+#if defined(DISABLE_HACK)
+#else
+void seemingly_unused_foo(void) { do1(function_ref{callback_fn_L}); }
+#endif
+</code></pre>
 <p>And relevant analysis again:</p>
 <pre><code>IPA lattices after all propagation:
 
@@ -1029,75 +1026,77 @@ IPA decision stage:
   Creating a specialized node of void do1(function_ref)/18.
   Creating a specialized node of void do3(volatile int*, function_ref)/17.
 ipa-prop: Discovered an indirect call to a known target (void do3.constprop(volatile int*, function_ref)/24 -&gt; void callback_fn_L()/13), for stmt _1 ();
- - adding an extra caller void do3(volatile int*, function_ref)/17 of void do3.constprop(volatile int*, function_ref)/24</code></pre>
+ - adding an extra caller void do3(volatile int*, function_ref)/17 of void do3.constprop(volatile int*, function_ref)/24
+</code></pre>
 <p>Here propagation phase correctly sees that <code>do3()</code> sees two constants
 being passed as parameters: <code>callback_fn_L()</code> and <code>callback_fn_R()</code>.</p>
-<p>Thus, whatever <code>do3.constprop()</code> is specialized against <code>do3()</code> can’t call
-into it on it’s own: <code>do3()</code> has to work for <code>callback_fn_L()</code> and <code>callback_fn_R()</code>
+<p>Thus, whatever <code>do3.constprop()</code> is specialized against <code>do3()</code> can't call
+into it on it's own: <code>do3()</code> has to work for <code>callback_fn_L()</code> and <code>callback_fn_R()</code>
 inputs.</p>
 <p>If we look at <code>adding an extra caller</code> string in <code>gcc</code> source code we
-will see the condition on which <code>gcc</code> decided it’s OK
+will see the condition on which <code>gcc</code> decided it's OK
 <a href="https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=gcc/ipa-cp.cc;h=d5230c7c5e6b150f7ac9e1a1445178239dc67c39;hb=603af25815523ba9e39e9b441cde5308423a9238#l5918">in perhaps_add_new_callers()</a>:</p>
-<div class="sourceCode" id="cb21"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Given an original NODE and a VAL for which we have already created a</span></span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="co">   specialized clone, look whether there are incoming edges that still lead</span></span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="co">   into the old node but now also bring the requested value and also conform to</span></span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a><span class="co">   all other criteria such that they can be redirected the special node.</span></span>
-<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a><span class="co">   This function can therefore redirect the final edge in a SCC.  */</span></span>
-<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>template <span class="op">&lt;</span>typename valtype<span class="op">&gt;</span></span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span></span>
-<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>perhaps_add_new_callers <span class="op">(</span>cgraph_node <span class="op">*</span>node<span class="op">,</span> ipcp_value<span class="op">&lt;</span>valtype<span class="op">&gt;</span> <span class="op">*</span>val<span class="op">)</span></span>
-<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>  ipcp_value_source<span class="op">&lt;</span>valtype<span class="op">&gt;</span> <span class="op">*</span>src<span class="op">;</span></span>
-<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>  profile_count redirected_sum <span class="op">=</span> profile_count<span class="op">::</span>zero <span class="op">();</span></span>
-<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>  <span class="cf">for</span> <span class="op">(</span>src <span class="op">=</span> val<span class="op">-&gt;</span>sources<span class="op">;</span> src<span class="op">;</span> src <span class="op">=</span> src<span class="op">-&gt;</span>next<span class="op">)</span></span>
-<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span></span>
-<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a>      <span class="kw">struct</span> cgraph_edge <span class="op">*</span>cs <span class="op">=</span> src<span class="op">-&gt;</span>cs<span class="op">;</span></span>
-<span id="cb21-17"><a href="#cb21-17" aria-hidden="true" tabindex="-1"></a>      <span class="cf">while</span> <span class="op">(</span>cs<span class="op">)</span></span>
-<span id="cb21-18"><a href="#cb21-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">{</span></span>
-<span id="cb21-19"><a href="#cb21-19" aria-hidden="true" tabindex="-1"></a>          <span class="cf">if</span> <span class="op">(</span>cgraph_edge_brings_value_p <span class="op">(</span>cs<span class="op">,</span> src<span class="op">,</span> node<span class="op">,</span> val<span class="op">)</span></span>
-<span id="cb21-20"><a href="#cb21-20" aria-hidden="true" tabindex="-1"></a>              <span class="op">&amp;&amp;</span> cgraph_edge_brings_all_scalars_for_node <span class="op">(</span>cs<span class="op">,</span> val<span class="op">-&gt;</span>spec_node<span class="op">)</span></span>
-<span id="cb21-21"><a href="#cb21-21" aria-hidden="true" tabindex="-1"></a>              <span class="op">&amp;&amp;</span> cgraph_edge_brings_all_agg_vals_for_node <span class="op">(</span>cs<span class="op">,</span> val<span class="op">-&gt;</span>spec_node<span class="op">))</span></span>
-<span id="cb21-22"><a href="#cb21-22" aria-hidden="true" tabindex="-1"></a>            <span class="op">{</span></span>
-<span id="cb21-23"><a href="#cb21-23" aria-hidden="true" tabindex="-1"></a>              <span class="cf">if</span> <span class="op">(</span>dump_file<span class="op">)</span></span>
-<span id="cb21-24"><a href="#cb21-24" aria-hidden="true" tabindex="-1"></a>                fprintf <span class="op">(</span>dump_file<span class="op">,</span> <span class="st">&quot; - adding an extra caller </span><span class="sc">%s</span><span class="st"> of </span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span></span>
-<span id="cb21-25"><a href="#cb21-25" aria-hidden="true" tabindex="-1"></a>                         cs<span class="op">-&gt;</span>caller<span class="op">-&gt;</span>dump_name <span class="op">(),</span></span>
-<span id="cb21-26"><a href="#cb21-26" aria-hidden="true" tabindex="-1"></a>                         val<span class="op">-&gt;</span>spec_node<span class="op">-&gt;</span>dump_name <span class="op">());</span></span>
-<span id="cb21-27"><a href="#cb21-27" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-28"><a href="#cb21-28" aria-hidden="true" tabindex="-1"></a>              cs<span class="op">-&gt;</span>redirect_callee_duplicating_thunks <span class="op">(</span>val<span class="op">-&gt;</span>spec_node<span class="op">);</span></span>
-<span id="cb21-29"><a href="#cb21-29" aria-hidden="true" tabindex="-1"></a>              val<span class="op">-&gt;</span>spec_node<span class="op">-&gt;</span>expand_all_artificial_thunks <span class="op">();</span></span>
-<span id="cb21-30"><a href="#cb21-30" aria-hidden="true" tabindex="-1"></a>              <span class="cf">if</span> <span class="op">(</span>cs<span class="op">-&gt;</span>count<span class="op">.</span>ipa <span class="op">().</span>initialized_p <span class="op">())</span></span>
-<span id="cb21-31"><a href="#cb21-31" aria-hidden="true" tabindex="-1"></a>                redirected_sum <span class="op">=</span> redirected_sum <span class="op">+</span> cs<span class="op">-&gt;</span>count<span class="op">.</span>ipa <span class="op">();</span></span>
-<span id="cb21-32"><a href="#cb21-32" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
-<span id="cb21-33"><a href="#cb21-33" aria-hidden="true" tabindex="-1"></a>          cs <span class="op">=</span> get_next_cgraph_edge_clone <span class="op">(</span>cs<span class="op">);</span></span>
-<span id="cb21-34"><a href="#cb21-34" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
-<span id="cb21-35"><a href="#cb21-35" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
-<span id="cb21-36"><a href="#cb21-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-37"><a href="#cb21-37" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(</span>redirected_sum<span class="op">.</span>nonzero_p <span class="op">())</span></span>
-<span id="cb21-38"><a href="#cb21-38" aria-hidden="true" tabindex="-1"></a>    update_specialized_profile <span class="op">(</span>val<span class="op">-&gt;</span>spec_node<span class="op">,</span> node<span class="op">,</span> redirected_sum<span class="op">);</span></span>
-<span id="cb21-39"><a href="#cb21-39" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb21-40"><a href="#cb21-40" aria-hidden="true" tabindex="-1"></a><span class="op">...</span></span>
-<span id="cb21-41"><a href="#cb21-41" aria-hidden="true" tabindex="-1"></a><span class="co">/* Determine whether CS also brings all aggregate values that NODE is</span></span>
-<span id="cb21-42"><a href="#cb21-42" aria-hidden="true" tabindex="-1"></a><span class="co">   specialized for.  */</span></span>
-<span id="cb21-43"><a href="#cb21-43" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-44"><a href="#cb21-44" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">bool</span></span>
-<span id="cb21-45"><a href="#cb21-45" aria-hidden="true" tabindex="-1"></a>cgraph_edge_brings_all_agg_vals_for_node <span class="op">(</span><span class="kw">struct</span> cgraph_edge <span class="op">*</span>cs<span class="op">,</span></span>
-<span id="cb21-46"><a href="#cb21-46" aria-hidden="true" tabindex="-1"></a>                                          <span class="kw">struct</span> cgraph_node <span class="op">*</span>node<span class="op">)</span></span>
-<span id="cb21-47"><a href="#cb21-47" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
-<span id="cb21-48"><a href="#cb21-48" aria-hidden="true" tabindex="-1"></a>  ipcp_transformation <span class="op">*</span>ts <span class="op">=</span> ipcp_get_transformation_summary <span class="op">(</span>node<span class="op">);</span></span>
-<span id="cb21-49"><a href="#cb21-49" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="op">(!</span>ts <span class="op">||</span> vec_safe_is_empty <span class="op">(</span>ts<span class="op">-&gt;</span>m_agg_values<span class="op">))</span></span>
-<span id="cb21-50"><a href="#cb21-50" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="kw">true</span><span class="op">;</span></span>
-<span id="cb21-51"><a href="#cb21-51" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-52"><a href="#cb21-52" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> ipa_argagg_value_list existing <span class="op">(</span>ts<span class="op">-&gt;</span>m_agg_values<span class="op">);</span></span>
-<span id="cb21-53"><a href="#cb21-53" aria-hidden="true" tabindex="-1"></a>  auto_vec<span class="op">&lt;</span>ipa_argagg_value<span class="op">,</span> <span class="dv">32</span><span class="op">&gt;</span> edge_values<span class="op">;</span></span>
-<span id="cb21-54"><a href="#cb21-54" aria-hidden="true" tabindex="-1"></a>  ipa_node_params <span class="op">*</span>dest_info <span class="op">=</span> ipa_node_params_sum<span class="op">-&gt;</span>get <span class="op">(</span>node<span class="op">);</span></span>
-<span id="cb21-55"><a href="#cb21-55" aria-hidden="true" tabindex="-1"></a>  gcc_checking_assert <span class="op">(</span>dest_info<span class="op">-&gt;</span>ipcp_orig_node<span class="op">);</span></span>
-<span id="cb21-56"><a href="#cb21-56" aria-hidden="true" tabindex="-1"></a>  dest_info <span class="op">=</span> ipa_node_params_sum<span class="op">-&gt;</span>get <span class="op">(</span>dest_info<span class="op">-&gt;</span>ipcp_orig_node<span class="op">);</span></span>
-<span id="cb21-57"><a href="#cb21-57" aria-hidden="true" tabindex="-1"></a>  push_agg_values_from_edge <span class="op">(</span>cs<span class="op">,</span> dest_info<span class="op">,</span> <span class="op">&amp;</span>edge_values<span class="op">,</span> <span class="op">&amp;</span>existing<span class="op">);</span></span>
-<span id="cb21-58"><a href="#cb21-58" aria-hidden="true" tabindex="-1"></a>  <span class="dt">const</span> ipa_argagg_value_list avl <span class="op">(&amp;</span>edge_values<span class="op">);</span></span>
-<span id="cb21-59"><a href="#cb21-59" aria-hidden="true" tabindex="-1"></a>  <span class="cf">return</span> avl<span class="op">.</span>superset_of_p <span class="op">(</span>existing<span class="op">);</span></span>
-<span id="cb21-60"><a href="#cb21-60" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<pre><code class="language-c">/* Given an original NODE and a VAL for which we have already created a
+   specialized clone, look whether there are incoming edges that still lead
+   into the old node but now also bring the requested value and also conform to
+   all other criteria such that they can be redirected the special node.
+   This function can therefore redirect the final edge in a SCC.  */
+
+template &lt;typename valtype&gt;
+static void
+perhaps_add_new_callers (cgraph_node *node, ipcp_value&lt;valtype&gt; *val)
+{
+  ipcp_value_source&lt;valtype&gt; *src;
+  profile_count redirected_sum = profile_count::zero ();
+
+  for (src = val-&gt;sources; src; src = src-&gt;next)
+    {
+      struct cgraph_edge *cs = src-&gt;cs;
+      while (cs)
+        {
+          if (cgraph_edge_brings_value_p (cs, src, node, val)
+              &amp;&amp; cgraph_edge_brings_all_scalars_for_node (cs, val-&gt;spec_node)
+              &amp;&amp; cgraph_edge_brings_all_agg_vals_for_node (cs, val-&gt;spec_node))
+            {
+              if (dump_file)
+                fprintf (dump_file, &quot; - adding an extra caller %s of %s\n&quot;,
+                         cs-&gt;caller-&gt;dump_name (),
+                         val-&gt;spec_node-&gt;dump_name ());
+
+              cs-&gt;redirect_callee_duplicating_thunks (val-&gt;spec_node);
+              val-&gt;spec_node-&gt;expand_all_artificial_thunks ();
+              if (cs-&gt;count.ipa ().initialized_p ())
+                redirected_sum = redirected_sum + cs-&gt;count.ipa ();
+            }
+          cs = get_next_cgraph_edge_clone (cs);
+        }
+    }
+
+  if (redirected_sum.nonzero_p ())
+    update_specialized_profile (val-&gt;spec_node, node, redirected_sum);
+}
+...
+/* Determine whether CS also brings all aggregate values that NODE is
+   specialized for.  */
+
+static bool
+cgraph_edge_brings_all_agg_vals_for_node (struct cgraph_edge *cs,
+                                          struct cgraph_node *node)
+{
+  ipcp_transformation *ts = ipcp_get_transformation_summary (node);
+  if (!ts || vec_safe_is_empty (ts-&gt;m_agg_values))
+    return true;
+
+  const ipa_argagg_value_list existing (ts-&gt;m_agg_values);
+  auto_vec&lt;ipa_argagg_value, 32&gt; edge_values;
+  ipa_node_params *dest_info = ipa_node_params_sum-&gt;get (node);
+  gcc_checking_assert (dest_info-&gt;ipcp_orig_node);
+  dest_info = ipa_node_params_sum-&gt;get (dest_info-&gt;ipcp_orig_node);
+  push_agg_values_from_edge (cs, dest_info, &amp;edge_values, &amp;existing);
+  const ipa_argagg_value_list avl (&amp;edge_values);
+  return avl.superset_of_p (existing);
+}
+</code></pre>
 <p>Given that we pass a <code>struct { ... }</code> as a parameter our condition that
 should have failed lives at <code>cgraph_edge_brings_all_agg_vals_for_node (cs, val-&gt;spec_node)</code>
 call. It is supposed to check that all the parameters that our <code>d3.constprop()</code>
@@ -1112,31 +1111,32 @@ slightly broken. It handles self-recursive functions like
 specialized node (passed as <code>&amp;existing</code>) it just reuses <code>&amp;existing</code>
 value as if no other information is present.</p>
 <p>The workaround to test the theory was simple: just drop this pre-seed.</p>
-<div class="sourceCode" id="cb22"><pre class="sourceCode diff"><code class="sourceCode diff"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">--- a/gcc/ipa-cp.cc</span></span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="dt">+++ b/gcc/ipa-cp.cc</span></span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="dt">@@ -5868,35 +5868,35 @@ cgraph_edge_brings_all_scalars_for_node (struct cgraph_edge *cs,</span></span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a> /* Determine whether CS also brings all aggregate values that NODE is</span>
-<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    specialized for.  */</span>
-<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a> static bool</span>
-<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a> cgraph_edge_brings_all_agg_vals_for_node (struct cgraph_edge *cs,</span>
-<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>                                          struct cgraph_node *node)</span>
-<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a> {</span>
-<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>   ipcp_transformation *ts = ipcp_get_transformation_summary (node);</span>
-<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>   if (!ts || vec_safe_is_empty (ts-&gt;m_agg_values))</span>
-<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>     return true;</span>
-<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>   const ipa_argagg_value_list existing (ts-&gt;m_agg_values);</span>
-<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>   auto_vec&lt;ipa_argagg_value, 32&gt; edge_values;</span>
-<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>   ipa_node_params *dest_info = ipa_node_params_sum-&gt;get (node);</span>
-<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>   gcc_checking_assert (dest_info-&gt;ipcp_orig_node);</span>
-<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>   dest_info = ipa_node_params_sum-&gt;get (dest_info-&gt;ipcp_orig_node);</span>
-<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a><span class="st">-  push_agg_values_from_edge (cs, dest_info, &amp;edge_values, &amp;existing);</span></span>
-<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a><span class="va">+  push_agg_values_from_edge (cs, dest_info, &amp;edge_values, NULL);</span></span>
-<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a>   const ipa_argagg_value_list avl (&amp;edge_values);</span>
-<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a>   return avl.superset_of_p (existing);</span>
-<span id="cb22-25"><a href="#cb22-25" aria-hidden="true" tabindex="-1"></a> }</span></code></pre></div>
+<pre><code class="language-diff">--- a/gcc/ipa-cp.cc
++++ b/gcc/ipa-cp.cc
+@@ -5868,35 +5868,35 @@ cgraph_edge_brings_all_scalars_for_node (struct cgraph_edge *cs,
+
+ /* Determine whether CS also brings all aggregate values that NODE is
+    specialized for.  */
+
+ static bool
+ cgraph_edge_brings_all_agg_vals_for_node (struct cgraph_edge *cs,
+                                          struct cgraph_node *node)
+ {
+   ipcp_transformation *ts = ipcp_get_transformation_summary (node);
+   if (!ts || vec_safe_is_empty (ts-&gt;m_agg_values))
+     return true;
+
+   const ipa_argagg_value_list existing (ts-&gt;m_agg_values);
+   auto_vec&lt;ipa_argagg_value, 32&gt; edge_values;
+   ipa_node_params *dest_info = ipa_node_params_sum-&gt;get (node);
+   gcc_checking_assert (dest_info-&gt;ipcp_orig_node);
+   dest_info = ipa_node_params_sum-&gt;get (dest_info-&gt;ipcp_orig_node);
+-  push_agg_values_from_edge (cs, dest_info, &amp;edge_values, &amp;existing);
++  push_agg_values_from_edge (cs, dest_info, &amp;edge_values, NULL);
+   const ipa_argagg_value_list avl (&amp;edge_values);
+   return avl.superset_of_p (existing);
+ }
+</code></pre>
 <p>That was enough to repair this test and <code>llvm-11</code> and <code>llvm-12</code> test
 suite. The actual fix is slightly less conservative and uses <code>&amp;existing</code>
 values in propagation phase when edge values are not fully discovered
@@ -1144,7 +1144,7 @@ yet.</p>
 <p>Martin did a proper fix in
 <a href="https://gcc.gnu.org/git/?p=gcc.git;a=commitdiff;h=c4a92a9117a034e7cf291ae51d8b9b844fb5a88b"><code>ipa-cp</code>: Do not be too optimistic about self-recursive edges</a>
 commit.</p>
-<h2 id="optimized-example-after-the-fix">Optimized example after the fix</h2>
+<h2>Optimized example after the fix</h2>
 <p>Here is the final state built with <code>gcc -O1 -fipa-cp -fipa-cp-clone a.cc -o a -fdump-tree-all-slim</code>:</p>
 <pre><code>void do3 (volatile int * punused, struct function_ref Expired)
 {
@@ -1245,14 +1245,15 @@ void seemingly_unused_foo ()
   do3.constprop (&amp;unused, Expired);
   Expired ={v} {CLOBBER(eol)};
   return;
-}</code></pre>
+}
+</code></pre>
 <p>We see both <code>do3()</code> used by <code>main()</code> and <code>do3.constprop()</code> used by
-<code>seemingly_unused_foo()</code>. I don’t understand why <code>main()</code> did not
+<code>seemingly_unused_foo()</code>. I don't understand why <code>main()</code> did not
 trigger specialization of another <code>do3()</code> variant. Let it be another
 exercise for the reader and optimization opportunity :)</p>
 <p>The final result in pictures:</p>
-<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-3.svg" /></p>
-<h2 id="parting-words">Parting words</h2>
+<p><img src="../posts.data/267-diving-into-an-ipa-gcc-bug/fig-3.svg" alt="" /></p>
+<h2>Parting words</h2>
 <p><code>llvm</code> tests caught another non-trivial <code>gcc</code> bug.</p>
 <p><code>ipa</code> bugs are somewhat hard to reduce down to single file examples
 without at least minimum amount of understanding what <code>gcc</code> does and
@@ -1263,8 +1264,8 @@ me to get some feeling what various <code>gcc</code> passes do to the source
 program: how lambdas are represented, when does inlining happen (or
 not happen). <code>__attribute__((noinline, noipa))</code> and
 <code>#ppragma GCC optimize</code> are a great help here.</p>
-<p>Once an example is isolated to a single file it’s usually
-straightforward to shrink it down to something so tiny that it’s obvious
+<p>Once an example is isolated to a single file it's usually
+straightforward to shrink it down to something so tiny that it's obvious
 where <code>gcc</code> (or original program!) went wrong and turned the program into
 the bug. <code>-fdump*</code> set of options are a great help at exploring step by
 step program transformation in <code>gcc</code>. I rarely need to add debugging to
@@ -1281,6 +1282,4 @@ day to write and validate the proper fix.</p>
 <p>The fix was almost a one-liner. Now on to the <code>ffmpeg</code>
 <a href="https://gcc.gnu.org/PR107879">miscompilation</a> :)</p>
 <p>Have fun!</p>
-        </div>
-    </body>
-</html>
+</div></body></html>
