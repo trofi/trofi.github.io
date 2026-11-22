@@ -1,5 +1,438 @@
 <?xml version="1.0"?>
-<feed xmlns="http://www.w3.org/2005/Atom"><title>trofi - All posts</title><id>https://trofi.github.io/feed/atom.xml</id><updated>2026-11-15T00:00:00+00:00</updated><author><name>Sergei Trofimovich</name><email>slyich@gmail.com</email></author><link href="https://trofi.github.io/feed/atom.xml" rel="self"/><link href="https://trofi.github.io" rel="alternate"/><subtitle>trofi&apos;s blog</subtitle><entry><title>From hakyll to comrak based generator</title><id>https://trofi.github.io/posts/354-from-hakyll-to-comrak-based-generator.html</id><updated>2026-11-15T00:00:00+00:00</updated><link href="https://trofi.github.io/posts/354-from-hakyll-to-comrak-based-generator.html" rel="alternate"/><published>2026-11-15T00:00:00+00:00</published><summary type="html">&lt;p&gt;Tl;DR: I decided to gradually switch from
+<feed xmlns="http://www.w3.org/2005/Atom"><title>trofi - All posts</title><id>https://trofi.github.io/feed/atom.xml</id><updated>2026-11-22T00:00:00+00:00</updated><author><name>Sergei Trofimovich</name><email>slyich@gmail.com</email></author><link href="https://trofi.github.io/feed/atom.xml" rel="self"/><link href="https://trofi.github.io" rel="alternate"/><subtitle>trofi&apos;s blog</subtitle><entry><title>Broken chromium video acceleration</title><id>https://trofi.github.io/posts/355-broken-chromium-video-acceleration.html</id><updated>2026-11-22T00:00:00+00:00</updated><link href="https://trofi.github.io/posts/355-broken-chromium-video-acceleration.html" rel="alternate"/><published>2026-11-22T00:00:00+00:00</published><summary type="html">&lt;h2&gt;Tl;DR&lt;/h2&gt;
+&lt;p&gt;&lt;code&gt;mesa-26.3.0&lt;/code&gt; broke &lt;code&gt;chromium&lt;/code&gt; video acceleration on &lt;code&gt;wayland&lt;/code&gt;
+on at least &lt;code&gt;AMD&lt;/code&gt; &lt;code&gt;GFX8&lt;/code&gt; chips (mine is &lt;code&gt;polaris12&lt;/code&gt;). The easiest
+workaround is to roll back &lt;code&gt;mesa&lt;/code&gt; before
+&lt;a href=&quot;https://gitlab.freedesktop.org/mesa/mesa/-/commit/12b7b819edb4ddd3580e7e5ffe384610ae726c90&quot;&gt;&lt;code&gt;&amp;quot;radeonsi: Support DRM format modifiers on GFX6-8&amp;quot;&lt;/code&gt;&lt;/a&gt;
+commit. &lt;code&gt;chromium&lt;/code&gt; has a
+&lt;a href=&quot;https://chromium-review.googlesource.com/c/chromium/src/+/8847181&quot;&gt;proposed fix for inclusion upstream&lt;/a&gt;.&lt;/p&gt;
+&lt;h2&gt;More Words&lt;/h2&gt;
+&lt;h3&gt;The Problem: Lost &lt;code&gt;GPU&lt;/code&gt; Acceleration In &lt;code&gt;chromium&lt;/code&gt;&lt;/h3&gt;
+&lt;p&gt;Somehow I did not reboot my machine for a while. Once I had a chance to
+do it I noticed that &lt;code&gt;chromium&lt;/code&gt; browser took tens of seconds to start
+(normally expected to start in a second). The scroll was sluggish.
+Checking &lt;code&gt;chrome://gpu/&lt;/code&gt; I found that video acceleration was disabled.
+&lt;code&gt;stderr&lt;/code&gt; complained about exit code &lt;code&gt;132&lt;/code&gt; (&lt;code&gt;SIGILL&lt;/code&gt;) in &lt;code&gt;GPU&lt;/code&gt; process:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;[1120/211159.034209:ERROR:third_party/crashpad/crashpad/util/process/process_memory_range.cc:75]
+  read out of range
+[2193:1:1120/211210.610049:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277]
+  ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[1980:1:1120/211210.610228:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277]
+  ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[1947:1:1120/211210.610346:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277]
+  ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[1821:1821:1120/211210.635637:ERROR:content/browser/gpu/gpu_process_host.cc:1042]
+  GPU process exited unexpectedly: exit_code=132
+[1120/211210.769569:ERROR:third_party/crashpad/crashpad/util/process/process_memory_range.cc:75]
+  read out of range
+[1821:1821:1120/211230.632702:ERROR:content/browser/gpu/gpu_process_host.cc:1042]
+  GPU process exited unexpectedly: exit_code=132
+[1120/211230.761576:ERROR:third_party/crashpad/crashpad/util/process/process_memory_range.cc:75]
+  read out of range
+[3388:1:1120/211242.124535:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277]
+  ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[3320:1:1120/211242.124621:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277]
+  ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[3277:1:1120/211242.124620:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:476]
+  GPU state invalid after WaitForGetOffsetInRange.
+[1821:1821:1120/211242.131811:ERROR:content/browser/gpu/gpu_process_host.cc:1042]
+  GPU process exited unexpectedly: exit_code=132
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The slow startup is due to a long core dumping process. At least I was
+able to get a backtrace:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ coredumpctl debug chromium
+...
+Reading symbols from /nix/store/py8gk4jz9i4lnrmc25vjp7rcdbp9ma79-chromium-unwrapped-158.0.8127.36/libexec/chromium/chromium...
+(No debugging symbols found in /nix/store/py8gk4jz9i4lnrmc25vjp7rcdbp9ma79-chromium-unwrapped-158.0.8127.36/libexec/chromium/chromium)
+...
+(gdb) bt
+#0  0x0000648a4afb99ee in ui::NativePixmapEGLBinding::Create(scoped_refptr&amp;lt;gfx::NativePixmap&amp;gt;, viz::SharedImageFormat, std::__Cr::optional&amp;lt;int&amp;gt;, gfx::Size, gfx::ColorSpace const&amp;amp;, unsigned int, unsigned int) ()
+#1  0x0000648a4b3a574d in ui::(anonymous namespace)::GLOzoneEGLWayland::ImportNativePixmap(scoped_refptr&amp;lt;gfx::NativePixmap&amp;gt;, viz::SharedImageFormat, std::__Cr::optional&amp;lt;int&amp;gt;, gfx::Size, gfx::ColorSpace const&amp;amp;, unsigned int, unsigned int) [clone .f7ea226dbd3986cbfff2a2e5fc4485d9] ()
+#2  0x0000648a56988960 in gpu::OzoneImageGLTexturesHolder::CreateAndStoreTexture(gpu::SharedImageBacking*, scoped_refptr&amp;lt;gfx::NativePixmap&amp;gt;) ()
+#3  0x0000648a56982686 in gpu::OzoneImageBacking::RetainGLTexturePerContextCache() ()
+#4  0x0000648a569829be in gpu::OzoneImageBacking::ProduceSkiaGanesh(gpu::SharedImageManager*, gpu::MemoryTypeTracker*, scoped_refptr&amp;lt;gpu::SharedContextState&amp;gt;) ()
+#5  0x0000648a56939fd1 in gpu::CompoundImageBacking::ProduceSkiaGanesh(gpu::SharedImageManager*, gpu::MemoryTypeTracker*, scoped_refptr&amp;lt;gpu::SharedContextState&amp;gt;) ()
+#6  0x0000648a567deb66 in gpu::SharedImageBacking::ProduceSkia(gpu::SharedImageManager*, gpu::MemoryTypeTracker*, scoped_refptr&amp;lt;gpu::SharedContextState&amp;gt;) ()
+#7  0x0000648a567dbf44 in gpu::SharedImageManager::ProduceSkia(gpu::Mailbox const&amp;amp;, gpu::MemoryTypeTracker*, scoped_refptr&amp;lt;gpu::SharedContextState&amp;gt;, gpu::SharedImageUsageSet) ()
+#8  0x0000648a56933719 in gpu::SharedImageRepresentationFactory::ProduceSkia(gpu::Mailbox const&amp;amp;, scoped_refptr&amp;lt;gpu::SharedContextState&amp;gt;, gpu::SharedImageUsageSet) ()
+#9  0x0000648a58057fe5 in viz::SkiaOutputSurfaceImplOnGpu::FinishPaintRenderPass(gpu::Mailbox const&amp;amp;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, std::__Cr::unique_ptr&amp;lt;skgpu::graphite::Recording, std::__Cr::default_delete&amp;lt;skgpu::graphite::Recording&amp;gt; &amp;gt;, std::__Cr::vector&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt;, std::__Cr::allocator&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt; &amp;gt; &amp;gt;, base::OnceCallback&amp;lt;void ()&amp;gt;, base::OnceCallback&amp;lt;void (gfx::GpuFenceHandle)&amp;gt;, gfx::Rect const&amp;amp;, bool) ()
+#10 0x0000648a5804a8da in base::internal::Invoker&amp;lt;base::internal::FunctorTraits&amp;lt;void (viz::SkiaOutputSurfaceImplOnGpu::*&amp;amp;&amp;amp;)(gpu::Mailbox const&amp;amp;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, std::__Cr::unique_ptr&amp;lt;skgpu::graphite::Recording, std::__Cr::default_delete&amp;lt;skgpu::graphite::Recording&amp;gt; &amp;gt;, std::__Cr::vector&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt;, std::__Cr::allocator&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt; &amp;gt; &amp;gt;, base::OnceCallback&amp;lt;void ()&amp;gt;, base::OnceCallback&amp;lt;void (gfx::GpuFenceHandle)&amp;gt;, gfx::Rect const&amp;amp;, bool), viz::SkiaOutputSurfaceImplOnGpu*, gpu::Mailbox&amp;amp;&amp;amp;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;&amp;amp;&amp;amp;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;&amp;amp;&amp;amp;, std::__Cr::unique_ptr&amp;lt;skgpu::graphite::Recording, std::__Cr::default_delete&amp;lt;skgpu::graphite::Recording&amp;gt; &amp;gt;&amp;amp;&amp;amp;, std::__Cr::vector&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt;, std::__Cr::allocator&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt; &amp;gt; &amp;gt;&amp;amp;&amp;amp;, base::OnceCallback&amp;lt;void ()&amp;gt;&amp;amp;&amp;amp;, base::OnceCallback&amp;lt;void (gfx::GpuFenceHandle)&amp;gt;&amp;amp;&amp;amp;, gfx::Rect&amp;amp;&amp;amp;, bool&amp;amp;&amp;amp;&amp;gt;, base::internal::BindState&amp;lt;true, true, false, void (viz::SkiaOutputSurfaceImplOnGpu::*)(gpu::Mailbox const&amp;amp;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, std::__Cr::unique_ptr&amp;lt;skgpu::graphite::Recording, std::__Cr::default_delete&amp;lt;skgpu::graphite::Recording&amp;gt; &amp;gt;, std::__Cr::vector&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt;, std::__Cr::allocator&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt; &amp;gt; &amp;gt;, base::OnceCallback&amp;lt;void ()&amp;gt;, base::OnceCallback&amp;lt;void (gfx::GpuFenceHandle)&amp;gt;, gfx::Rect const&amp;amp;, bool), base::internal::UnretainedWrapper&amp;lt;viz::SkiaOutputSurfaceImplOnGpu, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0&amp;gt;, gpu::Mailbox, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, sk_sp&amp;lt;GrDeferredDisplayList&amp;gt;, std::__Cr::unique_ptr&amp;lt;skgpu::graphite::Recording, std::__Cr::default_delete&amp;lt;skgpu::graphite::Recording&amp;gt; &amp;gt;, std::__Cr::vector&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt;, std::__Cr::allocator&amp;lt;base::raw_ptr&amp;lt;viz::ImageContextImpl, (partition_alloc::internal::RawPtrTraits)1&amp;gt; &amp;gt; &amp;gt;, base::OnceCallback&amp;lt;void ()&amp;gt;, base::OnceCallback&amp;lt;void (gfx::GpuFenceHandle)&amp;gt;, gfx::Rect, bool&amp;gt;, void ()&amp;gt;::RunOnce(base::internal::BindStateBase*) [clone .cfi] ()
+#11 0x0000648a5804b622 in base::internal::Invoker&amp;lt;base::internal::FunctorTraits&amp;lt;viz::SkiaOutputSurfaceImpl::FlushGpuTasksWithImpl(viz::SkiaOutputSurfaceImpl::SyncMode, viz::SkiaOutputSurfaceImplOnGpu*, gpu::SyncToken const&amp;amp;)::$_0&amp;amp;&amp;amp;, std::__Cr::vector&amp;lt;base::OnceCallback&amp;lt;void ()&amp;gt;, std::__Cr::allocator&amp;lt;base::OnceCallback&amp;lt;void ()&amp;gt; &amp;gt; &amp;gt;&amp;amp;&amp;amp;, viz::SkiaOutputSurfaceImpl::SyncMode&amp;amp;&amp;amp;, base::WaitableEvent*&amp;amp;&amp;amp;, viz::SkiaOutputSurfaceImplOnGpu*&amp;amp;&amp;amp;, bool&amp;amp;&amp;amp;, bool&amp;amp;&amp;amp;, base::TimeTicks&amp;amp;&amp;amp;&amp;gt;, base::internal::BindState&amp;lt;false, false, false, viz::SkiaOutputSurfaceImpl::FlushGpuTasksWithImpl(viz::SkiaOutputSurfaceImpl::SyncMode, viz::SkiaOutputSurfaceImplOnGpu*, gpu::SyncToken const&amp;amp;)::$_0, std::__Cr::vector&amp;lt;base::OnceCallback&amp;lt;void ()&amp;gt;, std::__Cr::allocator&amp;lt;base::OnceCallback&amp;lt;void ()&amp;gt; &amp;gt; &amp;gt;, viz::SkiaOutputSurfaceImpl::SyncMode, base::internal::UnretainedWrapper&amp;lt;base::WaitableEvent, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0&amp;gt;, base::internal::UnretainedWrapper&amp;lt;viz::SkiaOutputSurfaceImplOnGpu, base::unretained_traits::MayNotDangle, (partition_alloc::internal::RawPtrTraits)0&amp;gt;, bool, bool, base::TimeTicks&amp;gt;, void ()&amp;gt;::RunOnce(base::internal::BindStateBase*) [clone .2cba30843f198ee40e0524c326a2475d] [clone .cfi] ()
+#12 0x0000648a4e001a71 in gpu::Scheduler::RunNextTask() ()
+#13 0x0000648a53348041 in base::TaskAnnotator::RunTaskImpl(base::PendingTask&amp;amp;) ()
+#14 0x0000648a5336d3fb in base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::DoWork() ()
+#15 0x0000648a532e669d in base::MessagePumpDefault::Run(base::MessagePump::Delegate*) ()
+#16 0x0000648a5336e192 in base::sequence_manager::internal::ThreadControllerWithMessagePumpImpl::Run(bool, base::TimeDelta) ()
+#17 0x0000648a53320351 in base::RunLoop::Run(base::Location const&amp;amp;) ()
+#18 0x0000648a57fcd522 in content::GpuMain(content::MainFunctionParams) [clone .cfi] ()
+#19 0x0000648a5329eeb5 in content::RunOtherNamedProcessTypeMain(std::__Cr::basic_string&amp;lt;char, std::__Cr::char_traits&amp;lt;char&amp;gt;, std::__Cr::allocator&amp;lt;char&amp;gt; &amp;gt; const&amp;amp;, content::MainFunctionParams, content::ContentMainDelegate*) ()
+#20 0x0000648a532a0ef3 in content::ContentMainRunnerImpl::Run() ()
+#21 0x0000648a5329d81c in content::ContentMain(content::ContentMainParams) ()
+#22 0x0000648a4a6aa9dd in ChromeMain ()
+#23 0x000076fc57a2b391 in __libc_start_call_main () from /nix/store/r3hvhzl5fxhrgn0rfy5g7rda17702pj4-glibc-2.44-57/lib/libc.so.6
+#24 0x000076fc57a2b4a8 in __libc_start_main_impl () from /nix/store/r3hvhzl5fxhrgn0rfy5g7rda17702pj4-glibc-2.44-57/lib/libc.so.6
+#25 0x0000648a4a1d4025 in _start ()
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Looks like a failure at texture creation time.&lt;/p&gt;
+&lt;h3&gt;Past Failures&lt;/h3&gt;
+&lt;p&gt;It&apos;s not the first time I had problems of a very similar sort. Last
+instance was on &lt;code&gt;chromium-140.0.7339.185&lt;/code&gt; where it
+&lt;a href=&quot;https://issues.chromium.org/issues/446395287&quot;&gt;failed to create GPU-compatible surfaces&lt;/a&gt;:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;[2534001:2534001:0920/215028.731999:ERROR:ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc:82] :
+  Cannot create bo with format= RGBA_8888 and usage=SCANOUT
+[2534001:2534001:0920/215028.732103:ERROR:ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc:82] :
+  Cannot create bo with format= RGBA_8888 and usage=GPU_READ
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Even by that time I already had some experience hacking around the same
+issue in &lt;a href=&quot;https://trofi.github.io/posts/268-fixing-wine-wayland-on-polaris.html&quot;&gt;&lt;code&gt;wine-wayland&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;
+&lt;h3&gt;What Triggered the Regression?&lt;/h3&gt;
+&lt;p&gt;I was a bit confused as most other &lt;code&gt;OpenGL&lt;/code&gt; programs worked just fine.
+Why the &lt;code&gt;chromium&lt;/code&gt; is special here? To restore my browser I attempted to
+pinpoint the component. I keep &lt;code&gt;90&lt;/code&gt; days of past OS system builds and
+build the systems every night. I had &lt;code&gt;50&lt;/code&gt; generations to bisect through.
+After &lt;code&gt;7&lt;/code&gt; reboots I found that &lt;code&gt;November 10&lt;/code&gt; version was fine while
+&lt;code&gt;November 11&lt;/code&gt; version was not. From the system generations I extracted
+&lt;code&gt;nixpkgs&lt;/code&gt; commits my system was built from (&lt;code&gt;nixos-version&lt;/code&gt; has it as is
+as last 6 characters):&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;/nix/var/nix/profiles/system-2896-link/nixos-version: 26.11.20261111.7990b0f
+/nix/var/nix/profiles/system-2895-link/nixos-version: 26.11.20261110.dd65537
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The bisection to an individual commit was trivial:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ git bisect start 7990b0f dd65537
+821 revisions, 10 steps
+
+$ sudo nixos-rebuild switch --impure --override-input nixpkgs .
+&amp;lt;reboot&amp;gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;It took me &lt;code&gt;10&lt;/code&gt; steps (about &lt;code&gt;25&lt;/code&gt; minutes for all of them) to arrive at
+&lt;a href=&quot;https://github.com/NixOS/nixpkgs/commit/1eebd1524576432e125e525a83eec1272540711c&quot;&gt;&lt;code&gt;mesa: 26.2.6 -&amp;gt; 26.3.0&lt;/code&gt;&lt;/a&gt;
+update. Luckily &lt;code&gt;mesa&lt;/code&gt; is not a build dependency of most packages and I
+had almost nothing to rebuild on any of these steps.
+Before just reverting &lt;code&gt;mesa&lt;/code&gt; locally I was curious what in &lt;code&gt;mesa&lt;/code&gt; caused
+&lt;code&gt;chromium&lt;/code&gt; to break. I bisected &lt;code&gt;mesa&lt;/code&gt; as well. I checked out &lt;code&gt;mesa&lt;/code&gt;
+locally to start a bisect:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ git bisect start mesa-26.3.0 mesa-26.2.6
+13 steps
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;And I did a 2-liner change in &lt;code&gt;nixpkgs&lt;/code&gt; to use &lt;code&gt;git&lt;/code&gt; tree of &lt;code&gt;mesa&lt;/code&gt;:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-diff&quot;&gt;--- a/pkgs/development/libraries/mesa/common.nix
++++ b/pkgs/development/libraries/mesa/common.nix
+@@ -7,13 +7,14 @@ rec {
+   pname = &amp;quot;mesa&amp;quot;;
+   version = &amp;quot;26.3.1&amp;quot;;
+
+-  src = fetchFromGitLab {
++  src_ = fetchFromGitLab {
+     domain = &amp;quot;gitlab.freedesktop.org&amp;quot;;
+     owner = &amp;quot;mesa&amp;quot;;
+     repo = &amp;quot;mesa&amp;quot;;
+     rev = &amp;quot;mesa-${version}&amp;quot;;
+     hash = &amp;quot;sha256-wOftyyAhQT/gtCZrmVPnqkSPvUKJlSExTe0++5MZj44=&amp;quot;;
+   };
++  src = builtins.fetchGit /mnt/archive/big/git/mesa;
+
+   meta = {
+     description = &amp;quot;Open source 3D graphics library&amp;quot;;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;I used the same command to rebuild and test the system:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ sudo nixos-rebuild switch --impure --override-input nixpkgs .
+&amp;lt;reboot&amp;gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Each iteration took me about 6 minutes as &lt;code&gt;mesa&lt;/code&gt; needs about &lt;code&gt;6000&lt;/code&gt;
+source files to build in &lt;code&gt;nixpkgs&lt;/code&gt;. I removed drivers I don&apos;t use as:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-diff&quot;&gt;--- a/pkgs/development/libraries/mesa/default.nix
++++ b/pkgs/development/libraries/mesa/default.nix
+@@ -55,43 +55,12 @@
+   # We enable as many drivers as possible here, to build cross tools
+   # and support emulation use cases (emulated x86_64 on aarch64, etc)
+   galliumDrivers ? [
+-    &amp;quot;asahi&amp;quot; # Apple AGX
+-    &amp;quot;crocus&amp;quot; # Intel legacy
+-    &amp;quot;d3d12&amp;quot; # WSL emulated GPU (aka Dozen)
+-    &amp;quot;ethosu&amp;quot; # ARM Ethos NPU
+-    &amp;quot;etnaviv&amp;quot; # Vivante GPU designs (mostly NXP/Marvell SoCs)
+-    &amp;quot;freedreno&amp;quot; # Qualcomm Adreno (all Qualcomm SoCs)
+-    &amp;quot;i915&amp;quot; # Intel extra legacy
+-    &amp;quot;iris&amp;quot; # new Intel (Broadwell+)
+-    &amp;quot;lima&amp;quot; # ARM Mali 4xx
+-    &amp;quot;llvmpipe&amp;quot; # software renderer
+-    &amp;quot;nouveau&amp;quot; # Nvidia
+-    &amp;quot;panfrost&amp;quot; # ARM Mali Midgard and up (T/G series)
+     &amp;quot;r300&amp;quot; # very old AMD
+     &amp;quot;r600&amp;quot; # less old AMD
+     &amp;quot;radeonsi&amp;quot; # new AMD (GCN+)
+-    &amp;quot;rocket&amp;quot; # Rockchip NPU
+-    &amp;quot;softpipe&amp;quot; # older software renderer
+-    &amp;quot;svga&amp;quot; # VMWare virtualized GPU
+-    &amp;quot;tegra&amp;quot; # Nvidia Tegra SoCs
+-    &amp;quot;v3d&amp;quot; # Broadcom VC5 (Raspberry Pi 4)
+-    &amp;quot;vc4&amp;quot; # Broadcom VC4 (Raspberry Pi 0-3)
+-    &amp;quot;virgl&amp;quot; # QEMU virtualized GPU (aka VirGL)
+-    &amp;quot;zink&amp;quot; # generic OpenGL over Vulkan, experimental
+   ],
+   vulkanDrivers ? [
+     &amp;quot;amd&amp;quot; # AMD (aka RADV)
+-    &amp;quot;asahi&amp;quot; # Apple AGX
+-    &amp;quot;broadcom&amp;quot; # Broadcom VC5 (Raspberry Pi 4, aka V3D)
+-    &amp;quot;freedreno&amp;quot; # Qualcomm Adreno (all Qualcomm SoCs)
+-    &amp;quot;gfxstream&amp;quot; # Android virtualized GPU
+-    &amp;quot;imagination&amp;quot; # PowerVR Rogue (currently N/A)
+-    &amp;quot;intel_hasvk&amp;quot; # Intel Haswell/Broadwell, &amp;quot;legacy&amp;quot; Vulkan driver (https://www.phoronix.com/news/Intel-HasVK-Drop-Dead-Code)
+-    &amp;quot;intel&amp;quot; # new Intel (aka ANV)
+-    &amp;quot;microsoft-experimental&amp;quot; # WSL virtualized GPU (aka DZN/Dozen)
+-    &amp;quot;nouveau&amp;quot; # Nouveau (aka NVK)
+-    &amp;quot;panfrost&amp;quot; # ARM Mali Midgard and up (T/G series)
+-    &amp;quot;swrast&amp;quot; # software renderer (aka Lavapipe)
+   ]
+   ++
+     lib.optionals
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;This shrunk &lt;code&gt;mesa&lt;/code&gt; builds down from &lt;code&gt;6000&lt;/code&gt; to &lt;code&gt;2200&lt;/code&gt; files and sped up
+build from 6 minutes to 2 minutes. After 12 steps I arrived at the
+suspicious
+&lt;a href=&quot;https://gitlab.freedesktop.org/mesa/mesa/-/commit/12b7b819edb4ddd3580e7e5ffe384610ae726c90&quot;&gt;&lt;code&gt;&amp;quot;radeonsi: Support DRM format modifiers on GFX6-8&amp;quot;&lt;/code&gt;&lt;/a&gt;
+commit:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;radeonsi: Support DRM format modifiers on GFX6-8
+
+Now that ac_surface supports GFX6-8 modifiers,
+enable them in RadeonSI too.
+
+Part-of: &amp;lt;https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/41557&amp;gt;
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;At this point I realized the actual triggering change was in my
+compositor (&lt;code&gt;niri&lt;/code&gt;) and not in &lt;code&gt;chromium&lt;/code&gt; behaviour. Before the patch
+&lt;code&gt;niri&lt;/code&gt; reported only one supported (&lt;code&gt;INVALID&lt;/code&gt;) modifier per pixel format:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ wayland-info | grep -A20 zwp_linux_dmabuf_v1
+interface: &apos;zwp_linux_dmabuf_v1&apos;,                        version:  5, name: 42
+        main device: 0xE280 (/dev/dri/card1 or /dev/dri/renderD128)
+        tranche
+                target device: 0xE280 (/dev/dri/card1 or /dev/dri/renderD128)
+                flags: none
+                formats (fourcc) and modifiers (names):
+                0x48344241 = &apos;AB4H&apos;; 0x00ffffffffffffff = INVALID
+                0x48344258 = &apos;XB4H&apos;; 0x00ffffffffffffff = INVALID
+                0x30335241 = &apos;AR30&apos;; 0x00ffffffffffffff = INVALID
+                0x30335258 = &apos;XR30&apos;; 0x00ffffffffffffff = INVALID
+                0x30334241 = &apos;AB30&apos;; 0x00ffffffffffffff = INVALID
+                0x30334258 = &apos;XB30&apos;; 0x00ffffffffffffff = INVALID
+                0x34325241 = &apos;AR24&apos;; 0x00ffffffffffffff = INVALID
+                0x34324142 = &apos;BA24&apos;; 0x00ffffffffffffff = INVALID
+                0x34324241 = &apos;AB24&apos;; 0x00ffffffffffffff = INVALID
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;After the patch a few more modes appeared per pixel format:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ wayland-info | grep -A20 zwp_linux_dmabuf_v1
+interface: &apos;zwp_linux_dmabuf_v1&apos;,                        version:  5, name: 42
+        main device: 0xE280 (/dev/dri/card1 or /dev/dri/renderD128)
+        tranche
+                target device: 0xE280 (/dev/dri/card1 or /dev/dri/renderD128)
+                flags: none
+                formats (fourcc) and modifiers (names):
+                0x48344241 = &apos;AB4H&apos;; 0x02000001c90a6400 = AMD_UNKNOWN_MODIFIER
+                0x48344241 = &apos;AB4H&apos;; 0x02000001c90a4400 = AMD_UNKNOWN_MODIFIER
+                0x48344241 = &apos;AB4H&apos;; 0x02000001c90a0400 = AMD_UNKNOWN_MODIFIER
+                0x48344241 = &apos;AB4H&apos;; 0x0200000000004200 = AMD_UNKNOWN_MODIFIER
+                0x48344241 = &apos;AB4H&apos;; 0x0200000000000200 = AMD_UNKNOWN_MODIFIER
+                0x48344241 = &apos;AB4H&apos;; 0x0000000000000000 = LINEAR
+                0x48344241 = &apos;AB4H&apos;; 0x00ffffffffffffff = INVALID
+                0x48344258 = &apos;XB4H&apos;; 0x02000001c90a6400 = AMD_UNKNOWN_MODIFIER
+                0x48344258 = &apos;XB4H&apos;; 0x02000001c90a4400 = AMD_UNKNOWN_MODIFIER
+                0x48344258 = &apos;XB4H&apos;; 0x02000001c90a0400 = AMD_UNKNOWN_MODIFIER
+                0x48344258 = &apos;XB4H&apos;; 0x0200000000004200 = AMD_UNKNOWN_MODIFIER
+                0x48344258 = &apos;XB4H&apos;; 0x0200000000000200 = AMD_UNKNOWN_MODIFIER
+                0x48344258 = &apos;XB4H&apos;; 0x0000000000000000 = LINEAR
+                0x48344258 = &apos;XB4H&apos;; 0x00ffffffffffffff = INVALID
+                0x30335241 = &apos;AR30&apos;; 0x02000001d0ca6400 = AMD_UNKNOWN_MODIFIER
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;I was not sure where the bug is: in &lt;code&gt;niri&lt;/code&gt;, in &lt;code&gt;mesa&lt;/code&gt;, in &lt;code&gt;chromium&lt;/code&gt; or
+maybe in &lt;code&gt;linux&lt;/code&gt; kernel &lt;code&gt;GPU&lt;/code&gt; in how it handles other modes?
+Looking around &lt;code&gt;mesa&lt;/code&gt; bug tracker I found
+&lt;a href=&quot;https://gitlab.freedesktop.org/mesa/mesa/-/work_items/16942&quot;&gt;&lt;code&gt;&amp;quot;[radeonsi/GFX6] Regression 26.2.6 → 26.3.1: Chromium-based browser GPU process dies with SIGILL on Oland [1002:6613]; downgrading Mesa fixes it&amp;quot;&lt;/code&gt;&lt;/a&gt;
+bug which looks identical to mine.
+A mystery! I reported my setup in &lt;a href=&quot;https://gitlab.freedesktop.org/mesa/mesa/-/work_items/16942#note_3799602&quot;&gt;the comment&lt;/a&gt;.
+And day later someone reported that &lt;code&gt;chromium&lt;/code&gt; already has the fix
+&lt;a href=&quot;https://chromium-review.googlesource.com/c/chromium/src/+/8847181&quot;&gt;proposed for inclusion&lt;/a&gt;:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-diff&quot;&gt;[PATCH] [ozone] Don&apos;t range-check DRM modifier halves as EGLint
+
+NativePixmapEGLBinding::InitializeFromNativePixmap() pushed the low
+and high 32 bits of the format modifier through
+base::checked_cast&amp;lt;EGLint&amp;gt;(), which CHECK-fails when a half has bit 31
+set. AMD GFX8 (Polaris) modifiers from recent Mesa, such as
+0x02000001D0CA0400, hit this and crash the GPU process.
+
+EGL_EXT_image_dma_buf_import_modifiers expects the raw bit pattern of
+each half, so reinterpret the uint32_t halves as EGLint with
+base::bit_cast instead. Offsets keep the checked conversion.
+
+Fixed: 588420152
+Change-Id: Icaf1cdf50969175f685f54c87adcada7248dbd93
+---
+
+diff --git a/ui/ozone/common/native_pixmap_egl_binding.cc b/ui/ozone/common/native_pixmap_egl_binding.cc
+index d0807f8d..8b9a148 100644
+--- a/ui/ozone/common/native_pixmap_egl_binding.cc
++++ b/ui/ozone/common/native_pixmap_egl_binding.cc
+@@ -6,6 +6,7 @@
+
+ #include &amp;lt;array&amp;gt;
+
++#include &amp;quot;base/bit_cast.h&amp;quot;
+ #include &amp;quot;base/logging.h&amp;quot;
+ #include &amp;quot;base/memory/scoped_refptr.h&amp;quot;
+ #include &amp;quot;base/notreached.h&amp;quot;
+@@ -236,10 +237,14 @@
+               base::NotFatalUntil::M163);
+         CHECK(attrs_plane &amp;lt; std::size(kPlaneHiModifierAttrs),
+               base::NotFatalUntil::M163);
++        // EGL takes the raw bits of each 32-bit half of the modifier, which
++        // may have the sign bit set (e.g. AMD modifiers).
+         attrs.push_back(kPlaneLoModifierAttrs[attrs_plane]);
+-        PushEGLintOrDie(modifier &amp;amp; 0xffffffff, attrs);
++        attrs.push_back(
++            base::bit_cast&amp;lt;EGLint&amp;gt;(static_cast&amp;lt;uint32_t&amp;gt;(modifier)));
+         attrs.push_back(kPlaneHiModifierAttrs[attrs_plane]);
+-        PushEGLintOrDie(static_cast&amp;lt;uint32_t&amp;gt;(modifier &amp;gt;&amp;gt; 32), attrs);
++        attrs.push_back(
++            base::bit_cast&amp;lt;EGLint&amp;gt;(static_cast&amp;lt;uint32_t&amp;gt;(modifier &amp;gt;&amp;gt; 32)));
+       }
+     }
+     attrs.push_back(EGL_NONE);
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Gah! A simple &lt;code&gt;C++&lt;/code&gt; coding bug in handling sign extension!&lt;/p&gt;
+&lt;h3&gt;More Targeted Workaround&lt;/h3&gt;
+&lt;p&gt;To restore video acceleration without full rollback of &lt;code&gt;mesa&lt;/code&gt; I settled
+on a single patch revert in my local system via this overlay definition:&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-nix&quot;&gt;# cat /etc/nixos/overlay.nix
+final: prev: {
+  mesa = prev.mesa.overrideAttrs(oa: {
+    patches = oa.patches ++ [
+      # fix chrome hwaccel
+      (prev.fetchpatch {
+        name = &amp;quot;revert-AMD_UNKNOWN_MODIFIER.patch&amp;quot;;
+        url = &amp;quot;https://gitlab.freedesktop.org/mesa/mesa/-/commit/12b7b819edb4ddd3580e7e5ffe384610ae726c90.patch&amp;quot;;
+        revert = true;
+        hash = &amp;quot;sha256-VJAaqgbjlfhjg++2DjG1ZXrE6o7HnZrToJBCPEBAPks=&amp;quot;;
+      })
+    ];
+  });
+}
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Another option would be to apply pending &lt;code&gt;chromium&lt;/code&gt; patch, but &lt;code&gt;nixpkgs&lt;/code&gt;
+does &lt;a href=&quot;https://github.com/NixOS/nixpkgs/issues/276884&quot;&gt;not make it easy&lt;/a&gt;
+and &lt;code&gt;chromium&lt;/code&gt; builds are quite long.&lt;/p&gt;
+&lt;h3&gt;Where Do These Modes come From?&lt;/h3&gt;
+&lt;p&gt;&lt;code&gt;0x0000000000000000 = LINEAR&lt;/code&gt; and &lt;code&gt;0x00ffffffffffffff = INVALID&lt;/code&gt;
+are just two constants. But &lt;code&gt;AMD_UNKNOWN_MODIFIER&lt;/code&gt; has many different
+values:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;0x02000001c90a6400 = AMD_UNKNOWN_MODIFIER
+0x02000001c90a4400 = AMD_UNKNOWN_MODIFIER
+0x02000001c90a0400 = AMD_UNKNOWN_MODIFIER
+0x0200000000004200 = AMD_UNKNOWN_MODIFIER
+0x0200000000000200 = AMD_UNKNOWN_MODIFIER
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;Where do they come from and what do they mean? My understanding is that
+it comes from &lt;code&gt;linux&lt;/code&gt; &lt;code&gt;DRM&lt;/code&gt; subsystem:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ drm_info
+...
+
+└───Planes
+    ├───Plane 0
+...
+    │       ├───&amp;quot;IN_FORMATS&amp;quot; (immutable): blob = 45
+    │       │   ├───AMD(TILE_VERSION = unknown, TILE = unknown) (0x02000001d08a0400)
+    │       │   │   └───RGB565 (0x36314752)
+    │       │   ├───AMD(TILE_VERSION = unknown, TILE = unknown) (0x02000001d0ca0400)
+    │       │   │   ├───XRGB8888 (0x34325258)
+    │       │   │   ├───ARGB8888 (0x34325241)
+    │       │   │   ├───RGBA8888 (0x34324152)
+    │       │   │   ├───XRGB2101010 (0x30335258)
+    │       │   │   ├───XBGR2101010 (0x30334258)
+    │       │   │   ├───ARGB2101010 (0x30335241)
+    │       │   │   ├───ABGR2101010 (0x30334241)
+    │       │   │   ├───XBGR8888 (0x34324258)
+    │       │   │   └───ABGR8888 (0x34324241)
+    │       │   ├───AMD(TILE_VERSION = unknown, TILE = unknown) (0x02000001c90a0400)
+    │       │   │   ├───XRGB16161616 (0x38345258)
+    │       │   │   ├───XBGR16161616 (0x38344258)
+    │       │   │   ├───ARGB16161616 (0x38345241)
+    │       │   │   ├───ABGR16161616 (0x38344241)
+    │       │   │   ├───XRGB16161616F (0x48345258)
+    │       │   │   ├───ARGB16161616F (0x48345241)
+    │       │   │   ├───XBGR16161616F (0x48344258)
+    │       │   │   └───ABGR16161616F (0x48344241)
+    │       │   ├───AMD(TILE_VERSION = unknown, TILE = unknown) (0x0200000000000200)
+    │       │   │   ├───XRGB8888 (0x34325258)
+    │       │   │   ├───ARGB8888 (0x34325241)
+    │       │   │   ├───RGBA8888 (0x34324152)
+    │       │   │   ├───XRGB2101010 (0x30335258)
+    │       │   │   ├───XBGR2101010 (0x30334258)
+    │       │   │   ├───ARGB2101010 (0x30335241)
+    │       │   │   ├───ABGR2101010 (0x30334241)
+    │       │   │   ├───XRGB16161616 (0x38345258)
+    │       │   │   ├───XBGR16161616 (0x38344258)
+    │       │   │   ├───ARGB16161616 (0x38345241)
+    │       │   │   ├───ABGR16161616 (0x38344241)
+    │       │   │   ├───XBGR8888 (0x34324258)
+    │       │   │   ├───ABGR8888 (0x34324241)
+    │       │   │   ├───RGB565 (0x36314752)
+    │       │   │   ├───XRGB16161616F (0x48345258)
+    │       │   │   ├───ARGB16161616F (0x48345241)
+    │       │   │   ├───XBGR16161616F (0x48344258)
+    │       │   │   └───ABGR16161616F (0x48344241)
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───XRGB8888 (0x34325258)
+...
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;I was wondering why &lt;code&gt;AMD(TILE_VERSION = unknown, TILE = unknown) (0x02000001d08a0400)&lt;/code&gt;
+does not show any details about &lt;code&gt;TILE_VERSION&lt;/code&gt; / &lt;code&gt;TILE&lt;/code&gt; and found that
+&lt;code&gt;libdrm&lt;/code&gt; did not yet merge support for it at
+&lt;a href=&quot;https://gitlab.freedesktop.org/mesa/libdrm/-/merge_requests/481&quot;&gt;&lt;code&gt;&amp;quot;amdgpu: Print new DRM format modifiers for AMD GFX6-8&amp;quot;&lt;/code&gt;&lt;/a&gt;.
+The header change has a good description of bits:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt; * DRM format modifier fields on AMD GPUs:
+ *     7:0 TILE_VERSION             Values are AMD_FMT_MOD_TILE_VER_*
+ *    12:8 TILE                     Values are AMD_FMT_MOD_TILE_&amp;lt;version&amp;gt;_*
+ *      13 DCC                      Delta Color Compression, supported on GFX8 and newer
+ *   55:14 (chip specific)          See below for details, depends on GFX block version
+ *   63:56 Vendor                   Value is DRM_FORMAT_MOD_VENDOR_AMD
+...
+ * Chip specific fields on Gfx6-8:
+ *   16:14 MICROTILE                Micro tile format
+ *   21:17 PIPE_CONFIG              Number of pipes and how pipes are interleaved
+ *   24:22 TILE_SPLIT               Tile split size
+ *   26:25 BANK_WIDTH               Number of tiles in the X direction in the same bank
+ *   28:27 BANK_HEIGHT              Number of tiles in the Y direction in the same bank
+ *   30:29 MACRO_TILE_ASPECT        Macro tile aspect ratio
+ *   32:31 NUM_BANKS                Number of banks
+ *   55:33 -                        Reserved for future use, must be zero
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;I also found that &lt;code&gt;linux&lt;/code&gt; kernel got the support for reporting these
+tile modes in &lt;a href=&quot;https://lists.freedesktop.org/archives/amd-gfx/2026-May/144535.html&quot;&gt;2026&lt;/a&gt;:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;$ git tag --contains=3104069690c499ffa1fc3de998c6d0acf24ee350
+v7.3
+v7.3-rc1
+...
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;There are a few relevant commits in &lt;code&gt;linux&lt;/code&gt;:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&quot;https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3104069690c499ffa1fc3de998c6d0acf24ee350&quot;&gt;&lt;code&gt;drm/amd/display: Support DRM format modifiers on GFX6-8&lt;/code&gt;&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=24c097b1123a29d6cee10c2c15cd4f52f870e83f&quot;&gt;&lt;code&gt;drm/amdgpu: Convert tiling flags to modifiers on GFX6-8&lt;/code&gt;&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&quot;https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6a03efb8613a6ffc23da42af41b3e51e975ea406&quot;&gt;&lt;code&gt;drm/fourcc: Add modifiers for AMD GFX6-8&lt;/code&gt;&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2&gt;Parting Words&lt;/h2&gt;
+&lt;p&gt;Timur Kristóf is busy updating &lt;code&gt;Linux&lt;/code&gt; ecosystem to expose to compositors
+various tiling modes available on older &lt;code&gt;AMD&lt;/code&gt; &lt;code&gt;GPU&lt;/code&gt; cards like my &lt;code&gt;radeonsi&lt;/code&gt;
+(&lt;code&gt;GFX8&lt;/code&gt;). &lt;a href=&quot;https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6a03efb8613a6ffc23da42af41b3e51e975ea406&quot;&gt;This commit message&lt;/a&gt;
+is a great overview of the motivation behind the changes and overview of
+some limitations. That&apos;s very exciting!
+As these changes slowly trickle into released versions of software it
+exposes bugs on the software. In this case it was a
+&lt;a href=&quot;https://chromium-review.googlesource.com/c/chromium/src/+/8847181&quot;&gt;&lt;code&gt;chromium&lt;/code&gt; bug&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Reverting &lt;a href=&quot;https://gitlab.freedesktop.org/mesa/mesa/-/commit/12b7b819edb4ddd3580e7e5ffe384610ae726c90&quot;&gt;&lt;code&gt;&amp;quot;radeonsi: Support DRM format modifiers on GFX6-8&amp;quot;&lt;/code&gt;&lt;/a&gt;
+in &lt;code&gt;mesa&lt;/code&gt; allowed me to restore &lt;code&gt;GPU&lt;/code&gt; acceleration in &lt;code&gt;chromium&lt;/code&gt;. I
+suspect using the old kernel would also work around the failure.
+I did not test the &lt;code&gt;chromium&lt;/code&gt; fix yet, but it looks like it should work
+as well.&lt;/p&gt;
+&lt;p&gt;Have fun!&lt;/p&gt;
+</summary></entry><entry><title>From hakyll to comrak based generator</title><id>https://trofi.github.io/posts/354-from-hakyll-to-comrak-based-generator.html</id><updated>2026-11-15T00:00:00+00:00</updated><link href="https://trofi.github.io/posts/354-from-hakyll-to-comrak-based-generator.html" rel="alternate"/><published>2026-11-15T00:00:00+00:00</published><summary type="html">&lt;p&gt;Tl;DR: I decided to gradually switch from
 &lt;a href=&quot;https://jaspervdj.be/hakyll/&quot;&gt;&lt;code&gt;hakyll-&lt;/code&gt;based framework&lt;/a&gt; for this blog
 to &lt;a href=&quot;https://comrak.ee/&quot;&gt;&lt;code&gt;comrak&lt;/code&gt;-based&lt;/a&gt; custom generator.&lt;/p&gt;
 &lt;p&gt;I&apos;ll migrate both &lt;code&gt;HTML&lt;/code&gt; render of posts and &lt;code&gt;RSS&lt;/code&gt; feeds in the following
@@ -4805,42 +5238,5 @@ that will require quite a few projects to adapt to new requirements
 (either by fixing code or by slapping &lt;code&gt;-std=gnu17&lt;/code&gt; as a requirement).&lt;/p&gt;
 &lt;p&gt;Most of the build failures above are not yet fixed upstream. These can be
 good first contribution fixes if you are thinking of making one.&lt;/p&gt;
-&lt;p&gt;Have fun!&lt;/p&gt;
-</summary></entry><entry><title>Zero Hydra Failures towards 24.11 NixOS release</title><id>https://trofi.github.io/posts/325-Zero-Hydra-Failures-towards-24.11-NixOS-release.html</id><updated>2024-11-04T00:00:00+00:00</updated><link href="https://trofi.github.io/posts/325-Zero-Hydra-Failures-towards-24.11-NixOS-release.html" rel="alternate"/><published>2024-11-04T00:00:00+00:00</published><summary type="html">&lt;p&gt;&lt;code&gt;ZHF&lt;/code&gt; (or Zero Hydra Failures) is the time when most build failures are
-squashed before final &lt;code&gt;NixOS-24.11&lt;/code&gt; release
-(see &lt;a href=&quot;https://github.com/NixOS/nixpkgs/issues/352882&quot;&gt;full release schedule&lt;/a&gt;).&lt;/p&gt;
-&lt;p&gt;To follow the tradition let&apos;s fix one bug for &lt;code&gt;ZHF&lt;/code&gt;.
-I picked &lt;a href=&quot;https://hydra.nixos.org/build/276690936&quot;&gt;&lt;code&gt;xorg.libAppleWM&lt;/code&gt;&lt;/a&gt; build
-failure. It&apos;s not a very popular package.
-The failure looks trivial:&lt;/p&gt;
-&lt;pre&gt;&lt;code&gt;make[2]: Entering directory &apos;/build/libapplewm-be972ebc3a97292e7d2b2350eff55ae12df99a42/src&apos;
-  CC       applewm.lo
-gcc: error: unrecognized command-line option &apos;-iframeworkwithsysroot&apos;
-&lt;/code&gt;&lt;/pre&gt;
-&lt;p&gt;The build was happening for &lt;code&gt;x86_64-linux&lt;/code&gt; target. While this package
-is &lt;code&gt;MacOS&lt;/code&gt;-specific: it uses Darwin APIs and links to its libraries
-directly. No reason to try to build it on &lt;code&gt;x86_64-linux&lt;/code&gt;.
-The fix is to constrain the package to &lt;code&gt;darwin&lt;/code&gt; targets (the default
-platforms for &lt;code&gt;xorg&lt;/code&gt; packages is &lt;code&gt;unix&lt;/code&gt;):&lt;/p&gt;
-&lt;pre&gt;&lt;code class=&quot;language-diff&quot;&gt;--- a/pkgs/servers/x11/xorg/overrides.nix
-+++ b/pkgs/servers/x11/xorg/overrides.nix
-@@ -171,6 +171,9 @@ self: super:
-   libAppleWM = super.libAppleWM.overrideAttrs (attrs: {
-     nativeBuildInputs = attrs.nativeBuildInputs ++ [ autoreconfHook ];
-     buildInputs =  attrs.buildInputs ++ [ xorg.utilmacros ];
-+    meta = attrs.meta // {
-+      platforms = lib.platforms.darwin;
-+    };
-   });
-
-   libXau = super.libXau.overrideAttrs (attrs: {
-&lt;/code&gt;&lt;/pre&gt;
-&lt;p&gt;This fix is now known as
-&lt;a href=&quot;https://github.com/NixOS/nixpkgs/pull/353618&quot;&gt;&lt;code&gt;PR#353618&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;
-&lt;h2&gt;Parting words&lt;/h2&gt;
-&lt;p&gt;I picked very lazy example of a broken package.
-&lt;a href=&quot;https://github.com/NixOS/nixpkgs/issues/352882&quot;&gt;https://github.com/NixOS/nixpkgs/issues/352882&lt;/a&gt; contains more links and
-hints on how to find and fix known failures.&lt;/p&gt;
-&lt;p&gt;As usual contributing towards &lt;code&gt;ZHF&lt;/code&gt; is very easy. Give it a try!&lt;/p&gt;
 &lt;p&gt;Have fun!&lt;/p&gt;
 </summary></entry></feed>
